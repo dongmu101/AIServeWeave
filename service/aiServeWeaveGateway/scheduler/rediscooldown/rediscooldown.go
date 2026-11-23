@@ -8,8 +8,14 @@
 // per candidate to scan for; the set stays as small as the number of accounts
 // currently cooling down.
 //
+// Each cooldown's start (Cooldown.Since) lives beside it in a hash keyed by
+// the same member, written and pruned together with the set by Lua scripts so
+// the two never disagree.
+//
 // rediscooldown 包是 scheduler.SharedCooldowns 的 Redis 实现：一个所有 Gateway 副本都读写
-// 的有序集合，成员是候选，分值是其限流冷却结束的时刻。
+// 的有序集合，成员是候选，分值是其限流冷却结束的时刻。每条冷却的开始时刻
+// （Cooldown.Since）保存在旁边一个以同一成员为字段的哈希里，由 Lua 脚本与集合一起写入、
+// 一起清理，两者不会不一致。
 //
 // 选有序集合，是因为唯一要紧的查询——「所有仍然有效的条目」——是一次分值区间查询，而
 // 清理已过期的条目是另一次。成员在每次读取时清理，而不是交给 Redis 过期，因此不存在需要
@@ -31,10 +37,13 @@ import (
 )
 
 // DefaultKey is the sorted set's key, under the same aisw: namespace as the
-// Gateway's other Redis state.
+// Gateway's other Redis state. The start-time hash is the key plus sinceSuffix.
 //
-// DefaultKey 是有序集合的键，与 Gateway 其他 Redis 状态同在 aisw: 命名空间下。
+// DefaultKey 是有序集合的键，与 Gateway 其他 Redis 状态同在 aisw: 命名空间下。开始时刻
+// 哈希的键是它加上 sinceSuffix。
 const DefaultKey = "aisw:sched:ratelimit-cooldown"
+
+const sinceSuffix = ":since"
 
 // maxActive bounds how many entries one read returns, so a set grown by a
 // misbehaving replica cannot make every pull unbounded.
@@ -43,14 +52,44 @@ const DefaultKey = "aisw:sched:ratelimit-cooldown"
 // 无界。
 const maxActive = 4096
 
-// activeScript prunes expired entries and returns the rest, atomically, so a
-// replica never reads an entry that another replica's prune is removing.
+// activeScript prunes expired entries from both keys and returns the rest as
+// flat (member, until, since) triples, atomically, so a replica never reads an
+// entry that another replica's prune is removing.
 //
-// activeScript 原子地清理已过期条目并返回其余条目，使副本永远不会读到另一个副本正在
-// 清理的条目。
+// activeScript 原子地从两个键中清理已过期条目，并把其余条目按 (成员, 结束, 开始) 三元组
+// 平铺返回，使副本永远不会读到另一个副本正在清理的条目。
 var activeScript = redis.NewScript(`
+local expired = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
+for i = 1, #expired, 500 do
+  redis.call('HDEL', KEYS[2], unpack(expired, i, math.min(i + 499, #expired)))
+end
 redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
-return redis.call('ZRANGEBYSCORE', KEYS[1], '(' .. ARGV[1], '+inf', 'WITHSCORES', 'LIMIT', 0, tonumber(ARGV[2]))
+local rows = redis.call('ZRANGEBYSCORE', KEYS[1], '(' .. ARGV[1], '+inf', 'WITHSCORES', 'LIMIT', 0, tonumber(ARGV[2]))
+local out = {}
+for i = 1, #rows, 2 do
+  out[#out + 1] = rows[i]
+  out[#out + 1] = rows[i + 1]
+  out[#out + 1] = redis.call('HGET', KEYS[2], rows[i]) or ''
+end
+return out
+`)
+
+// markScript writes one entry to both keys.
+//
+// markScript 把一个条目写入两个键。
+var markScript = redis.NewScript(`
+redis.call('ZADD', KEYS[1], ARGV[2], ARGV[1])
+redis.call('HSET', KEYS[2], ARGV[1], ARGV[3])
+return 1
+`)
+
+// clearScript removes one entry from both keys.
+//
+// clearScript 从两个键中删除一个条目。
+var clearScript = redis.NewScript(`
+redis.call('ZREM', KEYS[1], ARGV[1])
+redis.call('HDEL', KEYS[2], ARGV[1])
+return 1
 `)
 
 // Store is a scheduler.SharedCooldowns backed by one Redis sorted set.
@@ -58,7 +97,7 @@ return redis.call('ZRANGEBYSCORE', KEYS[1], '(' .. ARGV[1], '+inf', 'WITHSCORES'
 // Store 是由一个 Redis 有序集合支撑的 scheduler.SharedCooldowns。
 type Store struct {
 	client *redis.Client
-	key    string
+	keys   []string
 }
 
 var _ scheduler.SharedCooldowns = (*Store)(nil)
@@ -73,7 +112,7 @@ func New(client *redis.Client, key string) (*Store, error) {
 	if key == "" {
 		key = DefaultKey
 	}
-	return &Store{client: client, key: key}, nil
+	return &Store{client: client, keys: []string{key, key + sinceSuffix}}, nil
 }
 
 // member is a candidate's encoding in the set. JSON rather than a separator
@@ -108,12 +147,12 @@ func decode(raw string) (scheduler.Candidate, bool) {
 // Mark implements scheduler.SharedCooldowns.
 //
 // Mark 实现 scheduler.SharedCooldowns。
-func (s *Store) Mark(ctx context.Context, c scheduler.Candidate, until time.Time) error {
+func (s *Store) Mark(ctx context.Context, c scheduler.Candidate, cd scheduler.Cooldown) error {
 	m, err := encode(c)
 	if err != nil {
 		return err
 	}
-	if err := s.client.ZAdd(ctx, s.key, redis.Z{Score: float64(until.UnixMilli()), Member: m}).Err(); err != nil {
+	if err := markScript.Run(ctx, s.client, s.keys, m, cd.Until.UnixMilli(), cd.Since.UnixMilli()).Err(); err != nil {
 		return fmt.Errorf("rediscooldown: mark: %w", err)
 	}
 	return nil
@@ -127,7 +166,7 @@ func (s *Store) Clear(ctx context.Context, c scheduler.Candidate) error {
 	if err != nil {
 		return err
 	}
-	if err := s.client.ZRem(ctx, s.key, m).Err(); err != nil {
+	if err := clearScript.Run(ctx, s.client, s.keys, m).Err(); err != nil {
 		return fmt.Errorf("rediscooldown: clear: %w", err)
 	}
 	return nil
@@ -135,29 +174,36 @@ func (s *Store) Clear(ctx context.Context, c scheduler.Candidate) error {
 
 // Active implements scheduler.SharedCooldowns. Members that do not decode are
 // skipped rather than failing the read: one bad entry must not stop every
-// replica from seeing the good ones, and it is pruned once it expires.
+// replica from seeing the good ones, and it is pruned once it expires. A
+// missing or unreadable start time reads as zero, which only means a quota
+// snapshot cannot end that cooldown early.
 //
 // Active 实现 scheduler.SharedCooldowns。无法解码的成员被跳过而不是让读取失败：一个坏
-// 条目不能让所有副本都看不到好的条目，而它过期后就会被清理。
-func (s *Store) Active(ctx context.Context, now time.Time) (map[scheduler.Candidate]time.Time, error) {
-	raw, err := activeScript.Run(ctx, s.client, []string{s.key}, now.UnixMilli(), maxActive).StringSlice()
+// 条目不能让所有副本都看不到好的条目，而它过期后就会被清理。缺失或无法解析的开始时刻
+// 按零值处理，这只意味着额度快照不能提前结束那条冷却。
+func (s *Store) Active(ctx context.Context, now time.Time) (map[scheduler.Candidate]scheduler.Cooldown, error) {
+	raw, err := activeScript.Run(ctx, s.client, s.keys, now.UnixMilli(), maxActive).StringSlice()
 	if err != nil {
 		return nil, fmt.Errorf("rediscooldown: active: %w", err)
 	}
-	if len(raw)%2 != 0 {
-		return nil, fmt.Errorf("rediscooldown: active: odd reply length %d", len(raw))
+	if len(raw)%3 != 0 {
+		return nil, fmt.Errorf("rediscooldown: active: reply length %d is not a multiple of 3", len(raw))
 	}
-	out := make(map[scheduler.Candidate]time.Time, len(raw)/2)
-	for i := 0; i < len(raw); i += 2 {
+	out := make(map[scheduler.Candidate]scheduler.Cooldown, len(raw)/3)
+	for i := 0; i < len(raw); i += 3 {
 		c, ok := decode(raw[i])
 		if !ok {
 			continue
 		}
-		ms, err := strconv.ParseFloat(raw[i+1], 64)
+		until, err := strconv.ParseFloat(raw[i+1], 64)
 		if err != nil {
 			continue
 		}
-		out[c] = time.UnixMilli(int64(ms))
+		cd := scheduler.Cooldown{Until: time.UnixMilli(int64(until))}
+		if since, err := strconv.ParseInt(raw[i+2], 10, 64); err == nil && since > 0 {
+			cd.Since = time.UnixMilli(since)
+		}
+		out[c] = cd
 	}
 	return out, nil
 }

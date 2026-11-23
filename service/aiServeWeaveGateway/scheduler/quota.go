@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"log/slog"
 	"strings"
 	"time"
 
@@ -68,24 +69,57 @@ const maxQuotaSnapshotAge = 15 * time.Minute
 // quotaStatusReady 是窗口携带真实数据的账户状态。
 const quotaStatusReady = "ready"
 
-// accountQuotaTier ranks the account behind one (runtime, model) candidate on
-// a node from that node's quota snapshot. An account with no snapshot, a
-// snapshot that is not ready or too old, or no window applying to model ranks
-// quotaOK: unknown is never treated as spent. lowPercent <= 0 disables the
-// quotaLow tier.
+// quotaVerdict is what one quota snapshot says about one candidate. known is
+// false when there is nothing to go on — no snapshot, one that is not ready or
+// too old — and every other field is then zero. spentUntil is the latest reset
+// among the windows that make the candidate quotaSpent; checkedAt is when the
+// Agent took the snapshot.
 //
-// accountQuotaTier 依据节点的额度快照，为该节点上一个 (运行时, 模型) 候选背后的账户
-// 定档。没有快照、快照未就绪或过旧、或没有适用于 model 的窗口时定为 quotaOK：未知从不
-// 被当作用完。lowPercent <= 0 时关闭 quotaLow 档位。
-func accountQuotaTier(accounts []cliusagestatus.Account, runtimeID string, kind runtime.Kind, model string, lowPercent float64, now time.Time) quotaTier {
+// quotaVerdict 是一份额度快照对一个候选的结论。没有可依据的信息时——没有快照、快照
+// 未就绪或过旧——known 为 false，其余字段都是零值。spentUntil 是使候选成为 quotaSpent
+// 的那些窗口中最晚的重置时刻；checkedAt 是 Agent 获取快照的时刻。
+type quotaVerdict struct {
+	known      bool
+	tier       quotaTier
+	spentUntil time.Time
+	checkedAt  time.Time
+}
+
+// accountQuota judges the account behind one (runtime, model) candidate on a
+// node from that node's quota snapshot. An account with no snapshot, a
+// snapshot that is not ready or too old ranks quotaOK and is not known;
+// unknown is never treated as spent. lowPercent <= 0 disables the quotaLow
+// tier.
+//
+// receivedAt is when the Gateway received the report. The snapshot counts as
+// taken at the earlier of that and the Agent's CheckedAt: an Agent clock
+// running ahead must not make an old snapshot look newer than a refusal
+// (reconcileQuota), and a report resent on reconnect still carries its old
+// CheckedAt.
+//
+// accountQuota 依据节点的额度快照，判断该节点上一个 (运行时, 模型) 候选背后的账户。
+// 没有快照、快照未就绪或过旧时定为 quotaOK 且 known 为 false：未知从不被当作用完。
+// lowPercent <= 0 时关闭 quotaLow 档位。
+//
+// receivedAt 是 Gateway 收到上报的时刻。快照的获取时刻取它与 Agent 的 CheckedAt 中
+// 较早者：偏快的 Agent 时钟不能让一份旧快照显得比一次拒绝更新（reconcileQuota），而
+// 重连时重发的上报仍带着旧的 CheckedAt。
+func accountQuota(accounts []cliusagestatus.Account, receivedAt time.Time, runtimeID string, kind runtime.Kind, model string, lowPercent float64, now time.Time) quotaVerdict {
 	if kind != runtime.KindClaude && kind != runtime.KindCodex {
-		return quotaOK
+		return quotaVerdict{}
 	}
 	account, ok := findQuotaAccount(accounts, runtimeID, kind)
-	if !ok || account.Status != quotaStatusReady || account.CheckedAt.IsZero() || now.Sub(account.CheckedAt) > maxQuotaSnapshotAge {
-		return quotaOK
+	if !ok || account.Status != quotaStatusReady || account.CheckedAt.IsZero() {
+		return quotaVerdict{}
 	}
-	tier := quotaOK
+	checkedAt := account.CheckedAt
+	if !receivedAt.IsZero() && receivedAt.Before(checkedAt) {
+		checkedAt = receivedAt
+	}
+	if now.Sub(checkedAt) > maxQuotaSnapshotAge {
+		return quotaVerdict{}
+	}
+	v := quotaVerdict{known: true, checkedAt: checkedAt}
 	for i := range account.Windows {
 		w := &account.Windows[i]
 		// A window past its reset time says nothing about now: whatever it
@@ -96,12 +130,15 @@ func accountQuotaTier(accounts []cliusagestatus.Account, runtimeID string, kind 
 		}
 		switch {
 		case w.UsedPercent >= 100:
-			return quotaSpent
-		case lowPercent > 0 && w.UsedPercent >= lowPercent:
-			tier = quotaLow
+			v.tier = quotaSpent
+			if w.ResetsAt.After(v.spentUntil) {
+				v.spentUntil = w.ResetsAt
+			}
+		case lowPercent > 0 && w.UsedPercent >= lowPercent && v.tier < quotaLow:
+			v.tier = quotaLow
 		}
 	}
-	return tier
+	return v
 }
 
 // findQuotaAccount returns the account reported for runtimeID. An Agent that
@@ -152,4 +189,92 @@ func windowApplies(kind runtime.Kind, w *cliusagestatus.Window, model string) bo
 		return strings.Contains(strings.ToLower(model), "opus")
 	}
 	return false
+}
+
+// quotaAction is what reconcileQuota did to a cooldown, for the caller to log
+// once it has released the registry's lock.
+//
+// quotaAction 是 reconcileQuota 对冷却做了什么，供调用方在释放注册表锁之后记录日志。
+type quotaAction uint8
+
+const (
+	quotaKept quotaAction = iota
+	quotaReleased
+	quotaExtended
+)
+
+// reconcileQuota lets a quota snapshot sustain or end a cooldown that a real
+// rate_limited answer started. It never starts one: a snapshot alone only
+// reorders (see the file comment), so an account it calls spent but that has
+// not refused anything is still tried, last.
+//
+//   - A snapshot taken after the refusal that no longer calls the candidate
+//     spent ends the cooldown at once: the quota came back (a reset, a plan
+//     change) and the Agent's own usage query, which runs no inference, is
+//     what found out.
+//   - A fresh snapshot that still calls it spent keeps it aside past
+//     MaxRateLimitCooldown, up to the window's reset, instead of letting a
+//     real request find out again. It is extended in steps of at most
+//     MaxRateLimitCooldown, and only once less than half a step remains, so
+//     a cooldown is rewritten (and, when shared, stored) a few times an hour
+//     at most, and each step needs a snapshot fresh enough to vouch for it.
+//
+// reconcileQuota 让额度快照延续或结束由真实 rate_limited 应答开启的冷却。它从不开启
+// 冷却：单靠快照只调整顺序（见文件注释），因此被它判为用完、但从未拒绝过请求的账户
+// 仍会被尝试，只是排在最后。
+//
+//   - 在拒绝之后获取、且不再判定该候选用完的快照立即结束冷却：额度已经恢复（重置、
+//     套餐变化），发现这一点的是 Agent 自己的用量查询，它不运行推理。
+//   - 仍判定其用完的新鲜快照让它在 MaxRateLimitCooldown 之后继续被搁置，直到窗口重置，
+//     而不是让真实请求再去试一次。每次延长至多 MaxRateLimitCooldown，且只在剩余不足
+//     半步时延长，因此一条冷却每小时至多被改写（共享时写入存储）几次，而每一步都需要
+//     一份足够新鲜的快照来担保。
+func (r *breakerRegistry) reconcileQuota(c Candidate, v quotaVerdict, now time.Time) (quotaAction, Cooldown, bool) {
+	if !v.known {
+		return quotaKept, Cooldown{}, false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	cd := r.cooldownLocked(c)
+	if cd.Until.IsZero() || !now.Before(cd.Until) {
+		return quotaKept, cd, false
+	}
+	switch {
+	case v.tier != quotaSpent && !cd.Since.IsZero() && v.checkedAt.After(cd.Since):
+		return quotaReleased, Cooldown{}, r.setLimitedLocked(c, Cooldown{})
+	case v.tier == quotaSpent && v.spentUntil.After(cd.Until) && cd.Until.Sub(now) < r.maxLimitCooldown/2:
+		next := Cooldown{Since: cd.Since, Until: minTime(v.spentUntil, now.Add(r.maxLimitCooldown))}
+		if !next.Until.After(cd.Until) {
+			return quotaKept, cd, false
+		}
+		return quotaExtended, next, r.setLimitedLocked(c, next)
+	}
+	return quotaKept, cd, false
+}
+
+func minTime(a, b time.Time) time.Time {
+	if a.Before(b) {
+		return a
+	}
+	return b
+}
+
+// applyQuota runs reconcileQuota for one candidate and logs what changed.
+//
+// applyQuota 为一个候选运行 reconcileQuota，并记录发生的变化。
+func (r *breakerRegistry) applyQuota(c Candidate, v quotaVerdict, now time.Time) {
+	action, cd, dropped := r.reconcileQuota(c, v, now)
+	if dropped {
+		r.logger.Warn("shared cooldown write dropped; the store is not keeping up",
+			slog.String("node_id", c.NodeID), slog.String("runtime_id", c.RuntimeID))
+	}
+	switch action {
+	case quotaReleased:
+		r.logger.Info("candidate quota is back per the Agent's usage report; ending its cooldown early",
+			slog.String("node_id", c.NodeID), slog.String("runtime_id", c.RuntimeID))
+	case quotaExtended:
+		r.logger.Info("candidate quota still spent per the Agent's usage report; extending its cooldown",
+			slog.String("node_id", c.NodeID), slog.String("runtime_id", c.RuntimeID),
+			slog.Time("until", cd.Until))
+	}
 }

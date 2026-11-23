@@ -109,6 +109,13 @@ type Scheduler struct {
 	// sharedCooldowns 即 Config.SharedCooldowns，RunSharedCooldowns 让熔断注册表与它
 	// 保持同步；为 nil 时冷却按副本各自保存（sharedcooldown.go）。
 	sharedCooldowns SharedCooldowns
+
+	// pins and pinTTL are Config.SessionPins and Config.SessionPinTTL after
+	// defaulting; pins is nil when session affinity is off (sessionpin.go).
+	// pins 与 pinTTL 是取默认值之后的 Config.SessionPins 与 Config.SessionPinTTL；会话
+	// 亲和关闭时 pins 为 nil（sessionpin.go）。
+	pins   SessionPins
+	pinTTL time.Duration
 }
 
 // Config configures New. Every field is optional.
@@ -240,6 +247,26 @@ type Config struct {
 	// 已用完的账户被所有副本跳过。共享依赖 RunSharedCooldowns 在运行，见
 	// sharedcooldown.go。
 	SharedCooldowns SharedCooldowns
+
+	// SessionPins, with SessionAffinity on, remembers the candidate that last
+	// served each session and ranks it ahead of the session hash, so a
+	// conversation that moved off its first choice stays where it moved
+	// instead of returning once the first choice recovers (sessionpin.go).
+	// Nil uses an in-replica store; replicas behind one load balancer should
+	// share one (the Gateway uses Redis when -redis-addr is set). Ignored
+	// with SessionAffinity off.
+	//
+	// SessionPins 在 SessionAffinity 开启时，记住上一次服务每个会话的候选，并把它排在
+	// 会话哈希之前，使已经离开首选的对话留在迁去的地方，而不是在首选恢复后迁回
+	// （sessionpin.go）。为 nil 时使用副本内存储；同一负载均衡之后的副本应当共享一个
+	// 存储（配置 -redis-addr 时 Gateway 使用 Redis）。SessionAffinity 关闭时忽略。
+	SessionPins SessionPins
+	// SessionPinTTL is how long a pin outlives the last request that
+	// refreshed it. Zero uses DefaultSessionPinTTL.
+	//
+	// SessionPinTTL 是钉选在最后一次刷新它的请求之后保留的时长。零值使用
+	// DefaultSessionPinTTL。
+	SessionPinTTL time.Duration
 }
 
 // New returns a Scheduler that selects among the nodes connected to server.
@@ -287,6 +314,16 @@ func New(server *tunnelserver.Server, cfg Config) *Scheduler {
 	s.sharedCooldowns = cfg.SharedCooldowns
 	if s.sharedCooldowns != nil {
 		s.breakers.shareCooldowns()
+	}
+	if cfg.SessionAffinity {
+		s.pins = cfg.SessionPins
+		if s.pins == nil {
+			s.pins = newMemorySessionPins(clock, memorySessionPinsMax)
+		}
+		s.pinTTL = cfg.SessionPinTTL
+		if s.pinTTL <= 0 {
+			s.pinTTL = DefaultSessionPinTTL
+		}
 	}
 	return s
 }
@@ -345,7 +382,7 @@ func (s *Scheduler) Chat(ctx context.Context, req runtime.ChatRequest) (runtime.
 // attemptChat 对当前候选跑一轮派发。busy 报告它尝试过的每个候选是否都没有空闲容量，这是
 // Chat 唯一会等待的失败。
 func (s *Scheduler) attemptChat(ctx context.Context, req runtime.ChatRequest) (runtime.ChatResponse, Candidate, error, bool) {
-	candidates := s.chatCandidates(ctx, req, runtime.CapabilityChat)
+	candidates, key := s.chatCandidates(ctx, req, runtime.CapabilityChat)
 	s.metrics.Selection(runtime.CapabilityChat, len(candidates))
 	if len(candidates) == 0 {
 		return runtime.ChatResponse{}, Candidate{}, s.noCandidatesFor(ctx, req.Model, runtime.CapabilityChat), false
@@ -366,6 +403,7 @@ func (s *Scheduler) attemptChat(ctx context.Context, req runtime.ChatRequest) (r
 		s.metrics.Dispatch(c, err)
 		s.logDispatchDecision(ctx, "chat", c, err)
 		if err == nil {
+			s.notePin(ctx, key, c)
 			return resp, c, nil, false
 		}
 		lastErr = err
@@ -556,7 +594,7 @@ func (s *Scheduler) ChatStream(ctx context.Context, req runtime.ChatRequest) (ru
 //
 // attemptChatStream 对当前候选跑一轮派发，是 attemptChat 的流式版本。
 func (s *Scheduler) attemptChatStream(ctx context.Context, req runtime.ChatRequest) (runtime.Stream[runtime.ChatEvent], Candidate, error, bool) {
-	candidates := s.chatCandidates(ctx, req, runtime.CapabilityChatStream)
+	candidates, key := s.chatCandidates(ctx, req, runtime.CapabilityChatStream)
 	s.metrics.Selection(runtime.CapabilityChatStream, len(candidates))
 	if len(candidates) == 0 {
 		return nil, Candidate{}, s.noCandidatesFor(ctx, req.Model, runtime.CapabilityChatStream), false
@@ -591,6 +629,7 @@ func (s *Scheduler) attemptChatStream(ctx context.Context, req runtime.ChatReque
 			s.breakers.record(c, nil, s.clock.Now())
 			s.metrics.Dispatch(c, nil)
 			s.logDispatchDecision(ctx, "chat_stream", c, nil)
+			s.notePin(ctx, key, c)
 			return &prefetchStream[runtime.ChatEvent]{first: first, hasFirst: true, underlying: stream}, c, nil, false
 		}
 		stream.Close()
@@ -810,12 +849,17 @@ func (s *Scheduler) candidates(ctx context.Context, model string, cap runtime.Ca
 // 固定的提示前缀。ctx 上的会话 key（见 WithSessionKey）优先于前缀：它直接点名对话，
 // 而不是去推断。指纹只在 PolicyPrefixHash 生效且没有会话 key 时才计算，其他策略不为此
 // 付出任何代价。
-func (s *Scheduler) chatCandidates(ctx context.Context, req runtime.ChatRequest, cap runtime.Capability) []Candidate {
-	key := s.sessionAffinity(ctx)
+//
+// The affinity is returned too, so a successful dispatch can update the
+// session's pin (sessionpin.go).
+//
+// 亲和也一并返回，使成功的派发可以更新会话的钉选（sessionpin.go）。
+func (s *Scheduler) chatCandidates(ctx context.Context, req runtime.ChatRequest, cap runtime.Capability) ([]Candidate, affinity) {
+	key := s.withPin(ctx, s.sessionAffinity(ctx))
 	if !key.ok && s.policy == PolicyPrefixHash {
 		key = prefixAffinity(req, s.prefixBytes)
 	}
-	return s.candidatesKeyed(ctx, s.routes.Load(), req.Model, cap, key, rand.Float64)
+	return s.candidatesKeyed(ctx, s.routes.Load(), req.Model, cap, key, rand.Float64), key
 }
 
 func (s *Scheduler) candidatesWith(ctx context.Context, routes *routing.Table, model string, cap runtime.Capability) []Candidate {
@@ -1073,13 +1117,17 @@ func (s *Scheduler) collect(ctx context.Context, view *nodeView, target routing.
 			if !s.breakers.eligible(candidate, now) {
 				continue
 			}
+			quota := accountQuota(node.CLIUsage, node.CLIUsageAt, snap.Descriptor.ID, snap.Descriptor.Kind, target.RuntimeModel, s.quotaLowPercent, now)
+			if quota.known {
+				s.breakers.applyQuota(candidate, quota, now)
+			}
 			found = append(found, scored{
 				Candidate: candidate,
 				idle:      idle,
 				queued:    snap.Health.QueueRunning + snap.Health.QueuePending,
 				inflight:  node.InflightRequests,
 				pressure:  node.Pressure,
-				quota:     accountQuotaTier(node.CLIUsage, snap.Descriptor.ID, snap.Descriptor.Kind, target.RuntimeModel, s.quotaLowPercent, now),
+				quota:     quota.tier,
 			})
 		}
 	}

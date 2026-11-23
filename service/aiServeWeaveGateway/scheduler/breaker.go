@@ -58,13 +58,13 @@ func breakerFailure(err error) bool {
 
 // breakerState is one candidate's circuit-breaker bookkeeping.
 //
-// limitedUntil is independent of the breaker proper: a rate-limited
+// limited is independent of the breaker proper: a rate-limited
 // candidate is not broken, it has run out of quota, so the answer never
 // counts toward a trip — like any other answer from the node it ends the
 // failure streak instead. It only says "do not send work here before this
 // instant".
 //
-// limitedUntil 独立于熔断本身：被限流的候选没有坏，只是额度用完了，所以这个答复从不
+// limited 独立于熔断本身：被限流的候选没有坏，只是额度用完了，所以这个答复从不
 // 计入跳闸——与节点的其他答复一样，它反而结束失败连击。它只表示「在此刻之前不要往这里
 // 派活」。
 type breakerState struct {
@@ -72,7 +72,7 @@ type breakerState struct {
 	tripCount           int
 	open                bool
 	openUntil           time.Time
-	limitedUntil        time.Time
+	limited             Cooldown
 }
 
 // breakerRegistry tracks one breakerState per Candidate. All access goes
@@ -93,13 +93,13 @@ type breakerRegistry struct {
 
 	// writes, shared and pending exist only once shareCooldowns has run;
 	// rate-limit cooldowns then live in shared and pending rather than in
-	// breakerState.limitedUntil. See sharedcooldown.go.
+	// breakerState.limited. See sharedcooldown.go.
 	//
 	// writes、shared 与 pending 只在 shareCooldowns 运行之后存在；此时限流冷却保存在
-	// shared 与 pending 中，而不是 breakerState.limitedUntil。见 sharedcooldown.go。
+	// shared 与 pending 中，而不是 breakerState.limited。见 sharedcooldown.go。
 	writes  chan cooldownWrite
-	shared  map[Candidate]time.Time
-	pending map[Candidate]time.Time
+	shared  map[Candidate]Cooldown
+	pending map[Candidate]Cooldown
 }
 
 func newBreakerRegistry(failureThreshold int, baseCooldown, maxCooldown time.Duration, rec *recorder) *breakerRegistry {
@@ -159,7 +159,7 @@ func (r *breakerRegistry) withRateLimit(limitCooldown, maxLimitCooldown time.Dur
 func (r *breakerRegistry) limited(c Candidate, now time.Time) (time.Duration, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	until := r.limitedUntilLocked(c)
+	until := r.cooldownLocked(c).Until
 	if !now.Before(until) {
 		return 0, false
 	}
@@ -247,7 +247,7 @@ func (r *breakerRegistry) record(c Candidate, err error, now time.Time) {
 		st.tripCount = 0
 		st.open = false
 		limited = r.limitWindow(retryAfter)
-		dropped = r.setLimitedLocked(c, now.Add(limited))
+		dropped = r.setLimitedLocked(c, Cooldown{Since: now, Until: now.Add(limited)})
 	} else if !breakerFailure(err) {
 		if st, ok := r.entries[c]; ok {
 			closed = st.open
@@ -258,8 +258,8 @@ func (r *breakerRegistry) record(c Candidate, err error, now time.Time) {
 		// A success proves the quota is back, whatever the reset time said
 		// — on every replica, when cooldowns are shared.
 		// 一次成功证明额度已经恢复，不管重置时间怎么说——共享冷却时对所有副本都是如此。
-		if err == nil && !r.limitedUntilLocked(c).IsZero() {
-			dropped = r.setLimitedLocked(c, time.Time{})
+		if err == nil && !r.cooldownLocked(c).Until.IsZero() {
+			dropped = r.setLimitedLocked(c, Cooldown{})
 		}
 	} else {
 		st, ok := r.entries[c]

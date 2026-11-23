@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"hash"
 	"hash/fnv"
+	"math"
 	"slices"
+	"time"
 
 	"AIServeWeave/common/runtime"
 )
@@ -93,6 +95,14 @@ type affinity struct {
 	hash    uint64
 	ok      bool
 	session bool
+	// pin is the candidate that last served the session, ranked ahead of
+	// every hash score when pinned is set (sessionpin.go); pinAt is when it
+	// was recorded.
+	// pin 是上一次服务该会话的候选，pinned 置位时排在所有哈希得分之前（sessionpin.go）；
+	// pinAt 是记录它的时刻。
+	pin    Candidate
+	pinned bool
+	pinAt  time.Time
 }
 
 // scored is one eligible candidate together with the load figures every
@@ -267,6 +277,13 @@ func orderCandidates(found []scored, policy Policy, key affinity, intn func(int)
 		ranks := make(map[Candidate]uint64, len(found))
 		for _, f := range found {
 			ranks[f.Candidate] = rendezvousScore(key.hash, f.Candidate)
+		}
+		if key.pinned {
+			for _, f := range found {
+				if samePinAccount(f.Candidate, key.pin) {
+					ranks[f.Candidate] = math.MaxUint64
+				}
+			}
 		}
 		// A saturated candidate would answer backpressure and cost a wasted
 		// attempt, so the preferred order only holds among candidates that

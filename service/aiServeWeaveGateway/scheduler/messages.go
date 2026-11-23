@@ -57,6 +57,50 @@ func (s *Scheduler) Messages(ctx context.Context, c Candidate, req runtime.Messa
 	return s.server.Runtime(c.NodeID, c.RuntimeID).Messages(ctx, req)
 }
 
+// MessagesContinue dispatches a tool continuation to c, the node holding its
+// CLI, and waits for the first event before returning, the way MessagesStart
+// does. The outcome is recorded against c, so a continuation that finds its
+// account spent sets c aside exactly as a new session would, and the caller
+// can resume the round elsewhere through MessagesStart without landing on c
+// again. A failure before the first event delivered nothing to the client.
+//
+// MessagesContinue 把工具续接派发给持有其 CLI 的节点 c，并像 MessagesStart 一样等到首个
+// 事件再返回。结果记在 c 上，因此发现账户已用完的续接与新会话一样把 c 搁置，调用方随后
+// 可以经 MessagesStart 在别处恢复该回合，而不会再落到 c 上。首个事件之前的失败没有向
+// 客户端交付任何内容。
+//
+// A continuation whose account is already cooling down — another session found
+// it spent — is not sent at all: it gets the rate_limited answer the account
+// would give, without spending a real request to learn it again.
+//
+// 账户已在冷却中（另一个会话已发现它用完）的续接根本不会被发送：它直接得到该账户本会
+// 给出的 rate_limited 答复，而不必再花一次真实请求重新得知。
+func (s *Scheduler) MessagesContinue(ctx context.Context, c Candidate, req runtime.MessagesRequest) (runtime.Stream[runtime.MessagesEvent], error) {
+	var cooled cooledCandidates
+	if s.skipCooling(c, &cooled) {
+		return nil, cooled.earliest
+	}
+	stream, err := s.Messages(ctx, c, req)
+	if errors.Is(err, ErrModelNotAllowed) || errors.Is(err, ErrNodeNotAllowed) {
+		return nil, err
+	}
+	if err == nil {
+		var first runtime.MessagesEvent
+		first, err = stream.Recv()
+		if err == nil || err == io.EOF {
+			s.breakers.record(c, nil, s.clock.Now())
+			s.metrics.Dispatch(c, nil)
+			s.logDispatchDecision(ctx, "messages_continue", c, nil)
+			return &prefetchStream[runtime.MessagesEvent]{first: first, hasFirst: err == nil, eof: err == io.EOF, underlying: stream}, nil
+		}
+		stream.Close()
+	}
+	s.breakers.record(c, err, s.clock.Now())
+	s.metrics.Dispatch(c, err)
+	s.logDispatchDecision(ctx, "messages_continue", c, err)
+	return nil, err
+}
+
 // MessagesStart opens a new native Messages session on the best candidate.
 // Until the first event arrives no client has seen the session, so a node
 // that is full, closing or unreachable hands the request to the next
@@ -101,7 +145,8 @@ func (s *Scheduler) MessagesStart(ctx context.Context, req runtime.MessagesReque
 // MessagesStart 唯一会等待的失败。
 func (s *Scheduler) attemptMessagesStart(ctx context.Context, req runtime.MessagesRequest) (runtime.Stream[runtime.MessagesEvent], Candidate, error, bool) {
 	capability := messagesCapability(req)
-	candidates := s.candidatesKeyed(ctx, s.routes.Load(), req.Model, capability, s.sessionAffinity(ctx), rand.Float64)
+	key := s.withPin(ctx, s.sessionAffinity(ctx))
+	candidates := s.candidatesKeyed(ctx, s.routes.Load(), req.Model, capability, key, rand.Float64)
 	s.metrics.Selection(capability, len(candidates))
 	if len(candidates) == 0 {
 		return nil, Candidate{}, s.noCandidatesFor(ctx, req.Model, capability), false
@@ -121,6 +166,7 @@ func (s *Scheduler) attemptMessagesStart(ctx context.Context, req runtime.Messag
 				s.breakers.record(c, nil, s.clock.Now())
 				s.metrics.Dispatch(c, nil)
 				s.logDispatchDecision(ctx, "messages", c, nil)
+				s.notePin(ctx, key, c)
 				return &prefetchStream[runtime.MessagesEvent]{first: first, hasFirst: err == nil, eof: err == io.EOF, underlying: stream}, c, nil, false
 			}
 			stream.Close()

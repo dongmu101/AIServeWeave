@@ -253,7 +253,7 @@ func (s *Server) serveControl(n *node, session *controlSession) error {
 			n.applyRemoteProvidersReport(tunnelwire.RemoteProvidersReportFromProto(body.RemoteProviders))
 
 		case *tunnelv1.AgentControl_CliUsage:
-			n.applyCLIUsageReport(tunnelwire.CLIUsageReportFromProto(body.CliUsage))
+			n.applyCLIUsageReport(tunnelwire.CLIUsageReportFromProto(body.CliUsage), s.clock.Now())
 
 		case *tunnelv1.AgentControl_ComfyuiManaged:
 			n.applyComfyUIManagedReport(tunnelwire.ComfyUIManagedReportFromProto(body.ComfyuiManaged))

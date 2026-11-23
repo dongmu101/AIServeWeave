@@ -289,7 +289,7 @@ go run ./service/aiServeWeaveGateway \
 | --- | --- | --- |
 | `Signup.Enabled` | `false` | 是否挂载注册路由 |
 | `Signup.MaxPerHour` | `30` | 全部署每个整点小时的注册尝试上限，在共享 Redis 中计数（`aisw:signup:window:<小时序号>`），成功与否都计入；`0` 不设上限 |
-| `Signup.RequestsPerMinute` / `TokensPerMinute` / `MaxConcurrent` | `600` / `20000000` / `4` | 新租户的起步配额，含义同 `common/quota`（零为不限制）；之后 owner/admin 可自行调整 |
+| `Signup.RequestsPerMinute` / `TokensPerMinute` / `MaxConcurrent` | `0` / `0` / `4` | 新租户的起步配额，含义同 `common/quota`（零为不限制）；之后 owner/admin 可自行调整 |
 
 比 BootstrapToken 路径多出的校验：租户名 1–128 字符；邮箱必须是不带显示名的单个地址（`net/mail`），不超过 255 字节；密码至少 8 个字符（`logic.MinSignupPasswordLength`，只约束自助注册）。邮箱已被占用时在写租户行**之前**返回 `409`，陌生人无法靠重放别人的地址堆出无 owner 的租户；检查与插入不是原子的，同一地址的并发注册仍可能留下一个惰性的孤立租户。审计动作为 `tenant.signup`，行为人是新 owner。
 

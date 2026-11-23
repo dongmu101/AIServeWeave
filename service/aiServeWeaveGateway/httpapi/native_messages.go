@@ -377,6 +377,12 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 	var err error
 	committed := false
 	resume := false
+	// spentResume marks a continuation resumed elsewhere because its account
+	// was spent; its lease is still held and must be restored, not consumed,
+	// if the new session fails too, so the client's retry can continue.
+	// spentResume 表示因账户额度用完而改到别处恢复的续接；它的租约仍被持有，若新会话也
+	// 失败，必须恢复而不是消费租约，让客户端的重试可以继续。
+	spentResume := false
 	if len(ids) > 0 {
 		record, finish, err = h.messagesSessions.Claim(r.Context(), ids, identity.TenantID, identity.KeyID, req.Model)
 		switch {
@@ -397,10 +403,26 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 				_ = finish(ctx, committed)
 			}()
 			d := awaitAlive(h.clock, ping, func() dispatched {
-				stream, err := h.sched.Messages(ctx, record.Candidate, native)
+				stream, err := h.sched.MessagesContinue(ctx, record.Candidate, native)
 				return dispatched{stream: stream, err: err}
 			})
 			stream, err = d.stream, d.err
+			if continuationSpent(err) {
+				// The account holding this CLI ran out of quota before
+				// answering, so nothing reached the client. The round resumes
+				// in a new session elsewhere, reading the results from the
+				// transcript exactly as an expired lease does; the scheduler
+				// has already set this node aside. The lease is consumed once
+				// the new session produces anything, or restored if it fails
+				// without applying the results.
+				// 持有该 CLI 的账户在作答之前额度耗尽，客户端什么也没收到。该回合在别处的新
+				// 会话中恢复，与租约过期时一样从文本记录读取结果；调度器已经把此节点搁置。
+				// 新会话一旦产出内容，租约即被消费；新会话失败且结果未被应用时，租约恢复。
+				h.logger.Info("Messages continuation's account is rate limited; resuming the round in a new session",
+					"node_id", record.Candidate.NodeID, "runtime_id", record.Candidate.RuntimeID)
+				resume, spentResume = true, true
+				stream, err = nil, nil
+			}
 		}
 	}
 	if len(ids) == 0 || resume {
@@ -423,7 +445,7 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 		record = messagesession.Record{TenantID: identity.TenantID, KeyID: identity.KeyID, Model: req.Model, Candidate: candidate}
 	}
 	if err != nil {
-		committed = !messagesNotApplied(err)
+		committed = !spentResume && !messagesNotApplied(err)
 		dispatchError(err)
 		return
 	}
@@ -738,6 +760,16 @@ func (b *blockText) fill(block *anthropicContentBlockJSON) {
 func messagesNotApplied(err error) bool {
 	var failure *runtime.RuntimeError
 	return errors.As(err, &failure) && (failure.Code == runtime.ErrorInvalidConfig || failure.Code == runtime.ErrorCapability || failure.Code == runtime.ErrorBackpressure)
+}
+
+// continuationSpent reports whether a continuation's node answered that its
+// account's quota is spent, which a new session on another account can serve.
+//
+// continuationSpent 判断续接所在节点是否答复其账户额度已用完；另一个账户上的新会话
+// 可以接着服务。
+func continuationSpent(err error) bool {
+	var failure *runtime.RuntimeError
+	return errors.As(err, &failure) && failure.Code == runtime.ErrorRateLimited
 }
 
 // continuationLost reports whether a continuation's node answered that it no

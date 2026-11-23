@@ -58,13 +58,25 @@ type SchedNode struct {
 	Pressure bool
 	// CLIUsage is the node's last-reported CLI subscription quota, shared
 	// with the node like Runtimes and equally read-only: a report replaces
-	// the slice wholesale, never edits it. It is untrusted Agent input that
-	// the scheduler only uses to order candidates, never to exclude one.
+	// the slice wholesale, never edits it. It is untrusted Agent input: the
+	// scheduler uses it to order candidates and to sustain or end a
+	// cooldown a real rate_limited answer started, never to exclude a
+	// candidate on its own — and it only ever affects candidates on the
+	// node that sent it.
 	//
 	// CLIUsage 是该节点最近一次上报的 CLI 订阅额度，与 Runtimes 一样和节点共享、同样只读：
-	// 每次上报整份替换切片，从不原地修改。它是不受信任的 Agent 输入，调度器只用它给候选
-	// 排序，从不据此排除候选。
+	// 每次上报整份替换切片，从不原地修改。它是不受信任的 Agent 输入：调度器用它给候选
+	// 排序，以及延续或结束由真实 rate_limited 应答开启的冷却，从不单凭它排除候选——而且
+	// 它只影响发送它的那个节点上的候选。
 	CLIUsage []cliusagestatus.Account
+	// CLIUsageAt is when this replica received CLIUsage, on the Gateway's
+	// clock. An account's CheckedAt is on the Agent's clock, which may run
+	// ahead; the scheduler takes the earlier of the two as when a snapshot
+	// was taken.
+	//
+	// CLIUsageAt 是本副本按 Gateway 时钟收到 CLIUsage 的时刻。账户的 CheckedAt 是 Agent
+	// 的时钟，可能偏快；调度器取两者中较早者作为快照的获取时刻。
+	CLIUsageAt time.Time
 }
 
 // AppendSchedNodes appends the scheduler's view of every node connected to
@@ -109,6 +121,7 @@ func (n *node) schedView(now time.Time, heartbeatTimeout time.Duration) SchedNod
 	v.Live = n.liveLocked(now, heartbeatTimeout)
 	v.Pressure = v.Live && n.hasLoad && n.load.Pressure
 	v.CLIUsage = n.cliUsage
+	v.CLIUsageAt = n.cliUsageAt
 	st := n.static.Load()
 	n.mu.Unlock()
 	if st != nil {

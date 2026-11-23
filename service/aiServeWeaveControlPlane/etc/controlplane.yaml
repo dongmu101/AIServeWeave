@@ -87,8 +87,8 @@ BootstrapToken: "${AISW_BOOTSTRAP_TOKEN}"
 # Signup:
 #   Enabled: true
 #   MaxPerHour: 30
-#   RequestsPerMinute: 600
-#   TokensPerMinute: 20000000
+#   RequestsPerMinute: 0   # 0 = 不限制
+#   TokensPerMinute: 0     # 0 = 不限制
 #   MaxConcurrent: 4
 
 # Monthly exclusive Agent accounts, priced in fiat; buying needs Billing with Dodo.

@@ -28,15 +28,28 @@ import (
 // 存储故障损失的是共享，而不是请求——每个副本保留最近一次拉到的集合与自己的写入，直到
 // 存储重新应答。
 
-// SharedCooldowns is a fleet-wide record of rate-limit cooldowns: which
-// candidates are set aside, and until when.
+// Cooldown is one candidate's rate-limit cooldown: Since is when the backend
+// refused it, Until when the cooldown ends. Since is what lets a quota
+// snapshot end a cooldown early — only a check taken after the refusal can
+// say the quota came back (quota.go).
 //
-// SharedCooldowns 是集群级的限流冷却记录：哪些候选被搁置、搁置到何时。
+// Cooldown 是一个候选的限流冷却：Since 是后端拒绝它的时刻，Until 是冷却结束的时刻。
+// 有了 Since，额度快照才能提前结束冷却——只有在拒绝之后做的检查才能说明额度已经恢复
+// （quota.go）。
+type Cooldown struct {
+	Since time.Time
+	Until time.Time
+}
+
+// SharedCooldowns is a fleet-wide record of rate-limit cooldowns: which
+// candidates are set aside, since and until when.
+//
+// SharedCooldowns 是集群级的限流冷却记录：哪些候选被搁置、从何时起、到何时止。
 type SharedCooldowns interface {
-	// Mark sets c aside until until, replacing any earlier entry for c.
+	// Mark records cd for c, replacing any earlier entry for c.
 	//
-	// Mark 把 c 搁置到 until，替换 c 此前的任何条目。
-	Mark(ctx context.Context, c Candidate, until time.Time) error
+	// Mark 为 c 记录 cd，替换 c 此前的任何条目。
+	Mark(ctx context.Context, c Candidate, cd Cooldown) error
 	// Clear removes c's entry, if any.
 	//
 	// Clear 删除 c 的条目（如果有）。
@@ -44,7 +57,7 @@ type SharedCooldowns interface {
 	// Active returns every entry still in force at now.
 	//
 	// Active 返回在 now 时刻仍然有效的全部条目。
-	Active(ctx context.Context, now time.Time) (map[Candidate]time.Time, error)
+	Active(ctx context.Context, now time.Time) (map[Candidate]Cooldown, error)
 }
 
 // sharedCooldownWriteBuffer bounds the writes waiting for RunSharedCooldowns.
@@ -68,13 +81,13 @@ const sharedCooldownTimeout = 2 * time.Second
 // 频率。
 const DefaultSharedCooldownInterval = 2 * time.Second
 
-// cooldownWrite is one change waiting to reach the store: a zero until clears
-// the entry.
+// cooldownWrite is one change waiting to reach the store: a zero cooldown
+// clears the entry.
 //
-// cooldownWrite 是一项等待写入存储的变化：until 为零表示清除条目。
+// cooldownWrite 是一项等待写入存储的变化：冷却为零值表示清除条目。
 type cooldownWrite struct {
-	c     Candidate
-	until time.Time
+	c  Candidate
+	cd Cooldown
 }
 
 // shareCooldowns switches the registry to shared cooldowns. It is called once,
@@ -83,58 +96,61 @@ type cooldownWrite struct {
 // shareCooldowns 把注册表切换为共享冷却。它只在注册表被共享之前调用一次。
 func (r *breakerRegistry) shareCooldowns() {
 	r.writes = make(chan cooldownWrite, sharedCooldownWriteBuffer)
-	r.shared = make(map[Candidate]time.Time)
-	r.pending = make(map[Candidate]time.Time)
+	r.shared = make(map[Candidate]Cooldown)
+	r.pending = make(map[Candidate]Cooldown)
 }
 
-// limitedUntilLocked returns when c's rate-limit cooldown ends; the zero time
-// means it has none. With sharing on, a change not yet written to the store
+// cooldownLocked returns c's rate-limit cooldown; a zero Until means it has
+// none. With sharing on, a change not yet written to the store
 // (pending) wins over the last pulled set, so a pull that raced the write
 // cannot undo it. Callers hold r.mu.
 //
-// limitedUntilLocked 返回 c 的限流冷却何时结束；零值表示没有冷却。开启共享时，尚未写入
+// cooldownLocked 返回 c 的限流冷却；Until 为零表示没有冷却。开启共享时，尚未写入
 // 存储的变化（pending）优先于最近一次拉取的集合，使与写入赛跑的拉取无法撤销它。调用方
 // 持有 r.mu。
-func (r *breakerRegistry) limitedUntilLocked(c Candidate) time.Time {
+func (r *breakerRegistry) cooldownLocked(c Candidate) Cooldown {
 	if r.writes == nil {
 		if st, ok := r.entries[c]; ok {
-			return st.limitedUntil
+			return st.limited
 		}
-		return time.Time{}
+		return Cooldown{}
 	}
-	if until, ok := r.pending[c]; ok {
-		return until
+	if cd, ok := r.pending[c]; ok {
+		return cd
 	}
 	return r.shared[c]
 }
 
-// setLimitedLocked sets c's rate-limit cooldown to end at until (zero clears
+// setLimitedLocked sets c's rate-limit cooldown to cd (a zero Until clears
 // it) and, with sharing on, queues the change for the store. A change the
 // queue cannot take is applied to this replica's pulled set only, so the next
 // pull replaces it with whatever the store says; dropped reports that, for
 // the caller to log once it has released r.mu. Callers hold r.mu.
 //
-// setLimitedLocked 把 c 的限流冷却设为在 until 结束（零值表示清除），开启共享时把这项
+// setLimitedLocked 把 c 的限流冷却设为 cd（Until 为零表示清除），开启共享时把这项
 // 变化排队写入存储。队列装不下的变化只作用于本副本拉取到的集合，下一次拉取会用存储里的
 // 内容替换它；dropped 报告这种情况，由调用方在释放 r.mu 之后记录日志。调用方持有 r.mu。
-func (r *breakerRegistry) setLimitedLocked(c Candidate, until time.Time) (dropped bool) {
+func (r *breakerRegistry) setLimitedLocked(c Candidate, cd Cooldown) (dropped bool) {
+	if cd.Until.IsZero() {
+		cd = Cooldown{}
+	}
 	if r.writes == nil {
 		st, ok := r.entries[c]
 		if !ok {
 			st = &breakerState{}
 			r.entries[c] = st
 		}
-		st.limitedUntil = until
+		st.limited = cd
 		return false
 	}
-	if until.IsZero() {
+	if cd.Until.IsZero() {
 		delete(r.shared, c)
 	} else {
-		r.shared[c] = until
+		r.shared[c] = cd
 	}
 	select {
-	case r.writes <- cooldownWrite{c: c, until: until}:
-		r.pending[c] = until
+	case r.writes <- cooldownWrite{c: c, cd: cd}:
+		r.pending[c] = cd
 		return false
 	default:
 		delete(r.pending, c)
@@ -156,24 +172,24 @@ func (r *breakerRegistry) setLimitedLocked(c Candidate, until time.Time) (droppe
 func (r *breakerRegistry) settleWrite(w cooldownWrite) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	until, ok := r.pending[w.c]
-	if !ok || !until.Equal(w.until) {
+	cd, ok := r.pending[w.c]
+	if !ok || !cd.Until.Equal(w.cd.Until) || !cd.Since.Equal(w.cd.Since) {
 		return
 	}
 	delete(r.pending, w.c)
-	if w.until.IsZero() {
+	if w.cd.Until.IsZero() {
 		delete(r.shared, w.c)
 	} else {
-		r.shared[w.c] = w.until
+		r.shared[w.c] = w.cd
 	}
 }
 
 // replaceShared installs a freshly pulled set.
 //
 // replaceShared 装入一份新拉取的集合。
-func (r *breakerRegistry) replaceShared(active map[Candidate]time.Time) {
+func (r *breakerRegistry) replaceShared(active map[Candidate]Cooldown) {
 	if active == nil {
-		active = make(map[Candidate]time.Time)
+		active = make(map[Candidate]Cooldown)
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -228,10 +244,10 @@ func (s *Scheduler) RunSharedCooldowns(ctx context.Context, interval time.Durati
 		case w := <-s.breakers.writes:
 			opCtx, cancel := context.WithTimeout(ctx, sharedCooldownTimeout)
 			var err error
-			if w.until.IsZero() {
+			if w.cd.Until.IsZero() {
 				err = s.sharedCooldowns.Clear(opCtx, w.c)
 			} else {
-				err = s.sharedCooldowns.Mark(opCtx, w.c, w.until)
+				err = s.sharedCooldowns.Mark(opCtx, w.c, w.cd)
 			}
 			cancel()
 			s.breakers.settleWrite(w)
