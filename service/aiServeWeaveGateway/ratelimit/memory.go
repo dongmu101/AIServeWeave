@@ -157,17 +157,21 @@ func (m *Memory) Tracked() int {
 	return len(m.tenants)
 }
 
-// sweepLocked drops tenants that have been idle past the TTL and hold no
-// in-flight lease. It runs on the Acquire path rather than in a goroutine: a
-// limiter that needed its own goroutine would need its own shutdown, and this
-// map only grows when Acquire is called anyway.
+// sweepLocked drops tenants that have been idle past the TTL, hold no
+// in-flight lease and whose buckets have refilled to capacity. It runs on the
+// Acquire path rather than in a goroutine: a limiter that needed its own
+// goroutine would need its own shutdown, and this map only grows when Acquire
+// is called anyway. A bucket still below capacity is kept because forgetting
+// it would forgive a token debt larger than the idle TTL's worth of refill.
 //
-// sweepLocked 丢弃空闲超过 TTL、且没有在途租约的租户。它跑在 Acquire 路径上而不是
-// 协程里：需要自带协程的限流器就需要自带关停，而这张映射本来也只在 Acquire 被调用时
-// 才会增长。
+// sweepLocked 丢弃空闲超过 TTL、没有在途租约、且桶已补回容量的租户。它跑在 Acquire
+// 路径上而不是协程里：需要自带协程的限流器就需要自带关停，而这张映射本来也只在
+// Acquire 被调用时才会增长。仍低于容量的桶会被保留，因为遗忘它等于免掉一笔超过空闲
+// TTL 补充量的 token 欠账。
 func (m *Memory) sweepLocked(now time.Time) {
 	for id, state := range m.tenants {
-		if state.inflight == 0 && now.Sub(state.lastSeen) > m.idleTTL {
+		if state.inflight == 0 && now.Sub(state.lastSeen) > m.idleTTL &&
+			state.requests.full(now) && state.tokens.full(now) {
 			delete(m.tenants, id)
 		}
 	}

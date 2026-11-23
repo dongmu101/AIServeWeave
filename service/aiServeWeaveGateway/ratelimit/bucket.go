@@ -86,6 +86,20 @@ func (b *bucket) available(now time.Time) bool {
 	return b.balance >= 1
 }
 
+// full reports whether forgetting the bucket would change nothing: refill has
+// brought it back to capacity, which is what a fresh bucket starts at. A bucket
+// never configured has nothing to remember.
+//
+// full 报告遗忘这个桶是否不改变任何东西：补充已把它补回容量，而新桶正是从容量起步。
+// 从未配置过的桶没有什么需要记住的。
+func (b *bucket) full(now time.Time) bool {
+	if b.capacity <= 0 {
+		return true
+	}
+	b.refill(now)
+	return b.balance >= b.capacity
+}
+
 // spend removes n without checking, letting the balance go negative.
 //
 // spend 不作检查地取走 n，允许余额变为负数。
