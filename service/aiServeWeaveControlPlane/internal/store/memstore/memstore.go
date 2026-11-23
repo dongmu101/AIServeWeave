@@ -739,8 +739,8 @@ func (s *Store) MarkAPIKeyUsed(_ context.Context, id string, at time.Time) error
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key, ok := s.keys[id]
-	if !ok {
-		return store.ErrNotFound
+	if !ok || (key.LastUsedAt != nil && at.Sub(*key.LastUsedAt) < store.APIKeyUseInterval) {
+		return nil
 	}
 	key.LastUsedAt = &at
 	s.keys[id] = key

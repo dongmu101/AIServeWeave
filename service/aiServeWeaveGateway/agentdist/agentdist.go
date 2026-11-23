@@ -161,7 +161,7 @@ func New(cfg Config) (*Handler, error) {
 	}
 	u, err := url.Parse(cfg.PublicURL)
 	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
-		return nil, errors.New("agentdist: -agent-public-url must be an https origin such as https://open7x.com")
+		return nil, errors.New("agentdist: -agent-public-url must be an https origin such as https://www.open7x.com")
 	}
 	cfg.PublicURL = strings.TrimRight(cfg.PublicURL, "/")
 	if cfg.GitHubRepo != "" && !repoName.MatchString(cfg.GitHubRepo) {

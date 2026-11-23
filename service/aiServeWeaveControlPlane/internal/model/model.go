@@ -257,11 +257,9 @@ type APIKey struct {
 	// ExpiresAt 是可选的。没有过期时间的 key，在它最终被人从某个旧仓库里翻出来的
 	// 那天依然有效，因此 API 默认会给它设置一个。
 	ExpiresAt *time.Time `gorm:"index"`
-	// LastUsedAt is written by the Gateway's verification path, coarsely: see
-	// the store's UpdateLastUsed for why it is not updated on every request.
+	// LastUsedAt is sampled when the control plane verifies use of the key.
 	//
-	// LastUsedAt 由 Gateway 的校验路径粗粒度写入：不在每次请求都更新的原因见 store
-	// 的 UpdateLastUsed。
+	// LastUsedAt 是控制面校验密钥时采样记录的使用时间。
 	LastUsedAt *time.Time
 	RevokedAt  *time.Time
 	CreatedAt  time.Time

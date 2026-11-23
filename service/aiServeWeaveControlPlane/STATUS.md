@@ -289,7 +289,7 @@ go run ./service/aiServeWeaveGateway \
 | --- | --- | --- |
 | `Signup.Enabled` | `false` | 是否挂载注册路由 |
 | `Signup.MaxPerHour` | `30` | 全部署每个整点小时的注册尝试上限，在共享 Redis 中计数（`aisw:signup:window:<小时序号>`），成功与否都计入；`0` 不设上限 |
-| `Signup.RequestsPerMinute` / `TokensPerMinute` / `MaxConcurrent` | `60` / `100000` / `4` | 新租户的起步配额，含义同 `common/quota`（零为不限制）；之后 owner/admin 可自行调整 |
+| `Signup.RequestsPerMinute` / `TokensPerMinute` / `MaxConcurrent` | `0` / `0` / `4` | 新租户的起步配额，含义同 `common/quota`（零为不限制）；之后 owner/admin 可自行调整 |
 
 比 BootstrapToken 路径多出的校验：租户名 1–128 字符；邮箱必须是不带显示名的单个地址（`net/mail`），不超过 255 字节；密码至少 8 个字符（`logic.MinSignupPasswordLength`，只约束自助注册）。邮箱已被占用时在写租户行**之前**返回 `409`，陌生人无法靠重放别人的地址堆出无 owner 的租户；检查与插入不是原子的，同一地址的并发注册仍可能留下一个惰性的孤立租户。审计动作为 `tenant.signup`，行为人是新 owner。
 
@@ -899,7 +899,7 @@ CREATE INDEX idx_usage_records_tenant_created       ON usage_records (tenant_id,
 
 - `GET /admin/v1/usage/summary`——`requireSession` 守卫，自动按调用者的 `tenant_id` 过滤，响应省略 `tenant_id` 字段。
 - `GET /operator/v1/usage/summary`——`requirePlatformSession` 守卫，可选 `tenant_id` 查询参数做跨租户过滤，不传则汇总全部租户，响应保留 `tenant_id` 字段。
-- 两个端点都接受可选的 `group_by`：缺省或 `model` 按 `(tenant_id, model)` 分组，形状不变；`key` 改按 `(tenant_id, user_id, key_id, model)` 分组，每行多出 `user_id`、`key_id`（为空时省略）。其他取值返回 400。Console 的「用量」页用它显示各用户、各 key、各模型的输入与输出 token。
+- 两个端点都接受可选的 `group_by`：缺省或 `model` 按 `(tenant_id, model)` 分组；`key` 按 `(tenant_id, user_id, key_id, model)` 分组，每行返回有值的 `user_id`、`key_id`，有 `key_id` 时还返回组内最新入账记录时间 `last_used_at`。其他取值返回 400。Console 用这些分组显示用量及密钥的最近使用时间。
 - 每行另带 `cache_read_tokens`、`cache_write_tokens`，开启计费时带 `cost_micro`。
 
 **汇总只读取入账时已算好的费用，不重新计价**：费用由「计费与充值」一节在推送端点的入账事务里写进同一张表，汇总仍是一次分组求和。
@@ -1161,7 +1161,7 @@ Gateway 侧：`controlplaneclient.ResponsesClient`（`CreateTurn`/`GetTurn`，�
 
 ## 租户 Agent AI 服务与模型目录
 
-`GET /admin/v1/models` 使用租户会话认证，允许 owner/admin/member 读取连接到 `Fleet.Gateways` 第一个 Gateway 的 Agent 所上报的服务与模型，不使用 Gateway 的 `local_runtimes`。接口与平台机群 API 分开，显式投影为 `{collected_at, partial, services: [{agent_id, service_id, node_online, kind, state, version, models: [{id, capabilities}]}]}`；仅公开 Agent 标识与其服务 ID 来区分上报来源；不返回 Gateway 副本标识、内部地址、凭据或自由诊断文本，也不读取任何租户的 Job/用量数据。`node_online` 表示 Agent 连接状态；离线 Agent 保留最近一次上报，并由 Console 标注为历史观测。目录共享给所有已登录租户；它不是租户可调度模型的授权目录。Gateway 读取失败保留 `partial=true` 并返回空 services，Console 将其显示为读取失败；未配置 Fleet 时不挂载端点。客户端不能选择其他 Gateway 或指定租户。平台令牌不能代替租户会话读取此接口，原 `/operator/v1/nodes` 仍只对平台运维开放。
+`GET /admin/v1/models` 使用租户会话认证，允许 owner/admin/member 读取连接到 `Fleet.Gateways` 第一个 Gateway 的 Agent 所上报的服务与模型，不使用 Gateway 的 `local_runtimes`。接口与平台机群 API 分开，显式投影为 `{collected_at, partial, services: [{agent_id, service_id, node_online, scope, kind, state, version, models: [{id, capabilities}]}]}`；`scope` 为 `dedicated` 表示调用方租户自有的 `tnode.` Agent 或其持有未到期租约的购买账号，其余为 `cloud`（平台运维共享，含免费与收费），Console `/console/models` 据此分「全部 / 云AI / 独享AI」三个 Tab；仅公开 Agent 标识与其服务 ID 来区分上报来源；不返回 Gateway 副本标识、内部地址、凭据或自由诊断文本，也不读取任何租户的 Job/用量数据。`node_online` 表示 Agent 连接状态；离线 Agent 保留最近一次上报，并由 Console 标注为历史观测。目录共享给所有已登录租户；它不是租户可调度模型的授权目录。Gateway 读取失败保留 `partial=true` 并返回空 services，Console 将其显示为读取失败；未配置 Fleet 时不挂载端点。客户端不能选择其他 Gateway 或指定租户。平台令牌不能代替租户会话读取此接口，原 `/operator/v1/nodes` 仍只对平台运维开放。
 
 ## API 参考文档（租户）
 

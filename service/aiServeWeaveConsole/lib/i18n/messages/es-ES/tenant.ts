@@ -957,6 +957,12 @@ const tenant = {
   "tenant.billingUsagePeriod": "{start} – {end} · {count} solicitudes",
   "tenant.billingUsageDetails": "Ver estas solicitudes",
   "tenant.billingUsageEdgeNote": "Las entradas de uso se dividen por hora de cobro y la lista de solicitudes por hora de la solicitud, así que los bordes pueden diferir de segundos a minutos.",
-  "tenant.usageAllModels": "Todos los modelos"
+  "tenant.usageAllModels": "Todos los modelos",
+  "tenant.modelScopeAll": "Todos",
+  "tenant.modelScopeCloud": "IA en la nube",
+  "tenant.modelScopeDedicated": "IA dedicada",
+  "tenant.noCloudServices": "Aún no hay IA en la nube disponible.",
+  "tenant.noDedicatedServices": "Aún no hay IA dedicada. Conecta tu propio Agent o compra una cuenta dedicada para verla aquí.",
+  "tenant.modelScopeHint": "IA en la nube: Agents operados por la plataforma y compartidos entre inquilinos, gratuitos o de pago. IA dedicada: Agents que conectaste y cuentas que compraste."
 } as const;
 export default tenant;

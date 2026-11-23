@@ -17,7 +17,7 @@ import { resolveOperatorUpstream, resolveUpstream } from "./upstream-routes.ts";
 const node = "node_" + "a".repeat(32);
 const tenantNode = "tnode.tenant_1." + "b".repeat(32);
 const code = "ABCD-EFGH-JKMN-PQRS-TVWX";
-const base = "https://open7x.com";
+const base = "https://www.open7x.com";
 const codeResponse = { credential: "code", code, node_id: node, expires_at: "2026-10-30T01:00:00Z", install_base_url: base };
 const tokenResponse = {
   credential: "token", node_id: node, expires_at: "2026-10-30T01:00:00Z", install_base_url: base,
@@ -46,9 +46,9 @@ test("install issue parsing rejects malformed or mixed responses", () => {
     ["token with shell metacharacters", { ...tokenResponse, bootstrap_token: "a;b".padEnd(40, "x") }],
     ["address with shell metacharacters", { ...tokenResponse, gateway_addr: "a.example:1;rm" }],
     ["tenant id on the operator surface", { ...codeResponse, node_id: tenantNode }],
-    ["plain http base", { ...codeResponse, install_base_url: "http://open7x.com" }],
-    ["base with a path", { ...codeResponse, install_base_url: "https://open7x.com/x" }],
-    ["base with a trailing slash", { ...codeResponse, install_base_url: "https://open7x.com/" }],
+    ["plain http base", { ...codeResponse, install_base_url: "http://www.open7x.com" }],
+    ["base with a path", { ...codeResponse, install_base_url: "https://www.open7x.com/x" }],
+    ["base with a trailing slash", { ...codeResponse, install_base_url: "https://www.open7x.com/" }],
     ["base with credentials", { ...codeResponse, install_base_url: "https://u:p@open7x.com" }],
     ["bad expiry", { ...codeResponse, expires_at: "soon" }],
   ];
@@ -61,18 +61,18 @@ const tokenIssue: InstallIssue = parseOperatorInstall(tokenResponse);
 
 test("commands cover every system, method and source", () => {
   const expected: Record<string, string | null> = {
-    "ubuntu/code/platform": `curl -fsSL --proto '=https' 'https://open7x.com/agent/install.sh' | sudo bash -s -- --code '${code}'`,
-    "ubuntu/code/github": `curl -fsSL --proto '=https' 'https://open7x.com/agent/install.sh' | sudo bash -s -- --code '${code}' --source github`,
-    "ubuntu/interactive/platform": `curl -fsSL --proto '=https' 'https://open7x.com/agent/install.sh' | sudo bash -s --`,
-    "ubuntu/interactive/github": `curl -fsSL --proto '=https' 'https://open7x.com/agent/install.sh' | sudo bash -s -- --source github`,
-    "macos/code/platform": `curl -fsSL --proto '=https' 'https://open7x.com/agent/install.sh' | bash -s -- --code '${code}'`,
-    "macos/code/github": `curl -fsSL --proto '=https' 'https://open7x.com/agent/install.sh' | bash -s -- --code '${code}' --source github`,
-    "macos/interactive/platform": `curl -fsSL --proto '=https' 'https://open7x.com/agent/install.sh' | bash -s --`,
-    "macos/interactive/github": `curl -fsSL --proto '=https' 'https://open7x.com/agent/install.sh' | bash -s -- --source github`,
-    "windows/code/platform": `& ([scriptblock]::Create((irm 'https://open7x.com/agent/install.ps1'))) -Code '${code}'`,
-    "windows/code/github": `& ([scriptblock]::Create((irm 'https://open7x.com/agent/install.ps1'))) -Code '${code}' -Source github`,
-    "windows/interactive/platform": `irm 'https://open7x.com/agent/install.ps1' | iex`,
-    "windows/interactive/github": `& ([scriptblock]::Create((irm 'https://open7x.com/agent/install.ps1'))) -Source github`,
+    "ubuntu/code/platform": `curl -fsSL --proto '=https' 'https://www.open7x.com/agent/install.sh' | sudo bash -s -- --code '${code}'`,
+    "ubuntu/code/github": `curl -fsSL --proto '=https' 'https://www.open7x.com/agent/install.sh' | sudo bash -s -- --code '${code}' --source github`,
+    "ubuntu/interactive/platform": `curl -fsSL --proto '=https' 'https://www.open7x.com/agent/install.sh' | sudo bash -s --`,
+    "ubuntu/interactive/github": `curl -fsSL --proto '=https' 'https://www.open7x.com/agent/install.sh' | sudo bash -s -- --source github`,
+    "macos/code/platform": `curl -fsSL --proto '=https' 'https://www.open7x.com/agent/install.sh' | bash -s -- --code '${code}'`,
+    "macos/code/github": `curl -fsSL --proto '=https' 'https://www.open7x.com/agent/install.sh' | bash -s -- --code '${code}' --source github`,
+    "macos/interactive/platform": `curl -fsSL --proto '=https' 'https://www.open7x.com/agent/install.sh' | bash -s --`,
+    "macos/interactive/github": `curl -fsSL --proto '=https' 'https://www.open7x.com/agent/install.sh' | bash -s -- --source github`,
+    "windows/code/platform": `& ([scriptblock]::Create((irm 'https://www.open7x.com/agent/install.ps1'))) -Code '${code}'`,
+    "windows/code/github": `& ([scriptblock]::Create((irm 'https://www.open7x.com/agent/install.ps1'))) -Code '${code}' -Source github`,
+    "windows/interactive/platform": `irm 'https://www.open7x.com/agent/install.ps1' | iex`,
+    "windows/interactive/github": `& ([scriptblock]::Create((irm 'https://www.open7x.com/agent/install.ps1'))) -Source github`,
   };
   for (const os of INSTALL_OSES) for (const source of INSTALL_SOURCES) for (const method of INSTALL_METHODS) {
     const key = `${os}/${method}/${source}`;
@@ -82,10 +82,10 @@ test("commands cover every system, method and source", () => {
   const tokenArgs = (flags: string[]) => flags.join(" ");
   const posixToken = tokenArgs(["--node-id", `'${node}'`, "--token", `'${"T".repeat(43)}'`, "--ca-sha256", `'${"a".repeat(64)}'`, "--registry", "'registry.open7x.com:9443'", "--gateway", "'agent.open7x.com:8443'"]);
   const psToken = tokenArgs(["-NodeId", `'${node}'`, "-Token", `'${"T".repeat(43)}'`, "-CaSha256", `'${"a".repeat(64)}'`, "-Registry", "'registry.open7x.com:9443'", "-Gateway", "'agent.open7x.com:8443'"]);
-  assert.equal(buildInstallCommand(tokenIssue, { os: "ubuntu", method: "token", source: "platform" }), `curl -fsSL --proto '=https' 'https://open7x.com/agent/install.sh' | sudo bash -s -- ${posixToken}`);
-  assert.equal(buildInstallCommand(tokenIssue, { os: "macos", method: "token", source: "github" }), `curl -fsSL --proto '=https' 'https://open7x.com/agent/install.sh' | bash -s -- ${posixToken} --source github`);
-  assert.equal(buildInstallCommand(tokenIssue, { os: "windows", method: "token", source: "platform" }), `& ([scriptblock]::Create((irm 'https://open7x.com/agent/install.ps1'))) ${psToken}`);
-  assert.equal(buildInstallCommand(tokenIssue, { os: "windows", method: "token", source: "github" }), `& ([scriptblock]::Create((irm 'https://open7x.com/agent/install.ps1'))) ${psToken} -Source github`);
+  assert.equal(buildInstallCommand(tokenIssue, { os: "ubuntu", method: "token", source: "platform" }), `curl -fsSL --proto '=https' 'https://www.open7x.com/agent/install.sh' | sudo bash -s -- ${posixToken}`);
+  assert.equal(buildInstallCommand(tokenIssue, { os: "macos", method: "token", source: "github" }), `curl -fsSL --proto '=https' 'https://www.open7x.com/agent/install.sh' | bash -s -- ${posixToken} --source github`);
+  assert.equal(buildInstallCommand(tokenIssue, { os: "windows", method: "token", source: "platform" }), `& ([scriptblock]::Create((irm 'https://www.open7x.com/agent/install.ps1'))) ${psToken}`);
+  assert.equal(buildInstallCommand(tokenIssue, { os: "windows", method: "token", source: "github" }), `& ([scriptblock]::Create((irm 'https://www.open7x.com/agent/install.ps1'))) ${psToken} -Source github`);
 });
 
 test("an issued credential only serves the methods it can", () => {

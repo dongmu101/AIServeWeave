@@ -54,7 +54,7 @@ func newInstallFixture(t *testing.T) *installFixture {
 	clock := newFakeClock()
 	issuer := &installIssuerStub{}
 	svc := logic.New(st, clock,
-		logic.WithAgentInstall(logic.AgentInstallConfig{Issuer: issuer, PublicURL: "https://open7x.com/"}),
+		logic.WithAgentInstall(logic.AgentInstallConfig{Issuer: issuer, PublicURL: "https://www.open7x.com/"}),
 		logic.WithTenantNodes(logic.TenantNodeConfig{RegistryAddr: "registry.example.com:9443", GatewayAddr: "agent.example.com:8443", MaxPerTenant: 2, MaxCreatesPerDay: 5}),
 	)
 	return &installFixture{svc: svc, st: st, clock: clock, issuer: issuer}
@@ -81,7 +81,7 @@ func (f *installFixture) issueOperatorCode(t *testing.T) logic.InstallIssue {
 func TestRedeemInstallCodeSucceedsOnce(t *testing.T) {
 	f := newInstallFixture(t)
 	issued := f.issueOperatorCode(t)
-	if f.issuer.mints != 0 || issued.Code == "" || issued.InstallBaseURL != "https://open7x.com" {
+	if f.issuer.mints != 0 || issued.Code == "" || issued.InstallBaseURL != "https://www.open7x.com" {
 		t.Fatalf("issue = %+v mints=%d, want a code, no token minted and a trimmed base URL", issued, f.issuer.mints)
 	}
 	got, err := f.svc.RedeemInstallCode(t.Context(), strings.ToLower(issued.Code))

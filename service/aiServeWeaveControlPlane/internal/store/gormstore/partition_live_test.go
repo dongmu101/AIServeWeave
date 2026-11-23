@@ -281,12 +281,15 @@ func TestLivePartitionQueriesMatchAfterUpgrade(t *testing.T) {
 		}
 		// Rows written before key attribution group under an empty key.
 		// 归属功能上线前写入的行归入空 key 分组。
-		if err := st.CreateUsageRecords(ctx, []model.UsageRecord{{ID: "req_keyed", TenantID: "tnt_p", KeyID: "key_p", UserID: "usr_p", Model: summary[0].Model, Endpoint: "chat", PromptTokens: 1, CompletionTokens: 1, TotalTokens: 2, CreatedAt: f.now}}); err != nil {
+		if err := st.CreateUsageRecords(ctx, []model.UsageRecord{
+			{ID: "req_keyed", TenantID: "tnt_p", KeyID: "key_p", UserID: "usr_p", Model: summary[0].Model, Endpoint: "chat", PromptTokens: 1, CompletionTokens: 1, TotalTokens: 2, CreatedAt: f.now},
+			{ID: "req_keyed_earlier", TenantID: "tnt_p", KeyID: "key_p", UserID: "usr_p", Model: summary[0].Model, Endpoint: "chat", PromptTokens: 1, TotalTokens: 1, CreatedAt: f.now.Add(-time.Hour)},
+		}); err != nil {
 			t.Fatal(err)
 		}
 		byKey, err := st.SummarizeUsage(ctx, store.UsageRecordFilter{TenantID: "tnt_p", ByKey: true})
 		if err != nil || len(byKey) != 2 || byKey[0].KeyID != "" || byKey[0].TotalTokens != 33 ||
-			byKey[1].KeyID != "key_p" || byKey[1].UserID != "usr_p" || byKey[1].TotalTokens != 2 {
+			byKey[1].KeyID != "key_p" || byKey[1].UserID != "usr_p" || byKey[1].TotalTokens != 3 || !byKey[1].LastUsedAt.Equal(f.now) {
 			t.Errorf("SummarizeUsage(ByKey) = %+v, %v", byKey, err)
 		}
 		// Audit pagination walks newest first across month partitions.

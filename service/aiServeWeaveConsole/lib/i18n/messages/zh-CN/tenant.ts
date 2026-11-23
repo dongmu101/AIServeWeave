@@ -957,6 +957,12 @@ const tenant = {
   "tenant.billingUsagePeriod": "{start} – {end} · {count} 次请求",
   "tenant.billingUsageDetails": "查看这段时间的明细",
   "tenant.billingUsageEdgeNote": "用量账目按扣费时间分段，明细按请求时间筛选，两者的边缘可能相差几秒到几分钟。",
-  "tenant.usageAllModels": "全部模型"
+  "tenant.usageAllModels": "全部模型",
+  "tenant.modelScopeAll": "全部",
+  "tenant.modelScopeCloud": "云AI",
+  "tenant.modelScopeDedicated": "独享AI",
+  "tenant.noCloudServices": "暂无可用的云AI。",
+  "tenant.noDedicatedServices": "暂无独享AI。接入自有 Agent 或购买独享账号后会显示在这里。",
+  "tenant.modelScopeHint": "云AI：平台运维、多个租户共享的 Agent，含免费与收费。独享AI：你自行接入的 Agent 与购买的独享账号。"
 } as const;
 export default tenant;

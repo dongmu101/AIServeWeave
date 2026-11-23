@@ -118,12 +118,12 @@ func TestAgentInstallConfValidation(t *testing.T) {
 		wantError string
 	}{
 		{name: "omitted block", install: config.AgentInstallConf{}},
-		{name: "https origin", registry: registry, install: config.AgentInstallConf{PublicURL: "https://open7x.com", RedeemPerMinute: 60}},
-		{name: "trailing slash", registry: registry, install: config.AgentInstallConf{PublicURL: "https://open7x.com/", RedeemPerMinute: 60}},
-		{name: "http refused", registry: registry, install: config.AgentInstallConf{PublicURL: "http://open7x.com", RedeemPerMinute: 60}, wantError: "https origin"},
-		{name: "path refused", registry: registry, install: config.AgentInstallConf{PublicURL: "https://open7x.com/agent", RedeemPerMinute: 60}, wantError: "https origin"},
+		{name: "https origin", registry: registry, install: config.AgentInstallConf{PublicURL: "https://www.open7x.com", RedeemPerMinute: 60}},
+		{name: "trailing slash", registry: registry, install: config.AgentInstallConf{PublicURL: "https://www.open7x.com/", RedeemPerMinute: 60}},
+		{name: "http refused", registry: registry, install: config.AgentInstallConf{PublicURL: "http://www.open7x.com", RedeemPerMinute: 60}, wantError: "https origin"},
+		{name: "path refused", registry: registry, install: config.AgentInstallConf{PublicURL: "https://www.open7x.com/agent", RedeemPerMinute: 60}, wantError: "https origin"},
 		{name: "userinfo refused", registry: registry, install: config.AgentInstallConf{PublicURL: "https://u:p@open7x.com", RedeemPerMinute: 60}, wantError: "https origin"},
-		{name: "needs registry", install: config.AgentInstallConf{PublicURL: "https://open7x.com", RedeemPerMinute: 60}, wantError: "Registry"},
+		{name: "needs registry", install: config.AgentInstallConf{PublicURL: "https://www.open7x.com", RedeemPerMinute: 60}, wantError: "Registry"},
 		{name: "limit too high", registry: registry, install: config.AgentInstallConf{RedeemPerMinute: 10001}, wantError: "RedeemPerMinute"},
 		{name: "negative limit", registry: registry, install: config.AgentInstallConf{RedeemPerMinute: -1}, wantError: "RedeemPerMinute"},
 	} {
@@ -141,7 +141,7 @@ func TestAgentInstallConfValidation(t *testing.T) {
 
 func TestAgentInstallConfMounting(t *testing.T) {
 	complete := config.RegistryConf{Addr: "registry:9443", AdminToken: "t", CACertFile: "/ca.pem"}
-	withURL := config.AgentInstallConf{PublicURL: "https://open7x.com"}
+	withURL := config.AgentInstallConf{PublicURL: "https://www.open7x.com"}
 	for _, tc := range []struct {
 		name             string
 		install          config.AgentInstallConf

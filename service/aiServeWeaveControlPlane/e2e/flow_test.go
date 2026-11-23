@@ -167,6 +167,9 @@ func TestKeyIssuedByTheConsoleAuthenticatesAtTheGateway(t *testing.T) {
 	if key.Key == "" {
 		t.Fatal("the create response carried no plaintext key")
 	}
+	if key.APIKey.LastUsedAt != nil {
+		t.Fatal("a freshly issued key already has a last-used time")
+	}
 
 	verifier := gatewayVerifier(h, newSteppableClock())
 	identity, err := verifier.Verify(context.Background(), key.Key)
@@ -178,6 +181,17 @@ func TestKeyIssuedByTheConsoleAuthenticatesAtTheGateway(t *testing.T) {
 	}
 	if identity.KeyID != key.APIKey.ID {
 		t.Errorf("KeyID = %q, want %q", identity.KeyID, key.APIKey.ID)
+	}
+
+	var list types.APIKeyListResponse
+	if status := h.call(http.MethodGet, "/admin/v1/apikeys", session, nil, &list); status != http.StatusOK {
+		t.Fatalf("listing keys: status %d", status)
+	}
+	if len(list.Items) != 1 || list.Items[0].ID != key.APIKey.ID {
+		t.Fatalf("the key list should contain the issued key")
+	}
+	if list.Items[0].LastUsedAt == nil {
+		t.Fatal("the key list still has no last-used time after Gateway authentication")
 	}
 }
 

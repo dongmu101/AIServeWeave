@@ -176,7 +176,7 @@ check_inputs() {
   [ -n "$platform" ] || platform=$PLATFORM_URL
   case "$platform" in __AISW_*) platform=;; esac
   platform=${platform%/}
-  [[ "$platform" =~ ^https://[^/?#[:space:]]+$ ]] || fail "--platform must be the platform's https origin, e.g. https://open7x.com"
+  [[ "$platform" =~ ^https://[^/?#[:space:]]+$ ]] || fail "--platform must be the platform's https origin, e.g. https://www.open7x.com"
   case "$source" in platform|github) ;; https://*) source=${source%/};; *) fail "--source must be platform, github or an https:// release directory";; esac
   if [ -n "$bundle" ]; then [ -f "$bundle" ] || fail "enrollment ZIP not found"; fi
 }

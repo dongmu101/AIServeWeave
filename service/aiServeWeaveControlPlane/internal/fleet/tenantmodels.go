@@ -16,12 +16,18 @@ type TenantModelService struct {
 	// AgentID identifies the reporting Agent. / AgentID 标识上报的 Agent。
 	AgentID string `json:"agent_id"`
 	// ServiceID identifies a runtime on that Agent. / ServiceID 标识该 Agent 上的运行时。
-	ServiceID  string           `json:"service_id"`
-	NodeOnline bool             `json:"node_online"`
-	Kind       string           `json:"kind"`
-	State      string           `json:"state"`
-	Version    string           `json:"version"`
-	Models     []nodeview.Model `json:"models"`
+	ServiceID  string `json:"service_id"`
+	NodeOnline bool   `json:"node_online"`
+	// Scope is ScopeCloud for a platform Agent shared by tenants, or
+	// ScopeDedicated for the tenant's own Agent or an account it bought.
+	//
+	// Scope 对多个租户共享的平台 Agent 为 ScopeCloud；对商户自有 Agent 或其购买的独享
+	// 账号为 ScopeDedicated。
+	Scope   string           `json:"scope"`
+	Kind    string           `json:"kind"`
+	State   string           `json:"state"`
+	Version string           `json:"version"`
+	Models  []nodeview.Model `json:"models"`
 	// CLIUsage is the subscription quota of the CLI this service runs, present
 	// only for a codex or claude service whose Agent has reported one. It is the
 	// CLI account's shared quota, not a per-tenant figure.
@@ -30,6 +36,17 @@ type TenantModelService struct {
 	// 才存在。它是 CLI 账户的共享额度，不是按租户划分的数字。
 	CLIUsage *nodeview.CLIUsage `json:"cli_usage,omitempty"`
 }
+
+// Scope values of TenantModelService.
+// TenantModelService 的 Scope 取值。
+const (
+	// ScopeCloud marks a platform-operated service shared by tenants.
+	// ScopeCloud 标记由平台运维、多个租户共享的服务。
+	ScopeCloud = "cloud"
+	// ScopeDedicated marks a tenant-owned Agent or a bought account.
+	// ScopeDedicated 标记商户自有 Agent 或购买的独享账号。
+	ScopeDedicated = "dedicated"
+)
 
 // TenantModelCatalog exposes Agent-reported service and model facts to authenticated tenants.
 // TenantModelCatalog 向已认证租户展示 Agent 上报的服务与模型事实。
@@ -61,8 +78,8 @@ func (a *Aggregator) TenantModels(ctx context.Context) (TenantModelCatalog, erro
 		for _, backend := range node.Runtimes {
 			out.Services = append(out.Services, TenantModelService{
 				AgentID: node.NodeID, ServiceID: backend.ID,
-				NodeOnline: node.Live,
-				Kind:       backend.Kind, State: backend.State, Version: backend.Version,
+				NodeOnline: node.Live, Scope: ScopeCloud,
+				Kind: backend.Kind, State: backend.State, Version: backend.Version,
 				Models:   backend.Models,
 				CLIUsage: cliUsageFor(node.CLIUsage, backend.ID, backend.Kind),
 			})

@@ -5,6 +5,7 @@ import { useI18n } from "@/components/i18n/provider";
 import { Message } from "@/components/i18n/message";
 
 import * as React from "react";
+import { Popover } from "@base-ui/react/popover";
 import {
   createColumnHelper,
   tableFeatures,
@@ -71,6 +72,45 @@ const NO_KEYS: ApiKeySummary[] = [];
 
 const PAGE_SIZE = 50;
 
+function KeyCreator({ id, own }: { id: string; own: boolean }) {
+  const { t } = useI18n();
+
+  async function copyCreator() {
+    try {
+      await navigator.clipboard.writeText(id);
+      toast.success(t("common.copied"));
+    } catch {
+      toast.error(t("common.copyFailedSelectTheTextManually"));
+    }
+  }
+
+  return (
+    <Popover.Root>
+      <span className="inline-flex items-center gap-1 font-mono text-xs">
+        <Popover.Trigger
+          openOnHover
+          closeDelay={150}
+          className="max-w-26 cursor-pointer truncate rounded-sm text-left hover:underline focus-visible:outline-2 focus-visible:outline-ring"
+        >
+          {id}
+        </Popover.Trigger>
+        {own && <span className="text-muted-foreground">{t("tenant.me")}</span>}
+      </span>
+      <Popover.Portal>
+        <Popover.Positioner sideOffset={4} className="z-50">
+          <Popover.Popup className="flex max-w-[min(22rem,var(--available-width))] items-center gap-2 rounded-lg border bg-popover p-2 text-popover-foreground shadow-md">
+            <Popover.Title className="sr-only">{t("tenant.createdBy")}</Popover.Title>
+            <code className="min-w-0 select-text text-xs [overflow-wrap:anywhere]">{id}</code>
+            <Button size="sm" variant="outline" className="shrink-0" onClick={copyCreator}>
+              {t("common.copy")}
+            </Button>
+          </Popover.Popup>
+        </Popover.Positioner>
+      </Popover.Portal>
+    </Popover.Root>
+  );
+}
+
 export function KeysView({ role, userId }: { role: string; userId: string }) {
   const { locale, t } = useI18n();
   const run = useConsoleRequest();
@@ -108,12 +148,7 @@ export function KeysView({ role, userId }: { role: string; userId: string }) {
         }),
         helper.accessor("createdBy", {
           header: t("tenant.createdBy"),
-          cell: (info) => (
-            <span className="font-mono text-xs">
-              {info.getValue()}
-              {info.getValue() === userId ? t("tenant.me") : ""}
-            </span>
-          ),
+          cell: (info) => <KeyCreator id={info.getValue()} own={info.getValue() === userId} />,
         }),
         helper.display({
           id: "state",
@@ -141,7 +176,12 @@ export function KeysView({ role, userId }: { role: string; userId: string }) {
         }),
         helper.accessor("lastUsedAt", {
           header: t("tenant.lastUsed"),
-          cell: (info) => formatDateTime(info.getValue(), t("tenant.neverUsed"), locale),
+          cell: (info) => {
+            const verified = info.getValue();
+            const used = usage?.lastUsedByKey.get(info.row.original.id);
+            const latest = used && (verified === null || Date.parse(used) > Date.parse(verified)) ? used : verified;
+            return formatDateTime(latest, t("tenant.neverUsed"), locale);
+          },
         }),
         helper.accessor("createdAt", {
           header: t("tenant.createdAt"),

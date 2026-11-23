@@ -42,7 +42,7 @@ usage() {
   --https                    Console 部署在 HTTPS 反向代理之后，启用 Secure Cookie
   --signup                   开启租户自助注册（控制面与 Console 同时开启）
   --advertise-addr HOST:PORT Agent 拨号的 Gateway 隧道地址（默认 127.0.0.1:8443）
-  --agent-public-url URL     平台对外的 HTTPS 站点地址，开启 Agent 一行命令安装（如 https://open7x.com）
+  --agent-public-url URL     平台对外的 HTTPS 站点地址，开启 Agent 一行命令安装（如 https://www.open7x.com）
   --local-discovery          保留 Gateway 对 host.docker.internal 上 Ollama/vLLM 的发现
                              （Linux 原生 Docker 默认关闭，因为该主机名无法解析）
   --no-build                 只准备配置，不构建或拉取镜像、不启动
@@ -129,7 +129,7 @@ fi
 follow_latest_images
 [[ -z "$ADVERTISE_ADDR" ]] || env_set GATEWAY_ADVERTISE_ADDR "$ADVERTISE_ADDR"
 if [[ -n "$AGENT_URL" ]]; then
-  [[ "$AGENT_URL" =~ ^https://[^/?#]+$ ]] || die "--agent-public-url 必须是 https 站点根地址，如 https://open7x.com"
+  [[ "$AGENT_URL" =~ ^https://[^/?#]+$ ]] || die "--agent-public-url 必须是 https 站点根地址，如 https://www.open7x.com"
   env_set AGENT_PUBLIC_URL "$AGENT_URL"
 fi
 
@@ -161,8 +161,8 @@ if (( SIGNUP == 1 )); then
 Signup:
   Enabled: true
   MaxPerHour: 10
-  RequestsPerMinute: 60
-  TokensPerMinute: 100000
+  RequestsPerMinute: 0   # 0 = 不限制
+  TokensPerMinute: 0     # 0 = 不限制
   MaxConcurrent: 4
 EOF
     log "已在 controlplane.yaml 中开启自助注册"

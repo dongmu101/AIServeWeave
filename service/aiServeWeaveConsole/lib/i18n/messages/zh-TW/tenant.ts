@@ -957,6 +957,12 @@ const tenant = {
   "tenant.billingUsagePeriod": "{start} – {end} · {count} 次請求",
   "tenant.billingUsageDetails": "查看這段時間的明細",
   "tenant.billingUsageEdgeNote": "用量帳目依扣費時間分段，明細依請求時間篩選，兩者的邊緣可能相差幾秒到幾分鐘。",
-  "tenant.usageAllModels": "全部模型"
+  "tenant.usageAllModels": "全部模型",
+  "tenant.modelScopeAll": "全部",
+  "tenant.modelScopeCloud": "雲AI",
+  "tenant.modelScopeDedicated": "獨享AI",
+  "tenant.noCloudServices": "暫無可用的雲AI。",
+  "tenant.noDedicatedServices": "暫無獨享AI。接入自有 Agent 或購買獨享帳號後會顯示在這裡。",
+  "tenant.modelScopeHint": "雲AI：平台維運、多個租戶共用的 Agent，含免費與收費。獨享AI：你自行接入的 Agent 與購買的獨享帳號。"
 } as const;
 export default tenant;

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -285,7 +286,8 @@ func (s *Service) VerifyKeyHash(ctx context.Context, hash string) (Verification,
 		}
 		return Verification{}, err
 	}
-	if !key.Usable(s.clock.Now()) {
+	now := s.clock.Now()
+	if !key.Usable(now) {
 		return Verification{}, ErrNotFound
 	}
 	// The tenant is read for its limits, and checked while it is here. A
@@ -299,6 +301,11 @@ func (s *Service) VerifyKeyHash(ctx context.Context, hash string) (Verification,
 	verification, err := s.VerifyTenant(ctx, key.TenantID)
 	if err != nil {
 		return Verification{}, err
+	}
+	if key.LastUsedAt == nil || now.Sub(*key.LastUsedAt) >= store.APIKeyUseInterval {
+		if err := s.store.MarkAPIKeyUsed(ctx, key.ID, now); err != nil {
+			slog.WarnContext(ctx, "recording API key use", "key_id", key.ID, "error", err)
+		}
 	}
 	verification.KeyID = key.ID
 	return verification, nil
@@ -374,13 +381,4 @@ func (s *Service) SetTenantLimits(ctx context.Context, actor Actor, limits quota
 		fmt.Sprintf("requests_per_minute=%d tokens_per_minute=%d max_concurrent=%d",
 			limits.RequestsPerMinute, limits.TokensPerMinute, limits.MaxConcurrent), actor.IP)
 	return limits, nil
-}
-
-// TouchAPIKey records that a key was used. The Gateway calls it at most once
-// per key per interval, not once per request — see the store method's note.
-//
-// TouchAPIKey 记录一个 key 被使用过。Gateway 对每个 key 每个间隔最多调用一次，而不是
-// 每次请求一次——见 store 侧方法的说明。
-func (s *Service) TouchAPIKey(ctx context.Context, keyID string) error {
-	return translate(s.store.MarkAPIKeyUsed(ctx, keyID, s.clock.Now()))
 }

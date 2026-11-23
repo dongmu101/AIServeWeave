@@ -34,13 +34,13 @@ Windows 26H1 新硬件另列专项验证；较新系统版本未完成实机验�
 
 ```bash
 # Ubuntu（sudo）/ macOS（不用 sudo，当前用户）
-curl -fsSL --proto '=https' https://open7x.com/agent/install.sh | sudo bash -s -- --code 'XXXX-XXXX-XXXX-XXXX-XXXX'
-curl -fsSL --proto '=https' https://open7x.com/agent/install.sh | bash -s -- --code 'XXXX-XXXX-XXXX-XXXX-XXXX'
+curl -fsSL --proto '=https' https://www.open7x.com/agent/install.sh | sudo bash -s -- --code 'XXXX-XXXX-XXXX-XXXX-XXXX'
+curl -fsSL --proto '=https' https://www.open7x.com/agent/install.sh | bash -s -- --code 'XXXX-XXXX-XXXX-XXXX-XXXX'
 ```
 
 ```powershell
 # Windows 11：普通（非管理员）PowerShell
-& ([scriptblock]::Create((irm 'https://open7x.com/agent/install.ps1'))) -Code 'XXXX-XXXX-XXXX-XXXX-XXXX'
+& ([scriptblock]::Create((irm 'https://www.open7x.com/agent/install.ps1'))) -Code 'XXXX-XXXX-XXXX-XXXX-XXXX'
 ```
 
 | 项 | 说明 |

@@ -1,5 +1,6 @@
 import { test, expect, LONG_TEXT } from "./fixtures.ts";
 import type { Locator, Page } from "@playwright/test";
+import { formatDateTime } from "../lib/console/format.ts";
 
 /** tabTo reaches a control through the real tab order, with a finite bound.
  * tabTo 按真实 Tab 顺序抵达控件，并限制尝试次数。 */
@@ -146,6 +147,46 @@ test("navigation marks only the current tenant page", async ({ page }) => {
   const current = page.getByRole("navigation", { name: "控制台导航" }).locator('[aria-current="page"]');
   await expect(current).toHaveCount(1);
   await expect(current).toHaveText("运行历史");
+});
+
+test("key creators are compact and copyable, and recent usage includes ledger history", async ({ page, context }) => {
+  const creator = "usr_0123456789abcdef0123456789ab";
+  const createdAt = "2026-09-12T00:00:00Z";
+  const lastVerified = "2026-09-13T00:00:00Z";
+  const lastUsage = "2026-09-14T12:00:00Z";
+  const key = { id: "key_used", tenant_id: "tnt_p10", name: "Used key", display: "aisw_used", status: "active", created_by: creator, created_at: createdAt };
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.route("**/api/admin/admin/v1/apikeys?**", (route) => route.fulfill({ json: { items: [
+    { ...key, last_used_at: lastVerified },
+    { ...key, id: "key_historical", name: "Historical key" },
+    { ...key, id: "key_unused", name: "Unused key" },
+  ] } }));
+  await page.route("**/api/admin/admin/v1/usage/summary?**", (route) => route.fulfill({ json: { items: [
+    { key_id: "key_historical", model: "fixture-model", prompt_tokens: 1, completion_tokens: 1, total_tokens: 2, request_count: 1, last_used_at: lastUsage },
+  ] } }));
+
+  await page.goto("/console/keys");
+  const used = page.getByRole("row").filter({ has: page.getByRole("cell", { name: "Used key", exact: true }) });
+  await expect(used.getByRole("cell", { name: formatDateTime(lastVerified) })).toBeVisible();
+  await expect(page.getByRole("row").filter({ hasText: "Historical key" }).getByRole("cell", { name: formatDateTime(lastUsage) })).toBeVisible();
+  await expect(page.getByRole("row").filter({ hasText: "Unused key" }).getByRole("cell", { name: "从未使用" })).toBeVisible();
+
+  const trigger = used.getByRole("button", { name: creator, exact: true });
+  expect(await trigger.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
+  await trigger.hover();
+  const popover = page.getByRole("dialog", { name: "创建者" });
+  await expect(popover.getByText(creator, { exact: true })).toBeVisible();
+  await popover.getByRole("button", { name: "复制", exact: true }).click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(creator);
+
+  await page.mouse.move(0, 0);
+  await expect(popover).toBeHidden();
+  await trigger.focus();
+  await page.keyboard.press("Enter");
+  await expect(popover).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(popover).toBeHidden();
+  await expect(trigger).toBeFocused();
 });
 
 test("creation error is readable, retry succeeds, and the one-time dialog restores focus", async ({ page }) => {

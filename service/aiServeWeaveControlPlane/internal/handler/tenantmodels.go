@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"AIServeWeave/common/nodeaccess"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/fleet"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/svc"
 )
 
@@ -40,14 +41,27 @@ func listTenantModels(ctx *svc.ServiceContext) http.HandlerFunc {
 		if allowedNode != nil {
 			catalog = catalog.FilterNodes(allowedNode)
 		}
-		allowedAccount, err := ctx.Logic.TenantAccountFilter(r.Context(), actor.TenantID)
+		allowedAccount, heldAccount, err := ctx.Logic.TenantAccountAccess(r.Context(), actor.TenantID)
 		if err != nil {
 			respondErr(w, err)
 			return
 		}
+		tenantID := actor.TenantID
+		ownNode := func(agentID string) bool {
+			owner, owned := nodeaccess.OwnerOf(agentID)
+			return owned && owner != "" && owner == tenantID
+		}
 		services := catalog.Services[:0]
 		for _, service := range catalog.Services {
 			if allowedAccount(service.AgentID, service.ServiceID) {
+				// The tenant's own Agent or a bought account is dedicated;
+				// everything else is a shared platform service.
+				// 商户自有 Agent 或购买的账号为独享，其余都是平台共享服务。
+				if ownNode(service.AgentID) || heldAccount(service.AgentID, service.ServiceID) {
+					service.Scope = fleet.ScopeDedicated
+				} else {
+					service.Scope = fleet.ScopeCloud
+				}
 				services = append(services, service)
 			}
 		}
@@ -56,11 +70,7 @@ func listTenantModels(ctx *svc.ServiceContext) http.HandlerFunc {
 			// The tenant's own nodes are exempt, matching the Gateway's
 			// scheduler.admitModel. / 商户自有节点豁免，与 Gateway 的
 			// scheduler.admitModel 一致。
-			tenantID := actor.TenantID
-			catalog = catalog.FilterExcept(visible, func(agentID string) bool {
-				owner, owned := nodeaccess.OwnerOf(agentID)
-				return owned && owner != "" && owner == tenantID
-			})
+			catalog = catalog.FilterExcept(visible, ownNode)
 		}
 		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, http.StatusOK, catalog)

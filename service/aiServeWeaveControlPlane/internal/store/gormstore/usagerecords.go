@@ -39,17 +39,18 @@ func (s *Store) CreateUsageRecords(ctx context.Context, records []model.UsageRec
 // usageSummaryRow 是 SummarizeUsage 的原始扫描目标——GORM 把结果 Scan 进一个
 // 匿名结构体切片时，需要一个带匹配列名 tag 的具名类型。
 type usageSummaryRow struct {
-	TenantID         string `gorm:"column:tenant_id"`
-	UserID           string `gorm:"column:user_id"`
-	KeyID            string `gorm:"column:key_id"`
-	Model            string `gorm:"column:model"`
-	PromptTokens     int64  `gorm:"column:prompt_tokens"`
-	CompletionTokens int64  `gorm:"column:completion_tokens"`
-	TotalTokens      int64  `gorm:"column:total_tokens"`
-	RequestCount     int64  `gorm:"column:request_count"`
-	CacheReadTokens  int64  `gorm:"column:cache_read_tokens"`
-	CacheWriteTokens int64  `gorm:"column:cache_write_tokens"`
-	CostMicro        int64  `gorm:"column:cost_micro"`
+	TenantID         string    `gorm:"column:tenant_id"`
+	UserID           string    `gorm:"column:user_id"`
+	KeyID            string    `gorm:"column:key_id"`
+	Model            string    `gorm:"column:model"`
+	PromptTokens     int64     `gorm:"column:prompt_tokens"`
+	CompletionTokens int64     `gorm:"column:completion_tokens"`
+	TotalTokens      int64     `gorm:"column:total_tokens"`
+	RequestCount     int64     `gorm:"column:request_count"`
+	LastUsedAt       time.Time `gorm:"column:last_used_at"`
+	CacheReadTokens  int64     `gorm:"column:cache_read_tokens"`
+	CacheWriteTokens int64     `gorm:"column:cache_write_tokens"`
+	CostMicro        int64     `gorm:"column:cost_micro"`
 }
 
 // SummarizeUsage implements store.UsageRecords — the settlement query. It
@@ -72,8 +73,10 @@ func (s *Store) SummarizeUsage(ctx context.Context, filter store.UsageRecordFilt
 		db = db.Where("created_at < ?", filter.Until)
 	}
 	groups := "tenant_id, model"
+	lastUsed := ""
 	if filter.ByKey {
 		groups = "tenant_id, user_id, key_id, model"
+		lastUsed = ", MAX(created_at) AS last_used_at"
 	}
 	var rows []usageSummaryRow
 	err := db.Select(
@@ -84,7 +87,7 @@ func (s *Store) SummarizeUsage(ctx context.Context, filter store.UsageRecordFilt
 			"COUNT(*) AS request_count, " +
 			"SUM(cache_read_tokens) AS cache_read_tokens, " +
 			"SUM(cache_write_tokens) AS cache_write_tokens, " +
-			"SUM(cost_micro) AS cost_micro",
+			"SUM(cost_micro) AS cost_micro" + lastUsed,
 	).Group(groups).Order(groups).Scan(&rows).Error
 	if err != nil {
 		return nil, translate(err)
@@ -94,7 +97,7 @@ func (s *Store) SummarizeUsage(ctx context.Context, filter store.UsageRecordFilt
 		out[i] = store.UsageSummary{
 			TenantID: r.TenantID, UserID: r.UserID, KeyID: r.KeyID, Model: r.Model,
 			PromptTokens: r.PromptTokens, CompletionTokens: r.CompletionTokens,
-			TotalTokens: r.TotalTokens, RequestCount: r.RequestCount,
+			TotalTokens: r.TotalTokens, RequestCount: r.RequestCount, LastUsedAt: r.LastUsedAt,
 			CacheReadTokens: r.CacheReadTokens, CacheWriteTokens: r.CacheWriteTokens, CostMicro: r.CostMicro,
 		}
 	}

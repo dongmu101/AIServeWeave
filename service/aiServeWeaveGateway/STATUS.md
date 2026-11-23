@@ -155,6 +155,8 @@ go run ./service/aiServeWeaveGateway -comfyui-managed-addr 127.0.0.1:8093 ...
 
 `-key-cache-ttl` 仍是纵深防御的过期边界（默认 30 秒）。控制面 P07 已把吊销与待发 outbox 同事务保存，提交后通知前崩溃会在重启或其他副本上补发；数据库/Redis 故障期间仍不承诺零秒失效。已经完成鉴权并进入推理的请求不会因吊销被强行中断，边界是副本应用新 generation 后的下一次鉴权。
 
+控制面从数据库成功校验 API Key 时采样记录 `last_used_at`。每把 key 的数据库写入间隔至少一分钟，缓存命中沿用已有采样。Console 的「最近使用」还会采用较新的已入账用量时间。
+
 **控制面不可达时返回 503，不是 401。** 收到 401 的调用方会跑去重新生成 key，而如果只是控制面短暂宕机，那既浪费他们的时间也解决不了问题。这个区分由 `httpapi.ErrKeyRejected` 承载：只有它代表「这个 key 不行」，其余错误一律是「我们此刻答不了」。
 
 `InternalToken` 用 `AISW_CONTROL_PLANE_TOKEN` 环境变量传，不要用 `-control-plane-token` flag —— flag 在 `ps` 输出里可见。
@@ -532,8 +534,23 @@ P10 的合成后端长稳与同版逐副本替换不能校准这些值，因此�
 - 冷却中的候选在**派发时跳过**，而不是从候选集删除。同一模型的其他候选（另一个账户、另一个节点）照常服务；所有候选都在冷却时，请求得到合成的 `rate_limited`，`Retry-After` 取最早恢复的那个候选的剩余时间（向上取整到秒），而不是「没有节点能服务这个模型」。有候选实际派发失败时，返回的是真实失败。
 - 各前门（OpenAI、Anthropic、Ollama、原生 Messages）对带 `RetryAfter` 的 `rate_limited` 都写 `Retry-After` 响应头。
 - 转录不是多候选重试循环，只派发给第一个候选，因此 `TranscriptionCandidates` 把冷却中的候选排到最后；全部在冷却时仍派发给第一个。
-- 原生 Messages 首轮在首个事件到达前遇到 `rate_limited` 也会换候选（续接仍不换节点）。
-- 每次进入冷却记一条 Info 日志（节点、运行时、冷却时长），不新增指标。冷却状态只在副本内存中，不跨副本共享：其他副本要各自碰到一次 `rate_limited` 才会搁置同一候选。
+- 原生 Messages 首轮在首个事件到达前遇到 `rate_limited` 也会换候选。兼容桥接的续接遇到 `rate_limited` 时改到别处的新会话恢复，见「Messages 续接」一节。
+- **额度快照延续或结束冷却**（`scheduler/quota.go` 的 `reconcileQuota`）：冷却只能由真实的 `rate_limited` 开启，之后由 Agent 上报的额度快照（`cli_usage`，Agent 用不跑推理的用量查询获取）接管：
+  - 冷却期间，若一份**在拒绝之后**获取的快照不再判定该候选用完（窗口已重置、套餐变化），冷却立即解除，不必等到冷却结束。为此冷却记录带开始时刻（`scheduler.Cooldown.Since`）。快照时刻取 Agent 上报的 `CheckedAt`（Agent 时钟）与本副本收到上报的时刻中较早者，偏快的 Agent 时钟不会让一份旧快照被当成拒绝之后的快照。
+  - 若一份 15 分钟内的快照仍判定用完，冷却在剩余不足 `-max-rate-limit-cooldown` 一半时延长一步（至多 `-max-rate-limit-cooldown`，不超过窗口重置时刻）。按周的额度因此不再每小时用一次真实请求去试，而是一直搁置到重置或快照显示恢复。每一步都需要一份足够新的快照担保；冷却期间一直没有请求而自然到期时，下一次请求仍会去试一次。
+  - 延长或解除各记一条 Info 日志。没有快照（旧版 Agent、非 CLI 后端、额度查询失败）的候选行为不变。
+- 每次进入冷却记一条 Info 日志（节点、运行时、冷却时长），不新增指标。
+- **跨副本共享**：配置了 `-redis-addr` 时，冷却记录在 Redis 有序集合 `aisw:sched:ratelimit-cooldown` 中（成员是候选，分值是结束时刻；开始时刻在哈希 `aisw:sched:ratelimit-cooldown:since` 中，由 Lua 脚本与集合一起写入和清理。代码在 `scheduler/sharedcooldown.go` 与 `scheduler/rediscooldown/`）。快照对冷却的延长与解除同样写入共享存储。副本收到 `rate_limited` 时立即写入，任何副本的一次成功会为所有副本清除该条目；每个副本每 `-shared-cooldown-interval`（默认 2s）拉取一次全集，因此一个副本得知某账户已用完后，其他副本最迟一个间隔后也会跳过它。读写都在一个后台协程里完成，不在请求路径上；Redis 不可用时各副本保留最近一次拉到的集合和自己的冷却，只记录一次状态变化日志。`-shared-cooldown-interval=0` 或未配置 Redis 时，冷却只在副本内存中，其他副本要各自碰到一次 `rate_limited` 才会搁置同一候选。
+
+## 按订阅额度主动降级
+
+上面的冷却是被动的：要先有一次请求失败。Agent 每 5 分钟上报的 CLI 账户额度快照（`cli_usage`，此前只在控制台展示）现在也参与调度排序，代码在 `scheduler/quota.go`：
+
+- 某个适用于本次请求的窗口已用到 `-quota-low-percent`（默认 `0`，表示内置的 90%；负值关闭这一档）的账户排在剩余额度更多的账户之后；某个尚未重置的窗口已到 100% 的账户总是排到最后。这一项排在节点资源紧张（`Pressure`）之前，三种排序策略和会话亲和都遵守。
+- 适用的窗口：Claude 的 `five_hour`、`seven_day` 覆盖所有模型，`seven_day_sonnet`、`seven_day_opus` 只覆盖模型名含 `sonnet`、`opus` 的请求；Codex 只使用通用的 `codex` 计量桶（旧版 Agent 不带桶名的窗口也算），其他桶与模型的对应关系未知，不参与排序。已过重置时间的窗口忽略。
+- 只调整顺序，从不跳过：快照是不受信任的 Agent 输入，且最多晚几分钟。其他候选都失败时，请求仍会到达被降级的账户，由它自己的应答（以及上面的冷却）决定。账户状态不是 `ready`、快照超过 15 分钟未刷新、或找不到对应账户时，按额度充足处理。
+- 账户按 `runtime_id` 对应到候选；旧版 Agent 上报空的 `runtime_id`、每种 kind 至多一个账户，此时属于该 kind 的运行时。
+- 尚未在真实账户接近耗尽的场景下验收。
 
 ## 节点暂时不可用返回 503（2026-11-13）
 
@@ -577,7 +594,12 @@ P10 的合成后端长稳与同版逐副本替换不能校准这些值，因此�
 
 `-session-affinity`（默认开启）让同一段对话持续落在同一个节点与运行时上——对本地 CLI 后端就是同一个账户，它的上游提示缓存已被这段对话预热。会话 key 依次取请求头 `X-Session-Id`、`Session_id`（Codex 发送）、`X-Claude-Code-Session-Id`（Claude Code 发送）、`Conversation_id`，再取请求体 `prompt_cache_key`，最后取 Anthropic 的 `metadata.user_id`；超过 512 字节的值忽略。Ollama 原生前门只看请求头。key 按租户限定（租户 ID 拼在前面），只以 FNV 哈希的形式进入调度器，不写日志。
 
-带会话 key 的 Chat/ChatStream 与原生 Messages 请求，无论 `-scheduler-policy` 是什么，目标内都按会话 key 的 rendezvous 哈希排序（与 `prefix_hash` 同一套排序与「无空闲槽者靠后」规则），会话 key 优先于提示前缀。优先级、权重、熔断与限流冷却照常先生效：首选候选被熔断或冷却时，对话换到排名第二的候选。Claude CLI 后端在 Agent 侧以 `DISABLE_PROMPT_CACHING=1` 运行，因此亲和带来的缓存收益主要体现在 Codex 与支持前缀缓存的 HTTP 后端上。关闭 flag 后会话 key 被忽略，行为与此前相同。
+带会话 key 的 Chat/ChatStream 与原生 Messages 请求，无论 `-scheduler-policy` 是什么，目标内都按会话 key 的 rendezvous 哈希排序（与 `prefix_hash` 同一套排序与「无空闲槽者靠后」规则），会话 key 优先于提示前缀。优先级、权重、熔断与限流冷却照常先生效：首选候选被熔断或冷却时，对话换到排名第二的候选。额度紧张或用完的账户（见「按订阅额度主动降级」）同样排到后面，对话会在首选账户用完之前换走。
+
+**会话钉选**（`scheduler/sessionpin.go`）：成功服务带会话 key 的 Chat/ChatStream 与原生 Messages 首轮后，调度器记住这次的账户（节点与运行时，不区分模型：同一对话会混用主模型与较轻的模型，按模型钉选会被每次切换覆盖），下次排序时该账户的候选排在哈希首选之前。这样对话离开首选（额度用完、冷却、额度紧张）后会留在迁去的账户上，首选恢复后也不迁回去，提示缓存只重建一次。钉选只是排序偏好：被钉选的候选没有空闲槽、额度或资源紧张、冷却或熔断时照常让位，之后服务的候选成为新的钉选。
+
+- 钉选在最后一次刷新后保留 `-session-pin-ttl`（默认 1h）。只在钉选变化、或已过 TTL 四分之一时写入；每个带会话 key 的请求读取一次，读写各有 250ms 超时，失败时这次请求按哈希排序。
+- 配置了 `-redis-addr` 时存放在 Redis 键 `aisw:sched:session-pin:<哈希>` 中，所有副本共享（代码在 `scheduler/redissessionpin/`）；只保存按租户限定的会话 key 的 64 位哈希与候选，不保存 key 本身。未配置 Redis 时每个副本各自保存在内存中（至多 65536 条）。Claude CLI 后端在 Agent 侧以 `DISABLE_PROMPT_CACHING=1` 运行，因此亲和带来的缓存收益主要体现在 Codex 与支持前缀缓存的 HTTP 后端上。关闭 flag 后会话 key 被忽略，行为与此前相同。
 
 ## 工作流 Job 的持久队列（asynq，2026-11-14）
 
@@ -947,9 +969,9 @@ Claude CLI 模型同样支持 `/v1/responses`（JSON 与 SSE）。Gateway 先按
 - 客户端回退判断仍是单独的非流式请求，带 `stop_sequences: ["</severity>"]`：原生直通时由上游处理，只有落到兼容桥接时才由 Agent 模拟（见 [Claude 运行时说明「停止序列」](../aiServeWeaveAgent/claudecode/README.md#停止序列)）；Gateway 非流式聚合与流式透传都带上 `stop_sequence`。
 - 客户端回退判断的第一阶段固定请求 `claude-sonnet-5`，它不在 CLI 目录里（目录是 `claude-opus-5-5`、`claude-fable-5-1`、`claude-sonnet-5-5`、`claude-haiku-5-5`），会得到 404；Claude Code 随后用当前主模型重发同一请求，判断照常完成。想省掉这次 404，可配置 `claude-sonnet-5` → `claude-sonnet-5-5` 的别名路由，但有路由表时 `GET /v1/models` 只列别名（见「模型别名与节点标签」），需同时为仍要公布的每个模型写一条同名路由。
 
-以下节点续接与 Redis 规则只适用于兼容桥接路径。新会话经 `Scheduler.MessagesStart` 派发：首个事件到达之前，`backpressure`、`runtime_closed` 或带 `Retryable` 的失败换下一个候选，其余错误原样返回。Claude 适配器报告会话名额已满时不带 `Retryable`，所以这里按错误码判断，也兼容旧版 Agent。候选按隧道空闲槽排序，看不到 Agent 的 CLI 会话上限，没有这层回退时，一个已满的节点会让请求直接 429。续接仍经 `Scheduler.Messages` 只发往绑定的节点。兼容桥接路径要求控制面校验提供 `TenantID`、`KeyID`，以及所有 Gateway 副本共享 `-redis-addr`；未配置分别返回 401、503（原生直通与带安全上下文的请求只要求前者）。Messages 和 `GET /v1/models` 接受 `x-api-key` 或既有 Bearer 认证（优先级见「API Key 鉴权」），其他端点仍要求 Bearer；凭据不进入隧道。
+以下节点续接与 Redis 规则只适用于兼容桥接路径。新会话经 `Scheduler.MessagesStart` 派发：首个事件到达之前，`backpressure`、`runtime_closed` 或带 `Retryable` 的失败换下一个候选，其余错误原样返回。Claude 适配器报告会话名额已满时不带 `Retryable`，所以这里按错误码判断，也兼容旧版 Agent。候选按隧道空闲槽排序，看不到 Agent 的 CLI 会话上限，没有这层回退时，一个已满的节点会让请求直接 429。续接经 `Scheduler.MessagesContinue` 只发往绑定的节点（它与 `MessagesStart` 一样等到首个事件，并把结果记入熔断与限流冷却；绑定账户已在限流冷却中时不发送，直接按 `rate_limited` 处理）。兼容桥接路径要求控制面校验提供 `TenantID`、`KeyID`，以及所有 Gateway 副本共享 `-redis-addr`；未配置分别返回 401、503（原生直通与带安全上下文的请求只要求前者）。Messages 和 `GET /v1/models` 接受 `x-api-key` 或既有 Bearer 认证（优先级见「API Key 鉴权」），其他端点仍要求 Bearer；凭据不进入隧道。
 
-Redis 仅保存工具 ID 到归属、公共模型名及原节点/runtime/目标模型的绑定，不保存提示词或工具结果。每个工具 ID 的 key 都保存整份记录（含该回合完整的 ID 列表），存储量随回合内调用数的平方增长，因此每回合最多 64 个工具调用（`messagesession.maxRoundIDs`）。每回合的全部结果原子认领，绑定 1 小时到期（与 Agent 等待工具时限一致），续接成功后保留已使用标记 24 小时，已投递或结果不确定时拒绝重放（409 `continuation_unavailable`）。续接不会换节点。绑定已过期（Redis 中完全没有记录，`messagesession.ErrExpired`）时，请求按新会话经 `MessagesStart` 调度，由 Agent 以文本记录恢复该回合；租约有效但原节点的 CLI 已不存在时，新版 Agent 在原节点就地开新会话恢复（旧版 Agent 仍答复 `runtime_closed`，Gateway 返回 409）。节点失联时返回 503，消费绑定。
+Redis 仅保存工具 ID 到归属、公共模型名及原节点/runtime/目标模型的绑定，不保存提示词或工具结果。每个工具 ID 的 key 都保存整份记录（含该回合完整的 ID 列表），存储量随回合内调用数的平方增长，因此每回合最多 64 个工具调用（`messagesession.maxRoundIDs`）。每回合的全部结果原子认领，绑定 1 小时到期（与 Agent 等待工具时限一致），续接成功后保留已使用标记 24 小时，已投递或结果不确定时拒绝重放（409 `continuation_unavailable`）。续接不会因其他错误换节点；唯一的例外是原节点在首个事件之前答复 `rate_limited`（账户额度用完），或该账户已在限流冷却中：此时客户端什么也没收到，调度器已把该节点搁置，请求在同一次 HTTP 请求中按新会话经 `MessagesStart` 调度到别的账户，由 Agent 以文本记录恢复该回合（与绑定过期相同）。新会话产出内容后原租约被消费；新会话也失败时租约恢复，客户端重试仍可续接。绑定已过期（Redis 中完全没有记录，`messagesession.ErrExpired`）时，请求按新会话经 `MessagesStart` 调度，由 Agent 以文本记录恢复该回合；租约有效但原节点的 CLI 已不存在时，新版 Agent 在原节点就地开新会话恢复（旧版 Agent 仍答复 `runtime_closed`，Gateway 返回 409）。节点失联时返回 503，消费绑定。
 
 原生流式响应（Messages、Chat、Responses 三种输出）静默 15 秒即写一次心跳，避免 Nginx `proxy_read_timeout`（默认 60 秒）等代理在 CLI 启动或首个 token 较慢时断开：Messages 发官方 `event: ping`，Chat 与 Responses 发 SSE 注释 `: keep-alive`（Responses 首次心跳会先发出 `response.created`/`in_progress`）。心跳可能在首个事件之前发出响应头，此后的失败只能以 SSE 错误事件返回，不再带 HTTP 状态码和 `Retry-After`；15 秒内完成的派发失败不受影响。非流式请求不发心跳。心跳按「最后一个事件之后的静默」计时。转发循环用一个常驻协程读取上游流并经无缓冲 channel 交付（至多比循环多读一个事件，慢客户端仍向隧道一侧产生背压），不再为每个事件起协程；结束时先取消流的 context 让阻塞中的 `Recv` 返回，再由该协程自己 `Close`——`tunnelserver.Response` 的 `Recv`/`Close` 是单消费者的，二者绝不并行。纯流式响应不累积块内容（只保留块头、用量与 `message_stop` 校验所需状态），非流式聚合用 `strings.Builder`，不再 O(n²) 拼接；20000 事件的长流在基准里每请求分配从约 686 MB 降到约 37 MB（`TestNativeMessagesStreamCost`，`AISW_STREAM_BENCH=1` 开启）。工具名称和参数相同的同轮并行调用无法通过公开 MCP 回调消歧，会明确失败。
 

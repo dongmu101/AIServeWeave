@@ -484,6 +484,9 @@ type UserLifecycleResult struct {
 	Changed bool
 }
 
+// APIKeyUseInterval is the minimum interval between persisted use samples for a key.
+const APIKeyUseInterval = time.Minute
+
 // APIKeys persists the credentials callers present to the Gateway.
 //
 // APIKeys 持久化调用方向 Gateway 出示的凭据。
@@ -517,12 +520,10 @@ type APIKeys interface {
 	// 报 ErrNotFound。对 Gateway 而言，删除一个仍处于 active 的 key 同样等于吊销，因此
 	// 实现必须在同一事务里递增 RevokeAPIKey 所递增的那个吊销 generation。
 	DeleteAPIKey(ctx context.Context, tenantID, id string) error
-	// MarkAPIKeyUsed records a coarse last-used timestamp. Callers must rate
-	// limit it themselves; see the gorm implementation for why this is not
-	// written on every request.
+	// MarkAPIKeyUsed records a use if the key exists and the timestamp is at
+	// least APIKeyUseInterval newer than the previous sample, if any.
 	//
-	// MarkAPIKeyUsed 记录一个粗粒度的最后使用时间。调用方必须自己做频率控制；不在
-	// 每次请求都写入的原因见 gorm 实现。
+	// MarkAPIKeyUsed 在 key 存在且距上次记录至少 APIKeyUseInterval 时记录使用时间。
 	MarkAPIKeyUsed(ctx context.Context, id string, at time.Time) error
 }
 
@@ -910,6 +911,7 @@ type UsageSummary struct {
 	CompletionTokens int64
 	TotalTokens      int64
 	RequestCount     int64
+	LastUsedAt       time.Time // Latest ledger entry when grouped by key.
 	// CacheReadTokens and CacheWriteTokens are the prompt-cache parts of
 	// PromptTokens; CostMicro is the cost charging decided for the group's
 	// records (zero for records written with billing off or before pricing).

@@ -97,6 +97,9 @@ type node struct {
 	// 替换，并按 Agent 发来的原样保存：数量与词表检查发生在渲染处
 	// （nodeview.CLIUsageFromAccounts），那是所有面向控制台的视图都要经过的唯一允许列表。
 	cliUsage []cliusagestatus.Account
+	// cliUsageAt is when this replica received cliUsage, on its own clock.
+	// cliUsageAt 是本副本按自己的时钟收到 cliUsage 的时刻。
+	cliUsageAt time.Time
 	// nodeKey is the DER SubjectPublicKeyInfo of the certificate on the most
 	// recent Control stream; remoteProviders is the node's last-reported
 	// remote provider outcome, hasRemoteProviders whether one arrived. See
@@ -537,10 +540,11 @@ func cloneCLIUsage(accounts []cliusagestatus.Account) []cliusagestatus.Account {
 // latest report.
 //
 // applyCLIUsageReport 用 Agent 的最新上报整份替换该节点的 CLI 额度。
-func (n *node) applyCLIUsageReport(accounts []cliusagestatus.Account) {
+func (n *node) applyCLIUsageReport(accounts []cliusagestatus.Account, now time.Time) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.cliUsage = accounts
+	n.cliUsageAt = now
 }
 
 // isEmpty reports whether the entry holds neither a Control stream nor a slot,

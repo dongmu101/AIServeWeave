@@ -13,13 +13,11 @@ import type { ApiKeySummary } from "./contract.ts";
 
 /**
  * UNKNOWN_TIME is what an absent timestamp reads as. The control plane omits
- * `last_used_at` and `expires_at` when they have no value, and an absent value
- * is a fact — "this key has never been used" — not a formatting accident. It
- * is never rendered as an epoch or a dash that could be mistaken for a date.
+ * `last_used_at` and `expires_at` when they have no value. Callers can provide
+ * wording specific to the field when they know why the value is absent.
  *
  * UNKNOWN_TIME 是缺失时间戳的读法。控制面在 `last_used_at` 与 `expires_at` 没有值时
- * 省略它们，而值的缺席本身是一个事实——「这个 key 从未被使用过」——不是格式化的意外。
- * 它绝不会被渲染成纪元时间，或一个可能被误认为日期的短横线。
+ * 省略它们。调用方可按字段缺失的含义指定显示文字。
  */
 export const UNKNOWN_TIME = coreTranslator()("common.noRecord");
 

@@ -58,6 +58,29 @@ const DefaultLeaseTTL = 30 * time.Minute
 // 校验缓存而不发生碰撞。
 const keyPrefix = "aisw:rl:"
 
+// bucketTTLLua defines bucket_ttl_ms, the expiry both scripts set on a bucket
+// key they write. An idle bucket is expired rather than kept as one row per
+// tenant forever, and forgetting it hands the next request a full bucket — so
+// the key must outlive the time refill needs to bring the stored balance back
+// to capacity. A fixed window does not: a token bucket in debt by several
+// minutes' allowance would expire with its debt, admitting the tenant long
+// before the Retry-After it was just given. The floor is the two minutes a
+// non-negative balance never needs more than, kept so a bucket that is almost
+// full is not dropped and re-created on every request.
+//
+// bucketTTLLua 定义 bucket_ttl_ms，即两段脚本给自己写入的桶键设置的过期时间。空闲的
+// 桶会过期，而不是为每个租户永久保留一行；而遗忘它等于给下一个请求一个满桶——因此键
+// 必须活过「补充把存下的余额补回容量」所需的时间。固定窗口做不到这一点：欠下好几分钟
+// 额度的 token 桶会连同欠账一起过期，让租户远早于刚刚给出的 Retry-After 就被放行。
+// 下限取非负余额永远用不满的两分钟，这样接近满的桶不会在每次请求时被丢掉又重建。
+const bucketTTLLua = `
+local function bucket_ttl_ms(balance, cap)
+  local ms = math.ceil((cap - balance) / cap * 60000.0)
+  if ms < 120000 then return 120000 end
+  return ms
+end
+`
+
 // acquireScript admits or rejects one request, atomically across replicas.
 //
 // It checks every dimension before spending anything. Checking and spending as
@@ -69,7 +92,7 @@ const keyPrefix = "aisw:rl:"
 //
 // 它在花掉任何东西之前先检查所有维度。边检查边花的话，一个被并发维度拒绝的请求就已经
 // 消耗掉了一个请求 token，而那个 token 找不回来了：调用方既被拒绝，又为此付了费。
-var acquireScript = redis.NewScript(`
+var acquireScript = redis.NewScript(bucketTTLLua + `
 local req_key, tok_key, conc_key = KEYS[1], KEYS[2], KEYS[3]
 local now_ms       = tonumber(ARGV[1])
 local req_cap      = tonumber(ARGV[2])
@@ -97,10 +120,7 @@ end
 
 local function write_bucket(key, balance, cap)
   redis.call('HSET', key, 'balance', balance, 'last', now_ms)
-  -- Expire an idle bucket rather than keeping one row per tenant forever. The
-  -- window is two minutes of allowance: by then a full bucket is what a fresh
-  -- one would be anyway, so forgetting it changes nothing.
-  redis.call('PEXPIRE', key, 120000)
+  redis.call('PEXPIRE', key, bucket_ttl_ms(balance, cap))
 end
 
 -- wait_ms mirrors bucket.waitFor, including its one-second floor.
@@ -157,7 +177,7 @@ return {1, '', 0}
 //
 // releaseScript 归还一个并发槽，并扣减后端上报的 token。这次扣减可能让余额变负，那
 // 正是补充要偿还的欠账——见 bucket.spend。
-var releaseScript = redis.NewScript(`
+var releaseScript = redis.NewScript(bucketTTLLua + `
 local tok_key, conc_key = KEYS[1], KEYS[2]
 local now_ms   = tonumber(ARGV[1])
 local lease_id = ARGV[2]
@@ -180,7 +200,7 @@ if tok_cap > 0 and spent > 0 then
     end
   end
   redis.call('HSET', tok_key, 'balance', balance - spent, 'last', now_ms)
-  redis.call('PEXPIRE', tok_key, 120000)
+  redis.call('PEXPIRE', tok_key, bucket_ttl_ms(balance - spent, tok_cap))
 end
 return 1
 `)
