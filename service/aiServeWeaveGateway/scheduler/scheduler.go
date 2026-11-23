@@ -96,6 +96,19 @@ type Scheduler struct {
 	// unavailable.go.
 	// unavailableWait 是取默认值之后的 Config.UnavailableWait，见 unavailable.go。
 	unavailableWait time.Duration
+
+	// quotaLowPercent is Config.QuotaLowPercent after defaulting; zero or
+	// below disables the quotaLow tier (quota.go).
+	// quotaLowPercent 是取默认值之后的 Config.QuotaLowPercent；小于等于零时关闭 quotaLow
+	// 档位（quota.go）。
+	quotaLowPercent float64
+
+	// sharedCooldowns is Config.SharedCooldowns, which RunSharedCooldowns
+	// keeps the breakers in step with; nil leaves cooldowns per replica
+	// (sharedcooldown.go).
+	// sharedCooldowns 即 Config.SharedCooldowns，RunSharedCooldowns 让熔断注册表与它
+	// 保持同步；为 nil 时冷却按副本各自保存（sharedcooldown.go）。
+	sharedCooldowns SharedCooldowns
 }
 
 // Config configures New. Every field is optional.
@@ -206,6 +219,27 @@ type Config struct {
 	// 时长（典型情形是其节点的 Agent 正在重连），之后返回 ErrModelUnavailable。为零时使用
 	// defaultUnavailableWait（15s）；为负时不等待、立即返回。
 	UnavailableWait time.Duration
+
+	// QuotaLowPercent is the used percentage at which a CLI subscription
+	// account counts as low on quota and is tried after accounts with more
+	// left (see quota.go). Zero uses defaultQuotaLowPercent (90); negative
+	// disables that tier. An account at 100% of a window that has not reset
+	// is always tried last, whatever this is.
+	//
+	// QuotaLowPercent 是 CLI 订阅账户被视为额度紧张、排在剩余额度更多的账户之后尝试的
+	// 已用百分比（见 quota.go）。零值使用 defaultQuotaLowPercent（90）；负值关闭该档位。
+	// 某个尚未重置的窗口已到 100% 的账户总是最后尝试，与此值无关。
+	QuotaLowPercent float64
+
+	// SharedCooldowns, when set, shares rate-limit cooldowns with every other
+	// replica using the same store, so an account one replica learns is spent
+	// is skipped by all of them. RunSharedCooldowns must be running for the
+	// sharing to happen; see sharedcooldown.go.
+	//
+	// SharedCooldowns 设置后，与使用同一存储的其他所有副本共享限流冷却，使一个副本得知
+	// 已用完的账户被所有副本跳过。共享依赖 RunSharedCooldowns 在运行，见
+	// sharedcooldown.go。
+	SharedCooldowns SharedCooldowns
 }
 
 // New returns a Scheduler that selects among the nodes connected to server.
@@ -246,6 +280,14 @@ func New(server *tunnelserver.Server, cfg Config) *Scheduler {
 	}
 
 	s.chatQueue = cfg.ChatQueue
+	s.quotaLowPercent = cfg.QuotaLowPercent
+	if s.quotaLowPercent == 0 {
+		s.quotaLowPercent = defaultQuotaLowPercent
+	}
+	s.sharedCooldowns = cfg.SharedCooldowns
+	if s.sharedCooldowns != nil {
+		s.breakers.shareCooldowns()
+	}
 	return s
 }
 
@@ -1037,6 +1079,7 @@ func (s *Scheduler) collect(ctx context.Context, view *nodeView, target routing.
 				queued:    snap.Health.QueueRunning + snap.Health.QueuePending,
 				inflight:  node.InflightRequests,
 				pressure:  node.Pressure,
+				quota:     accountQuotaTier(node.CLIUsage, snap.Descriptor.ID, snap.Descriptor.Kind, target.RuntimeModel, s.quotaLowPercent, now),
 			})
 		}
 	}

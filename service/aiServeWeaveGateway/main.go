@@ -49,6 +49,7 @@ import (
 	"AIServeWeave/service/aiServeWeaveGateway/registryclient"
 	"AIServeWeave/service/aiServeWeaveGateway/remoteprovidersapi"
 	"AIServeWeave/service/aiServeWeaveGateway/scheduler"
+	"AIServeWeave/service/aiServeWeaveGateway/scheduler/rediscooldown"
 	"AIServeWeave/service/aiServeWeaveGateway/tunnelserver"
 	"AIServeWeave/service/aiServeWeaveGateway/waitqueue"
 )
@@ -139,6 +140,10 @@ func run() error {
 		"how long a candidate that answered rate_limited without a reset time is skipped; a reported reset time (CLI subscription window, provider Retry-After) is used instead when present; zero uses scheduler's built-in default (30s)")
 	maxRateLimitCooldown := flag.Duration("max-rate-limit-cooldown", 0,
 		"cap on how long one rate_limited answer sets a candidate aside, however far away its reported reset is; zero uses scheduler's built-in default (1h)")
+	quotaLowPercent := flag.Float64("quota-low-percent", 0,
+		"used percentage of any applicable window at which a CLI subscription account (Claude Code, Codex) is tried after accounts with more quota left, from the quota each Agent reports every few minutes; an account at 100% of a window that has not reset is always tried last; zero uses scheduler's built-in default (90), negative turns the low tier off; accounts are only reordered, never skipped")
+	sharedCooldownInterval := flag.Duration("shared-cooldown-interval", scheduler.DefaultSharedCooldownInterval,
+		"with -redis-addr, how often this replica pulls the rate-limit cooldowns every replica shares, so an account one replica learns is spent is skipped by all; this replica's own cooldowns are written at once; zero keeps cooldowns per replica")
 	sessionAffinity := flag.Bool("session-affinity", true,
 		"keep requests that name a conversation (X-Session-Id / Codex session_id / X-Claude-Code-Session-Id header, prompt_cache_key, Anthropic metadata.user_id) on the same node and runtime so its upstream prompt cache is reused; idle capacity, cooldowns and the breaker still take precedence")
 	schedulerPolicy := flag.String("scheduler-policy", string(scheduler.PolicyLeastLoad),
@@ -449,6 +454,14 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	var sharedCooldowns scheduler.SharedCooldowns
+	if sharedRedis != nil && *sharedCooldownInterval > 0 {
+		store, err := rediscooldown.New(sharedRedis, "")
+		if err != nil {
+			return err
+		}
+		sharedCooldowns = store
+	}
 	sched := scheduler.New(server, scheduler.Config{
 		Metrics:              registry,
 		Logger:               logger,
@@ -462,7 +475,16 @@ func run() error {
 		PrefixBytes:          *schedulerPrefixBytes,
 		ChatQueue:            chatQueue,
 		UnavailableWait:      *modelUnavailableWait,
+		QuotaLowPercent:      *quotaLowPercent,
+		SharedCooldowns:      sharedCooldowns,
 	})
+	if sharedCooldowns != nil {
+		cooldownCtx, stopCooldowns := context.WithCancel(ctx)
+		cooldownDone := make(chan struct{})
+		go func() { defer close(cooldownDone); sched.RunSharedCooldowns(cooldownCtx, *sharedCooldownInterval) }()
+		defer func() { stopCooldowns(); <-cooldownDone }()
+		logger.Info("rate-limit cooldowns are shared fleet-wide", slog.Duration("interval", *sharedCooldownInterval))
+	}
 	routeStatus, routeSyncer, err := configureRoutes(ctx, *routeSource, *modelRoutes, *routeStateFile, *controlPlaneAddr, *controlPlaneToken, *routeSyncInterval, sched.SetRoutes)
 	if err != nil {
 		return err

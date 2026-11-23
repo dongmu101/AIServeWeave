@@ -533,7 +533,18 @@ P10 的合成后端长稳与同版逐副本替换不能校准这些值，因此�
 - 各前门（OpenAI、Anthropic、Ollama、原生 Messages）对带 `RetryAfter` 的 `rate_limited` 都写 `Retry-After` 响应头。
 - 转录不是多候选重试循环，只派发给第一个候选，因此 `TranscriptionCandidates` 把冷却中的候选排到最后；全部在冷却时仍派发给第一个。
 - 原生 Messages 首轮在首个事件到达前遇到 `rate_limited` 也会换候选（续接仍不换节点）。
-- 每次进入冷却记一条 Info 日志（节点、运行时、冷却时长），不新增指标。冷却状态只在副本内存中，不跨副本共享：其他副本要各自碰到一次 `rate_limited` 才会搁置同一候选。
+- 每次进入冷却记一条 Info 日志（节点、运行时、冷却时长），不新增指标。
+- **跨副本共享**：配置了 `-redis-addr` 时，冷却记录在 Redis 有序集合 `aisw:sched:ratelimit-cooldown` 中（成员是候选，分值是结束时刻，代码在 `scheduler/sharedcooldown.go` 与 `scheduler/rediscooldown/`）。副本收到 `rate_limited` 时立即写入，任何副本的一次成功会为所有副本清除该条目；每个副本每 `-shared-cooldown-interval`（默认 2s）拉取一次全集，因此一个副本得知某账户已用完后，其他副本最迟一个间隔后也会跳过它。读写都在一个后台协程里完成，不在请求路径上；Redis 不可用时各副本保留最近一次拉到的集合和自己的冷却，只记录一次状态变化日志。`-shared-cooldown-interval=0` 或未配置 Redis 时，冷却只在副本内存中，其他副本要各自碰到一次 `rate_limited` 才会搁置同一候选。
+
+## 按订阅额度主动降级
+
+上面的冷却是被动的：要先有一次请求失败。Agent 每 5 分钟上报的 CLI 账户额度快照（`cli_usage`，此前只在控制台展示）现在也参与调度排序，代码在 `scheduler/quota.go`：
+
+- 某个适用于本次请求的窗口已用到 `-quota-low-percent`（默认 `0`，表示内置的 90%；负值关闭这一档）的账户排在剩余额度更多的账户之后；某个尚未重置的窗口已到 100% 的账户总是排到最后。这一项排在节点资源紧张（`Pressure`）之前，三种排序策略和会话亲和都遵守。
+- 适用的窗口：Claude 的 `five_hour`、`seven_day` 覆盖所有模型，`seven_day_sonnet`、`seven_day_opus` 只覆盖模型名含 `sonnet`、`opus` 的请求；Codex 只使用通用的 `codex` 计量桶（旧版 Agent 不带桶名的窗口也算），其他桶与模型的对应关系未知，不参与排序。已过重置时间的窗口忽略。
+- 只调整顺序，从不跳过：快照是不受信任的 Agent 输入，且最多晚几分钟。其他候选都失败时，请求仍会到达被降级的账户，由它自己的应答（以及上面的冷却）决定。账户状态不是 `ready`、快照超过 15 分钟未刷新、或找不到对应账户时，按额度充足处理。
+- 账户按 `runtime_id` 对应到候选；旧版 Agent 上报空的 `runtime_id`、每种 kind 至多一个账户，此时属于该 kind 的运行时。
+- 尚未在真实账户接近耗尽的场景下验收。
 
 ## 节点暂时不可用返回 503（2026-11-13）
 
@@ -577,7 +588,7 @@ P10 的合成后端长稳与同版逐副本替换不能校准这些值，因此�
 
 `-session-affinity`（默认开启）让同一段对话持续落在同一个节点与运行时上——对本地 CLI 后端就是同一个账户，它的上游提示缓存已被这段对话预热。会话 key 依次取请求头 `X-Session-Id`、`Session_id`（Codex 发送）、`X-Claude-Code-Session-Id`（Claude Code 发送）、`Conversation_id`，再取请求体 `prompt_cache_key`，最后取 Anthropic 的 `metadata.user_id`；超过 512 字节的值忽略。Ollama 原生前门只看请求头。key 按租户限定（租户 ID 拼在前面），只以 FNV 哈希的形式进入调度器，不写日志。
 
-带会话 key 的 Chat/ChatStream 与原生 Messages 请求，无论 `-scheduler-policy` 是什么，目标内都按会话 key 的 rendezvous 哈希排序（与 `prefix_hash` 同一套排序与「无空闲槽者靠后」规则），会话 key 优先于提示前缀。优先级、权重、熔断与限流冷却照常先生效：首选候选被熔断或冷却时，对话换到排名第二的候选。Claude CLI 后端在 Agent 侧以 `DISABLE_PROMPT_CACHING=1` 运行，因此亲和带来的缓存收益主要体现在 Codex 与支持前缀缓存的 HTTP 后端上。关闭 flag 后会话 key 被忽略，行为与此前相同。
+带会话 key 的 Chat/ChatStream 与原生 Messages 请求，无论 `-scheduler-policy` 是什么，目标内都按会话 key 的 rendezvous 哈希排序（与 `prefix_hash` 同一套排序与「无空闲槽者靠后」规则），会话 key 优先于提示前缀。优先级、权重、熔断与限流冷却照常先生效：首选候选被熔断或冷却时，对话换到排名第二的候选。额度紧张或用完的账户（见「按订阅额度主动降级」）同样排到后面，对话会在首选账户用完之前换走。Claude CLI 后端在 Agent 侧以 `DISABLE_PROMPT_CACHING=1` 运行，因此亲和带来的缓存收益主要体现在 Codex 与支持前缀缓存的 HTTP 后端上。关闭 flag 后会话 key 被忽略，行为与此前相同。
 
 ## 工作流 Job 的持久队列（asynq，2026-11-14）
 

@@ -114,10 +114,19 @@ type scored struct {
 	// 所有策略都把这样的候选放到最后尝试；它不会被跳过，因为 Agent 自己的准入才是硬性
 	// 闸门，而一个资源紧张的节点仍可能是唯一能服务的那个。
 	pressure bool
+	// quota is how close the candidate's CLI subscription account is to its
+	// quota limit (quota.go). It ranks ahead of pressure: a pressured node
+	// may still serve, while a spent account will refuse. Like pressure it
+	// only reorders.
+	//
+	// quota 表示候选的 CLI 订阅账户距额度上限有多近（quota.go）。它排在 pressure 之前：
+	// 资源紧张的节点仍可能服务，而额度用完的账户一定会拒绝。与 pressure 一样只调整顺序。
+	quota quotaTier
 }
 
-// lessLoaded is the least-load comparator: more idle slots first, then lower
-// queue occupancy, then fewer in-flight requests.
+// lessLoaded is the least-load comparator: more quota left first, then no
+// resource pressure, then more idle slots, then lower queue occupancy, then
+// fewer in-flight requests.
 //
 // queued (STATUS.md's P2 realtime-utilization signal) breaks ties inside an
 // idle tier, before inflight: idle is a software slot count that a
@@ -128,7 +137,8 @@ type scored struct {
 // 0 for every runtime kind that does not report it, which sorts the same as
 // "confirmed empty" — never a penalty for not reporting.
 //
-// lessLoaded 是最少负载比较器：空闲槽多的优先，其次队列占用低的，再次在途请求少的。
+// lessLoaded 是最少负载比较器：剩余额度多的优先，其次无资源紧张的，再次空闲槽多的，
+// 然后队列占用低的，最后在途请求少的。
 //
 // queued（STATUS.md P2 的实时利用率信号）在同一个 idle 档位内、排在 inflight 之前
 // 打破平局：idle 是一个软件层面的槽位计数，像 ComfyUI 这种同一时间只跑一个任务的后端
@@ -137,6 +147,9 @@ type scored struct {
 // 记录了原因），所以单靠 idle 无法区分这样两个候选。对不上报该信号的运行时种类它恒为
 // 0，排序上等同于"确认空闲"——不上报这件事本身从不被当作惩罚。
 func lessLoaded(a, b scored) bool {
+	if a.quota != b.quota {
+		return a.quota < b.quota
+	}
 	if a.pressure != b.pressure {
 		return !a.pressure
 	}
@@ -216,13 +229,13 @@ func stableSort(found []scored, less func(a, b *scored) bool) {
 // 拒绝笔误，再到达这里。
 func orderCandidates(found []scored, policy Policy, key affinity, intn func(int) int) {
 	stableSort(found, func(a, b *scored) bool { return lessLoaded(*a, *b) })
-	// lessLoaded already puts candidates under resource pressure last; the
-	// reorderings below may move one forward again, so they put it back,
-	// keeping relative order as retry fallbacks.
-	// lessLoaded 已经把资源紧张的候选排在最后；下面的重排可能把它提前，因此再放回去，
-	// 并保持相对顺序作为重试回退。
+	// lessLoaded already puts candidates low on quota or under resource
+	// pressure last; the reorderings below may move one forward again, so
+	// they put it back, keeping relative order as retry fallbacks.
+	// lessLoaded 已经把额度紧张或资源紧张的候选排在最后；下面的重排可能把它提前，因此再
+	// 放回去，并保持相对顺序作为重试回退。
 	if policy != PolicyLeastLoad {
-		defer pressureLast(found)
+		defer demoteLast(found)
 	}
 
 	switch policy {
@@ -272,17 +285,20 @@ func orderCandidates(found []scored, policy Policy, key affinity, intn func(int)
 	}
 }
 
-// pressureLast stably moves candidates under resource pressure behind the
-// rest, in place and without allocating. With none under pressure, the
-// common case, it is one scan.
+// demoteLast stably moves candidates low on quota, then those under resource
+// pressure, behind the rest, in place and without allocating. With neither,
+// the common case, it is one scan.
 //
-// pressureLast 把资源紧张的候选稳定地、原地且无分配地移到其余候选之后。没有候选资源
-// 紧张时（常见情形）只做一次扫描。
-func pressureLast(found []scored) {
-	if !slices.ContainsFunc(found, func(s scored) bool { return s.pressure }) {
+// demoteLast 把额度紧张、其次资源紧张的候选稳定地、原地且无分配地移到其余候选之后。
+// 两者都没有时（常见情形）只做一次扫描。
+func demoteLast(found []scored) {
+	if !slices.ContainsFunc(found, func(s scored) bool { return s.pressure || s.quota != quotaOK }) {
 		return
 	}
 	slices.SortStableFunc(found, func(a, b scored) int {
+		if a.quota != b.quota {
+			return int(a.quota) - int(b.quota)
+		}
 		switch {
 		case a.pressure == b.pressure:
 			return 0

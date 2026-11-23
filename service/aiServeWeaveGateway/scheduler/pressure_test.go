@@ -61,15 +61,15 @@ func TestLeastLoadKeepsLoadOrderWithinPressureGroups(t *testing.T) {
 
 func TestPressureLastWithoutPressureIsANoOp(t *testing.T) {
 	found := []scored{{Candidate: Candidate{NodeID: "x"}}, {Candidate: Candidate{NodeID: "y"}}}
-	pressureLast(found)
+	demoteLast(found)
 	if found[0].NodeID != "x" || found[1].NodeID != "y" {
 		t.Fatalf("order changed: %v", ids(found))
 	}
-	if allocs := testing.AllocsPerRun(100, func() { pressureLast(found) }); allocs != 0 {
-		t.Fatalf("pressureLast allocated %v times with no pressured candidate", allocs)
+	if allocs := testing.AllocsPerRun(100, func() { demoteLast(found) }); allocs != 0 {
+		t.Fatalf("demoteLast allocated %v times with no pressured candidate", allocs)
 	}
 	pressured := pressureCandidates()
-	if allocs := testing.AllocsPerRun(100, func() { pressureLast(pressured) }); allocs != 0 {
-		t.Fatalf("pressureLast allocated %v times with pressured candidates", allocs)
+	if allocs := testing.AllocsPerRun(100, func() { demoteLast(pressured) }); allocs != 0 {
+		t.Fatalf("demoteLast allocated %v times with pressured candidates", allocs)
 	}
 }

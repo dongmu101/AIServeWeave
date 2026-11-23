@@ -90,6 +90,16 @@ type breakerRegistry struct {
 
 	mu      sync.Mutex
 	entries map[Candidate]*breakerState
+
+	// writes, shared and pending exist only once shareCooldowns has run;
+	// rate-limit cooldowns then live in shared and pending rather than in
+	// breakerState.limitedUntil. See sharedcooldown.go.
+	//
+	// writes、shared 与 pending 只在 shareCooldowns 运行之后存在；此时限流冷却保存在
+	// shared 与 pending 中，而不是 breakerState.limitedUntil。见 sharedcooldown.go。
+	writes  chan cooldownWrite
+	shared  map[Candidate]time.Time
+	pending map[Candidate]time.Time
 }
 
 func newBreakerRegistry(failureThreshold int, baseCooldown, maxCooldown time.Duration, rec *recorder) *breakerRegistry {
@@ -149,11 +159,11 @@ func (r *breakerRegistry) withRateLimit(limitCooldown, maxLimitCooldown time.Dur
 func (r *breakerRegistry) limited(c Candidate, now time.Time) (time.Duration, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	st, ok := r.entries[c]
-	if !ok || !now.Before(st.limitedUntil) {
+	until := r.limitedUntilLocked(c)
+	if !now.Before(until) {
 		return 0, false
 	}
-	return st.limitedUntil.Sub(now), true
+	return until.Sub(now), true
 }
 
 // limitWindow is how long a rate-limited candidate is set aside: the
@@ -215,6 +225,7 @@ func (r *breakerRegistry) record(c Candidate, err error, now time.Time) {
 	var (
 		closed  bool
 		tripped bool
+		dropped bool
 		limited time.Duration
 	)
 
@@ -236,19 +247,19 @@ func (r *breakerRegistry) record(c Candidate, err error, now time.Time) {
 		st.tripCount = 0
 		st.open = false
 		limited = r.limitWindow(retryAfter)
-		st.limitedUntil = now.Add(limited)
+		dropped = r.setLimitedLocked(c, now.Add(limited))
 	} else if !breakerFailure(err) {
 		if st, ok := r.entries[c]; ok {
 			closed = st.open
 			st.consecutiveFailures = 0
 			st.tripCount = 0
 			st.open = false
-			if err == nil {
-				// A success proves the quota is back, whatever the reset
-				// time said.
-				// 一次成功证明额度已经恢复，不管重置时间怎么说。
-				st.limitedUntil = time.Time{}
-			}
+		}
+		// A success proves the quota is back, whatever the reset time said
+		// — on every replica, when cooldowns are shared.
+		// 一次成功证明额度已经恢复，不管重置时间怎么说——共享冷却时对所有副本都是如此。
+		if err == nil && !r.limitedUntilLocked(c).IsZero() {
+			dropped = r.setLimitedLocked(c, time.Time{})
 		}
 	} else {
 		st, ok := r.entries[c]
@@ -272,6 +283,10 @@ func (r *breakerRegistry) record(c Candidate, err error, now time.Time) {
 		r.metrics.BreakerOpen(c, true)
 	case closed:
 		r.metrics.BreakerOpen(c, false)
+	}
+	if dropped {
+		r.logger.Warn("shared cooldown write dropped; the store is not keeping up",
+			slog.String("node_id", c.NodeID), slog.String("runtime_id", c.RuntimeID))
 	}
 	if limited > 0 {
 		r.logger.Info("candidate rate limited; cooling down until its quota resets",
