@@ -795,13 +795,14 @@ type UsageSummaryEntryResponse struct {
 	// for usage recorded before attribution existed.
 	//
 	// UserID 与 KeyID 只在 group_by=key 时出现。归属功能上线前记录的用量两者为空。
-	UserID           string `json:"user_id,omitempty"`
-	KeyID            string `json:"key_id,omitempty"`
-	Model            string `json:"model"`
-	PromptTokens     int64  `json:"prompt_tokens"`
-	CompletionTokens int64  `json:"completion_tokens"`
-	TotalTokens      int64  `json:"total_tokens"`
-	RequestCount     int64  `json:"request_count"`
+	UserID           string     `json:"user_id,omitempty"`
+	KeyID            string     `json:"key_id,omitempty"`
+	Model            string     `json:"model"`
+	PromptTokens     int64      `json:"prompt_tokens"`
+	CompletionTokens int64      `json:"completion_tokens"`
+	TotalTokens      int64      `json:"total_tokens"`
+	RequestCount     int64      `json:"request_count"`
+	LastUsedAt       *time.Time `json:"last_used_at,omitempty"`
 	// CacheReadTokens and CacheWriteTokens are the prompt-cache parts of
 	// PromptTokens. CostMicro appears only with billing on.
 	//

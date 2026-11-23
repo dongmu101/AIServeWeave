@@ -28,6 +28,7 @@ export interface UsageSummaryEntry {
    * userId 与 keyId 只在 `group_by=key` 时出现；"" 表示未归属。 */
   userId: string;
   keyId: string;
+  lastUsedAt: string;
   model: string;
   promptTokens: number;
   completionTokens: number;
@@ -126,6 +127,7 @@ function parseEntry(value: unknown): UsageSummaryEntry {
     tenantId: optionalText(source, "tenant_id"),
     userId: optionalText(source, "user_id"),
     keyId: optionalText(source, "key_id"),
+    lastUsedAt: optionalText(source, "last_used_at"),
     model: required(source, "model"),
     promptTokens: num(source, "prompt_tokens"),
     completionTokens: num(source, "completion_tokens"),

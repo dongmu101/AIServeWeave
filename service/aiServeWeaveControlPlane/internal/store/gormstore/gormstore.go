@@ -332,26 +332,15 @@ func (s *Store) DeleteAPIKey(ctx context.Context, tenantID, id string) error {
 	return translate(err)
 }
 
-// MarkAPIKeyUsed records a coarse last-used timestamp.
+// MarkAPIKeyUsed applies the interval atomically across concurrent verifications.
 //
-// The Gateway must not call this on every request: it would turn a read-only
-// verification into a write on the hottest row in the schema, and inference
-// traffic would spend its latency budget updating a column nobody reads in
-// real time. The caller rate limits it — see the Gateway's verifier — and this
-// method stays a plain unconditional update so a late write from a slower
-// replica cannot fail.
-//
-// MarkAPIKeyUsed 记录一个粗粒度的最后使用时间。
-//
-// Gateway 不得在每次请求都调用它：那会把一次只读校验变成对 schema 中最热的那一行的
-// 写入，推理流量会把自己的延迟预算花在更新一个没人实时读的列上。频率由调用方控制
-// ——见 Gateway 侧的 verifier——而这个方法保持为一次朴素的无条件更新，好让来自较慢
-// 副本的迟到写入不会失败。
+// MarkAPIKeyUsed 原子地约束并发校验的写入间隔。
 func (s *Store) MarkAPIKeyUsed(ctx context.Context, id string, at time.Time) error {
 	return translate(s.db.WithContext(ctx).
 		Model(&model.APIKey{}).
 		Where("id = ?", id).
-		Update("last_used_at", at).Error)
+		Where("last_used_at IS NULL OR last_used_at <= ?", at.Add(-store.APIKeyUseInterval)).
+		UpdateColumn("last_used_at", at).Error)
 }
 
 // -----------------------------------------------------------------------

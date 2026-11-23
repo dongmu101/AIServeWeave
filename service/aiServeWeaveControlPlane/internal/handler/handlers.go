@@ -2112,6 +2112,9 @@ func renderUsageSummary(u store.UsageSummary, includeTenant, costs bool) types.U
 	if includeTenant {
 		out.TenantID = u.TenantID
 	}
+	if u.KeyID != "" && !u.LastUsedAt.IsZero() {
+		out.LastUsedAt = &u.LastUsedAt
+	}
 	if costs {
 		out.CostMicro = int64Ptr(u.CostMicro)
 	}

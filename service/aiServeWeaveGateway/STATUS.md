@@ -155,6 +155,8 @@ go run ./service/aiServeWeaveGateway -comfyui-managed-addr 127.0.0.1:8093 ...
 
 `-key-cache-ttl` 仍是纵深防御的过期边界（默认 30 秒）。控制面 P07 已把吊销与待发 outbox 同事务保存，提交后通知前崩溃会在重启或其他副本上补发；数据库/Redis 故障期间仍不承诺零秒失效。已经完成鉴权并进入推理的请求不会因吊销被强行中断，边界是副本应用新 generation 后的下一次鉴权。
 
+控制面从数据库成功校验 API Key 时采样记录 `last_used_at`。每把 key 的数据库写入间隔至少一分钟，缓存命中沿用已有采样。Console 的「最近使用」还会采用较新的已入账用量时间。
+
 **控制面不可达时返回 503，不是 401。** 收到 401 的调用方会跑去重新生成 key，而如果只是控制面短暂宕机，那既浪费他们的时间也解决不了问题。这个区分由 `httpapi.ErrKeyRejected` 承载：只有它代表「这个 key 不行」，其余错误一律是「我们此刻答不了」。
 
 `InternalToken` 用 `AISW_CONTROL_PLANE_TOKEN` 环境变量传，不要用 `-control-plane-token` flag —— flag 在 `ps` 输出里可见。

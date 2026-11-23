@@ -13,7 +13,7 @@ import { parseUsageSummary, usageByModel, type ModelUsage, type UsageSummary } f
  *
  * useUsageByKey 读取本租户按 key 分组的全部用量，返回每个 key、每个用户各模型的用量；
  * 尚未载入或读取失败时为 null（列表照常显示，只有用量列留空）。 */
-export function useUsageByKey(): { byKey: Map<string, ModelUsage[]>; byUser: Map<string, ModelUsage[]> } | null {
+export function useUsageByKey() {
   const summary = useResource<UsageSummary>({
     method: "GET",
     path: "/admin/v1/usage/summary",
@@ -22,9 +22,19 @@ export function useUsageByKey(): { byKey: Map<string, ModelUsage[]>; byUser: Map
   });
   return React.useMemo(() => {
     if (!summary.data) return null;
+    const lastUsedByKey = new Map<string, string>();
+    for (const { keyId, lastUsedAt } of summary.data.items) {
+      const lastUsed = Date.parse(lastUsedAt);
+      if (!keyId || !Number.isFinite(lastUsed)) continue;
+      const previous = lastUsedByKey.get(keyId);
+      if (previous === undefined || lastUsed > Date.parse(previous)) {
+        lastUsedByKey.set(keyId, lastUsedAt);
+      }
+    }
     return {
       byKey: usageByModel(summary.data.items, (item) => item.keyId),
       byUser: usageByModel(summary.data.items, (item) => item.userId),
+      lastUsedByKey,
     };
   }, [summary.data]);
 }

@@ -55,6 +55,9 @@ func (s *Store) SummarizeUsage(_ context.Context, filter store.UsageRecordFilter
 		agg.CompletionTokens += r.CompletionTokens
 		agg.TotalTokens += r.TotalTokens
 		agg.RequestCount++
+		if filter.ByKey && r.CreatedAt.After(agg.LastUsedAt) {
+			agg.LastUsedAt = r.CreatedAt
+		}
 		agg.CacheReadTokens += r.CacheReadTokens
 		agg.CacheWriteTokens += r.CacheWriteTokens
 		agg.CostMicro += r.CostMicro

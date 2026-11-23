@@ -899,7 +899,7 @@ CREATE INDEX idx_usage_records_tenant_created       ON usage_records (tenant_id,
 
 - `GET /admin/v1/usage/summary`——`requireSession` 守卫，自动按调用者的 `tenant_id` 过滤，响应省略 `tenant_id` 字段。
 - `GET /operator/v1/usage/summary`——`requirePlatformSession` 守卫，可选 `tenant_id` 查询参数做跨租户过滤，不传则汇总全部租户，响应保留 `tenant_id` 字段。
-- 两个端点都接受可选的 `group_by`：缺省或 `model` 按 `(tenant_id, model)` 分组，形状不变；`key` 改按 `(tenant_id, user_id, key_id, model)` 分组，每行多出 `user_id`、`key_id`（为空时省略）。其他取值返回 400。Console 的「用量」页用它显示各用户、各 key、各模型的输入与输出 token。
+- 两个端点都接受可选的 `group_by`：缺省或 `model` 按 `(tenant_id, model)` 分组；`key` 按 `(tenant_id, user_id, key_id, model)` 分组，每行返回有值的 `user_id`、`key_id`，有 `key_id` 时还返回组内最新入账记录时间 `last_used_at`。其他取值返回 400。Console 用这些分组显示用量及密钥的最近使用时间。
 - 每行另带 `cache_read_tokens`、`cache_write_tokens`，开启计费时带 `cost_micro`。
 
 **汇总只读取入账时已算好的费用，不重新计价**：费用由「计费与充值」一节在推送端点的入账事务里写进同一张表，汇总仍是一次分组求和。
