@@ -10,7 +10,7 @@ deploy/install.sh \
 
 make release VERSION=v3.0.0
 
-make publish VERSION=v3.0.0 AGENT_DIST=dist/agent-dist PUBLISH_TAGS="v3.0.0 latest" FORCE=1
+make publish VERSION=v3.1.1 AGENT_DIST=dist/agent-dist PUBLISH_TAGS="v3.0.0 latest" FORCE=1
 
 更新
 make  upgrade.sh
