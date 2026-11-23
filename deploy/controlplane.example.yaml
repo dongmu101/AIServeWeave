@@ -201,8 +201,8 @@ Middlewares:
 Signup:
   Enabled: true
   MaxPerHour: 10
-  RequestsPerMinute: 60
-  TokensPerMinute: 100000
+  RequestsPerMinute: 600
+  TokensPerMinute: 20000000
   MaxConcurrent: 4
 
 # 商户自有节点：默认开启。商户的 owner/admin 可在 Console「我的节点」生成接入包，把自己的

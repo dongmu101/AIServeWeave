@@ -735,8 +735,8 @@ type SignupConf struct {
 	// RequestsPerMinute、TokensPerMinute 与 MaxConcurrent 是自助注册的租户起步时的
 	// 配额，含义同 common/quota（零表示不限制）。之后 owner 或 admin 可以像其他任何
 	// 租户一样修改它们。
-	RequestsPerMinute int `json:",default=60"`
-	TokensPerMinute   int `json:",default=100000"`
+	RequestsPerMinute int `json:",default=600"`
+	TokensPerMinute   int `json:",default=20000000"`
 	MaxConcurrent     int `json:",default=4"`
 }
 

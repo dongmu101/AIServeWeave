@@ -161,8 +161,8 @@ if (( SIGNUP == 1 )); then
 Signup:
   Enabled: true
   MaxPerHour: 10
-  RequestsPerMinute: 60
-  TokensPerMinute: 100000
+  RequestsPerMinute: 600
+  TokensPerMinute: 20000000
   MaxConcurrent: 4
 EOF
     log "已在 controlplane.yaml 中开启自助注册"
