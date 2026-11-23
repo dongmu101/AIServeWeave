@@ -957,6 +957,12 @@ const tenant = {
   "tenant.billingUsagePeriod": "{start} – {end} · {count} 件",
   "tenant.billingUsageDetails": "この期間の明細を見る",
   "tenant.billingUsageEdgeNote": "利用明細の行は課金時刻で区切られ、明細一覧はリクエスト時刻で絞り込むため、境界が数秒から数分ずれることがあります。",
-  "tenant.usageAllModels": "すべてのモデル"
+  "tenant.usageAllModels": "すべてのモデル",
+  "tenant.modelScopeAll": "すべて",
+  "tenant.modelScopeCloud": "クラウドAI",
+  "tenant.modelScopeDedicated": "専有AI",
+  "tenant.noCloudServices": "利用可能なクラウドAIはまだありません。",
+  "tenant.noDedicatedServices": "専有AIはまだありません。自社の Agent を接続するか専有アカウントを購入すると、ここに表示されます。",
+  "tenant.modelScopeHint": "クラウドAI：プラットフォームが運用し、テナント間で共有される Agent（無料・有料）。専有AI：自分で接続した Agent と購入したアカウント。"
 } as const;
 export default tenant;

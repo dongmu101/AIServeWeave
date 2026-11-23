@@ -35,6 +35,20 @@ func (p Policy) Allows(nodeID, runtimeID string, now time.Time) bool {
 	return !p.Only
 }
 
+// Holds reports whether the caller holds an unexpired lease on exactly this
+// runtime. Leases of other tenants carry a zero expiry, so they never count.
+//
+// Holds 报告调用方是否持有该运行时尚未到期的租约。其他租户的租约到期时间为零值，
+// 因此永远不计入。
+func (p Policy) Holds(nodeID, runtimeID string, now time.Time) bool {
+	for _, lease := range p.Managed {
+		if lease.NodeID == nodeID && lease.RuntimeID == runtimeID {
+			return now.Before(lease.ExpiresAt)
+		}
+	}
+	return false
+}
+
 // Permits combines node sharing and account leases. A lease opens only its exact
 // runtime, never another tenant's dedicated or owned node.
 func (p Policy) Permits(tenantID string, nodes nodeaccess.Policy, nodeID, runtimeID string, now time.Time) bool {

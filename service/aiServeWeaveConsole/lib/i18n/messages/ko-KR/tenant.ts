@@ -957,6 +957,12 @@ const tenant = {
   "tenant.billingUsagePeriod": "{start} – {end} · 요청 {count}건",
   "tenant.billingUsageDetails": "이 기간의 요청 보기",
   "tenant.billingUsageEdgeNote": "사용 항목은 과금 시각으로, 요청 목록은 요청 시각으로 나누므로 경계가 몇 초에서 몇 분 차이 날 수 있습니다.",
-  "tenant.usageAllModels": "모든 모델"
+  "tenant.usageAllModels": "모든 모델",
+  "tenant.modelScopeAll": "전체",
+  "tenant.modelScopeCloud": "클라우드 AI",
+  "tenant.modelScopeDedicated": "전용 AI",
+  "tenant.noCloudServices": "아직 사용 가능한 클라우드 AI가 없습니다.",
+  "tenant.noDedicatedServices": "아직 전용 AI가 없습니다. 자체 Agent를 연결하거나 전용 계정을 구매하면 여기에 표시됩니다.",
+  "tenant.modelScopeHint": "클라우드 AI: 플랫폼이 운영하며 테넌트 간에 공유되는 Agent(무료·유료). 전용 AI: 직접 연결한 Agent와 구매한 계정."
 } as const;
 export default tenant;

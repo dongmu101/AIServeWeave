@@ -969,6 +969,12 @@ const tenant = {
   "tenant.billingUsagePeriod": "{start} – {end} · {count} requests",
   "tenant.billingUsageDetails": "See these requests",
   "tenant.billingUsageEdgeNote": "Usage entries are split by charge time and the request list by request time, so the edges can differ by seconds to minutes.",
-  "tenant.usageAllModels": "All models"
+  "tenant.usageAllModels": "All models",
+  "tenant.modelScopeAll": "All",
+  "tenant.modelScopeCloud": "Cloud AI",
+  "tenant.modelScopeDedicated": "Dedicated AI",
+  "tenant.noCloudServices": "No cloud AI is available yet.",
+  "tenant.noDedicatedServices": "No dedicated AI yet. Enroll your own Agent or buy a dedicated account to see it here.",
+  "tenant.modelScopeHint": "Cloud AI: platform-operated Agents shared by tenants, free or paid. Dedicated AI: Agents you enrolled and accounts you bought."
 } as const;
 export default tenant;

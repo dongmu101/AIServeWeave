@@ -1161,7 +1161,7 @@ Gateway 侧：`controlplaneclient.ResponsesClient`（`CreateTurn`/`GetTurn`，�
 
 ## 租户 Agent AI 服务与模型目录
 
-`GET /admin/v1/models` 使用租户会话认证，允许 owner/admin/member 读取连接到 `Fleet.Gateways` 第一个 Gateway 的 Agent 所上报的服务与模型，不使用 Gateway 的 `local_runtimes`。接口与平台机群 API 分开，显式投影为 `{collected_at, partial, services: [{agent_id, service_id, node_online, kind, state, version, models: [{id, capabilities}]}]}`；仅公开 Agent 标识与其服务 ID 来区分上报来源；不返回 Gateway 副本标识、内部地址、凭据或自由诊断文本，也不读取任何租户的 Job/用量数据。`node_online` 表示 Agent 连接状态；离线 Agent 保留最近一次上报，并由 Console 标注为历史观测。目录共享给所有已登录租户；它不是租户可调度模型的授权目录。Gateway 读取失败保留 `partial=true` 并返回空 services，Console 将其显示为读取失败；未配置 Fleet 时不挂载端点。客户端不能选择其他 Gateway 或指定租户。平台令牌不能代替租户会话读取此接口，原 `/operator/v1/nodes` 仍只对平台运维开放。
+`GET /admin/v1/models` 使用租户会话认证，允许 owner/admin/member 读取连接到 `Fleet.Gateways` 第一个 Gateway 的 Agent 所上报的服务与模型，不使用 Gateway 的 `local_runtimes`。接口与平台机群 API 分开，显式投影为 `{collected_at, partial, services: [{agent_id, service_id, node_online, scope, kind, state, version, models: [{id, capabilities}]}]}`；`scope` 为 `dedicated` 表示调用方租户自有的 `tnode.` Agent 或其持有未到期租约的购买账号，其余为 `cloud`（平台运维共享，含免费与收费），Console `/console/models` 据此分「全部 / 云AI / 独享AI」三个 Tab；仅公开 Agent 标识与其服务 ID 来区分上报来源；不返回 Gateway 副本标识、内部地址、凭据或自由诊断文本，也不读取任何租户的 Job/用量数据。`node_online` 表示 Agent 连接状态；离线 Agent 保留最近一次上报，并由 Console 标注为历史观测。目录共享给所有已登录租户；它不是租户可调度模型的授权目录。Gateway 读取失败保留 `partial=true` 并返回空 services，Console 将其显示为读取失败；未配置 Fleet 时不挂载端点。客户端不能选择其他 Gateway 或指定租户。平台令牌不能代替租户会话读取此接口，原 `/operator/v1/nodes` 仍只对平台运维开放。
 
 ## API 参考文档（租户）
 

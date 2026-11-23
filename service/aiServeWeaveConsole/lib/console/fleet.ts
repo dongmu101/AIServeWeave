@@ -75,7 +75,22 @@ export interface NodeCliUsage extends CliUsage {
 export interface TenantModelCatalog {
   collectedAt: string;
   partial: boolean;
-  services: { agentId: string; serviceId: string; nodeOnline: boolean; kind: string; state: string; version: string; models: RuntimeModel[]; cliUsage: CliUsage | null }[];
+  services: { agentId: string; serviceId: string; nodeOnline: boolean; scope: ServiceScope; kind: string; state: string; version: string; models: RuntimeModel[]; cliUsage: CliUsage | null }[];
+}
+
+/** ServiceScope separates shared platform services ("cloud") from the tenant's
+ * own Agents and bought accounts ("dedicated").
+ *
+ * ServiceScope 区分平台共享服务（"cloud"）与商户自有 Agent 及购买的独享账号（"dedicated"）。 */
+export type ServiceScope = "cloud" | "dedicated";
+
+/** parseScope reads a service's `scope`. Absent means a control plane that
+ * predates the field, which only ever listed shared services as such.
+ *
+ * parseScope 读取服务的 `scope`。缺席表示早于该字段的控制面，按云服务处理。 */
+function parseScope(value: unknown): ServiceScope {
+  if (value === undefined) return "cloud";
+  return value === "cloud" || value === "dedicated" ? value : fail();
 }
 
 /** parseCliUsage validates the optional `cli_usage` of one service. Absent means
@@ -113,6 +128,7 @@ export function parseTenantModels(value: unknown): TenantModelCatalog {
       return {
         agentId: required(service, "agent_id"), serviceId: required(service, "service_id"),
         nodeOnline: typeof service.node_online === "boolean" ? service.node_online : fail(),
+        scope: parseScope(service.scope),
         kind: required(service, "kind"), state: required(service, "state"), version: text(service, "version"),
         cliUsage: parseCliUsage(service.cli_usage),
         models: list(service.models, entry => {

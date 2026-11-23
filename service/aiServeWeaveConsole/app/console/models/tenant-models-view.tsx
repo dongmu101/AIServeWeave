@@ -16,14 +16,17 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CliQuota } from "@/components/console/cli-quota";
-import { parseTenantModels, type TenantModelCatalog } from "@/lib/console/fleet";
+import { parseTenantModels, type ServiceScope, type TenantModelCatalog } from "@/lib/console/fleet";
 import { formatDateTime, matchesQuery } from "@/lib/console/format";
 
 type Service = TenantModelCatalog["services"][number];
 const PAGE_SIZE = 25;
 const STATES = (t: Translator): Record<string, string> => ({ healthy: t("tenant.healthy"), unhealthy: t("tenant.unhealthy"), registering: t("tenant.registering"), unknown: t("tenant.unknown"), closed: t("tenant.closed") });
 const SUPPORT = (t: Translator): Record<string, string> => ({ supported: t("tenant.supported"), unsupported: t("tenant.notSupported"), unknown: t("tenant.unknown") });
+const SCOPES = (t: Translator): Record<ServiceScope, string> => ({ cloud: t("tenant.modelScopeCloud"), dedicated: t("tenant.modelScopeDedicated") });
+type ScopeTab = "all" | ServiceScope;
 const features = tableFeatures({});
 type AgentGroup = { agentId: string; services: Service[] };
 const helper = createColumnHelper<typeof features, Service>();
@@ -36,6 +39,7 @@ export function TenantModelsView() {
   const catalog = useResource({ method: "GET", path: "/admin/v1/models", parse: parseTenantModels });
   const [query, setQuery] = React.useState("");
   const [onlineOnly, setOnlineOnly] = React.useState(false);
+  const [scope, setScope] = React.useState<ScopeTab>("all");
   const [page, setPage] = React.useState(0);
   const [selected, setSelected] = React.useState<Service | null>(null);
   const { loading, reload } = catalog;
@@ -46,7 +50,8 @@ export function TenantModelsView() {
     return () => window.clearInterval(timer);
   }, [loading, refresh, selected]);
   const services = catalog.data?.services ?? [];
-  const shown = services.filter(service => (!onlineOnly || service.nodeOnline) && matchesQuery([
+  const inScope = services.filter(service => scope === "all" || service.scope === scope);
+  const shown = inScope.filter(service => (!onlineOnly || service.nodeOnline) && matchesQuery([
     service.agentId, service.serviceId, service.kind, service.version, ...service.models.map(model => model.id),
   ], query));
   const grouped = new Map<string, AgentGroup>();
@@ -84,11 +89,19 @@ export function TenantModelsView() {
       <LoadingState label={t("tenant.loadingAgentAiServicesAndModels")} rows={3} /> : catalog.data.partial ?
       <ErrorState message={t("tenant.unableToLoadAgentAiServicesAndModels")} onRetry={refresh} /> : <>
       <p className="text-xs text-muted-foreground"><Message id="tenant.collectedAtAgentsReportingServicesAiServicesModels" values={{ value: formatDateTime(catalog.data.collectedAt, undefined, locale), size: new Set(services.map(service => service.agentId)).size, count: services.length, size2: new Set(services.flatMap(service => service.models.map(model => model.id))).size }} /></p>
+      <Tabs value={scope} onValueChange={next => { if (next === "all" || next === "cloud" || next === "dedicated") { setScope(next); setPage(0); } }}>
+        <TabsList className="h-auto! w-full flex-wrap justify-start sm:w-fit">
+          <TabsTrigger value="all" className="flex-none px-3">{t("tenant.modelScopeAll")} · {services.length}</TabsTrigger>
+          <TabsTrigger value="cloud" className="flex-none px-3">{t("tenant.modelScopeCloud")} · {services.filter(service => service.scope === "cloud").length}</TabsTrigger>
+          <TabsTrigger value="dedicated" className="flex-none px-3">{t("tenant.modelScopeDedicated")} · {services.filter(service => service.scope === "dedicated").length}</TabsTrigger>
+        </TabsList>
+      </Tabs>
+      <p className="text-xs text-muted-foreground">{t("tenant.modelScopeHint")}</p>
       <div className="flex flex-wrap items-center gap-3">
         <Input className="max-w-sm" aria-label={t("tenant.searchAiServicesOrModels")} placeholder={t("tenant.searchAgentsServiceIdsTypesOrModels")} value={query} onChange={event => { setQuery(event.target.value); setPage(0); }} />
         <label className="flex items-center gap-2 text-sm"><Message id="tenant.showOnlineAgentsOnly_56e957" values={{ content: <input type="checkbox" checked={onlineOnly} onChange={event => { setOnlineOnly(event.target.checked); setPage(0); }} /> }} /></label>
       </div>
-      {shown.length === 0 ? <EmptyState title={services.length === 0 ? t("tenant.noAgentsHaveReportedAiServicesYet") : t("tenant.noServicesOrModelsMatchYourSearch")} description={services.length === 0 ? t("tenant.checkThatTheAgentIsConnectedToA") : undefined} /> : <>
+      {shown.length === 0 ? <EmptyState title={services.length === 0 ? t("tenant.noAgentsHaveReportedAiServicesYet") : inScope.length === 0 ? t(scope === "dedicated" ? "tenant.noDedicatedServices" : "tenant.noCloudServices") : t("tenant.noServicesOrModelsMatchYourSearch")} description={services.length === 0 ? t("tenant.checkThatTheAgentIsConnectedToA") : undefined} /> : <>
         <DataTable table={table} caption={t("tenant.agentAiServiceList")} />
         <ListPager page={currentPage} count={agents.length} onChange={setPage} label={t("tenant.agentPagination")} />
       </>}
@@ -109,7 +122,7 @@ function AgentServices({ agent, collectedAt, onSelect }: { agent: AgentGroup; co
   // 使用目录自己的采集时间，让「已重置」依据数据而不是渲染时的时钟来判断。
   const now = Date.parse(collectedAt);
   const columns = React.useMemo(() => helper.columns([
-    helper.accessor("serviceId", { header: t("tenant.serviceIdType"), cell: info => <div className="max-w-48 whitespace-normal break-all"><code className="text-xs">{info.getValue()}</code><div className="text-xs text-muted-foreground">{info.row.original.kind}</div></div> }),
+    helper.accessor("serviceId", { header: t("tenant.serviceIdType"), cell: info => <div className="max-w-48 whitespace-normal break-all"><code className="text-xs">{info.getValue()}</code><div className="text-xs text-muted-foreground">{info.row.original.kind}</div><Badge className="mt-1" variant={info.row.original.scope === "dedicated" ? "secondary" : "outline"}>{SCOPES(t)[info.row.original.scope]}</Badge></div> }),
     helper.accessor("state", { header: t("tenant.healthStatus"), cell: info => <Badge variant="outline">{STATES(t)[info.getValue()] ?? info.getValue()}</Badge> }),
     helper.accessor("version", { header: t("tenant.version"), cell: info => <span className="inline-block max-w-32 whitespace-normal break-all">{info.getValue() || t("tenant.notReported")}</span> }),
     helper.accessor("models", { header: t("tenant.models_98fd0c"), cell: info => <span className="text-xs"><Message id="tenant.models_4678e8" values={{ count: info.getValue().length }} /></span> }),

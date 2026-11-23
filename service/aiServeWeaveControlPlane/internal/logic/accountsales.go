@@ -267,14 +267,27 @@ func (s *Service) AccountPolicy(ctx context.Context, tenantID string) (accountac
 
 // TenantAccountFilter uses the service clock just as key verification does.
 func (s *Service) TenantAccountFilter(ctx context.Context, tenantID string) (func(string, string) bool, error) {
+	allowed, _, err := s.TenantAccountAccess(ctx, tenantID)
+	return allowed, err
+}
+
+// TenantAccountAccess returns TenantAccountFilter's filter together with held,
+// which reports whether tenantID holds an unexpired account lease on exactly
+// that runtime. Both read the same policy at the same instant.
+//
+// TenantAccountAccess 返回 TenantAccountFilter 的过滤函数，以及 held：报告 tenantID
+// 是否持有该运行时尚未到期的账号租约。两者基于同一时刻的同一份策略。
+func (s *Service) TenantAccountAccess(ctx context.Context, tenantID string) (allowed, held func(string, string) bool, err error) {
 	p, err := s.AccountPolicy(ctx, tenantID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	nodes, err := s.nodePolicy(ctx, tenantID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	now := s.clock.Now()
-	return func(nodeID, runtimeID string) bool { return p.Permits(tenantID, nodes, nodeID, runtimeID, now) }, nil
+	allowed = func(nodeID, runtimeID string) bool { return p.Permits(tenantID, nodes, nodeID, runtimeID, now) }
+	held = func(nodeID, runtimeID string) bool { return p.Holds(nodeID, runtimeID, now) }
+	return allowed, held, nil
 }

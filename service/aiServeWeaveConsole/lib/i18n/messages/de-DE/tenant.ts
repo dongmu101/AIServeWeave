@@ -969,6 +969,12 @@ const tenant = {
   "tenant.billingUsagePeriod": "{start} – {end} · {count} Anfragen",
   "tenant.billingUsageDetails": "Diese Anfragen anzeigen",
   "tenant.billingUsageEdgeNote": "Nutzungseinträge sind nach Abrechnungszeit, die Anfrageliste nach Anfragezeit geteilt; an den Rändern können Sekunden bis Minuten abweichen.",
-  "tenant.usageAllModels": "Alle Modelle"
+  "tenant.usageAllModels": "Alle Modelle",
+  "tenant.modelScopeAll": "Alle",
+  "tenant.modelScopeCloud": "Cloud-KI",
+  "tenant.modelScopeDedicated": "Dedizierte KI",
+  "tenant.noCloudServices": "Noch keine Cloud-KI verfügbar.",
+  "tenant.noDedicatedServices": "Noch keine dedizierte KI. Verbinden Sie einen eigenen Agent oder kaufen Sie ein dediziertes Konto, um sie hier zu sehen.",
+  "tenant.modelScopeHint": "Cloud-KI: vom Plattformbetrieb verwaltete, von Mandanten geteilte Agents, kostenlos oder kostenpflichtig. Dedizierte KI: selbst verbundene Agents und gekaufte Konten."
 } as const;
 export default tenant;
