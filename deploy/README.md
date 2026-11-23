@@ -6,7 +6,7 @@ deploy/install.sh \
   --operator-email <运维邮箱> \
   --https \
   --advertise-addr agent.open7x.com:8443 \
-  --agent-public-url https://open7x.com
+  --agent-public-url https://www.open7x.com
 
 make release VERSION=v3.0.0
 

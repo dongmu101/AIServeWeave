@@ -42,7 +42,7 @@ func (g *gateStub) Admit(context.Context) (bool, error) { g.calls++; return g.ad
 
 func newInstallCtx(gate *gateStub) *svc.ServiceContext {
 	ctx := &svc.ServiceContext{Logic: logic.New(memstore.New(), runtime.NewSystemClock(),
-		logic.WithAgentInstall(logic.AgentInstallConfig{Issuer: installIssuerStub{}, PublicURL: "https://open7x.com"}))}
+		logic.WithAgentInstall(logic.AgentInstallConfig{Issuer: installIssuerStub{}, PublicURL: "https://www.open7x.com"}))}
 	if gate != nil {
 		ctx.RedeemGate = gate
 	}
@@ -63,7 +63,7 @@ func TestInstallIssueAndRedeemRoundTrip(t *testing.T) {
 	w := httptest.NewRecorder()
 	createOperatorInstall(ctx)(w, operatorRequest(`{"registry_addr":"r.example.com:9443","gateway_addr":"g.example.com:8443","ttl_minutes":60}`))
 	var issued types.InstallIssueResponse
-	if w.Code != http.StatusCreated || json.Unmarshal(w.Body.Bytes(), &issued) != nil || issued.Credential != "code" || issued.Code == "" || issued.InstallBaseURL != "https://open7x.com" || w.Header().Get("Cache-Control") != "no-store" {
+	if w.Code != http.StatusCreated || json.Unmarshal(w.Body.Bytes(), &issued) != nil || issued.Credential != "code" || issued.Code == "" || issued.InstallBaseURL != "https://www.open7x.com" || w.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("issue status=%d body=%s, want 201 with a code and no-store", w.Code, w.Body)
 	}
 	body, _ := json.Marshal(types.InstallRedeemRequest{Code: issued.Code})

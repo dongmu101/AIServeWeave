@@ -52,7 +52,7 @@ func writeDist(t *testing.T, version string) string {
 
 func newTestHandler(t *testing.T, version, controlPlane string, mutate func(*Config)) *http.ServeMux {
 	t.Helper()
-	cfg := Config{DistDir: writeDist(t, version), Version: version, PublicURL: "https://open7x.com/", ControlPlaneURL: controlPlane, Token: testToken,
+	cfg := Config{DistDir: writeDist(t, version), Version: version, PublicURL: "https://www.open7x.com/", ControlPlaneURL: controlPlane, Token: testToken,
 		GitHubRepo: "dongmu101/AIServeWeave", Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	if mutate != nil {
 		mutate(&cfg)
@@ -77,7 +77,7 @@ func get(mux http.Handler, path string) *httptest.ResponseRecorder {
 //
 // TestNewRejectsBadConfig 检查配置不全或不安全时在启动时失败，而不是照常提供服务。
 func TestNewRejectsBadConfig(t *testing.T) {
-	good := Config{DistDir: "/d", Version: "v1.2.3", PublicURL: "https://open7x.com", ControlPlaneURL: "http://127.0.0.1:8090", Token: "t"}
+	good := Config{DistDir: "/d", Version: "v1.2.3", PublicURL: "https://www.open7x.com", ControlPlaneURL: "http://127.0.0.1:8090", Token: "t"}
 	for _, tc := range []struct {
 		name   string
 		mutate func(*Config)
@@ -85,8 +85,8 @@ func TestNewRejectsBadConfig(t *testing.T) {
 	}{
 		{"no dist dir", func(c *Config) { c.DistDir = "" }, "together"},
 		{"no public url", func(c *Config) { c.PublicURL = "" }, "together"},
-		{"http public url", func(c *Config) { c.PublicURL = "http://open7x.com" }, "https origin"},
-		{"public url with path", func(c *Config) { c.PublicURL = "https://open7x.com/agent" }, "https origin"},
+		{"http public url", func(c *Config) { c.PublicURL = "http://www.open7x.com" }, "https origin"},
+		{"public url with path", func(c *Config) { c.PublicURL = "https://www.open7x.com/agent" }, "https origin"},
 		{"bad repo", func(c *Config) { c.GitHubRepo = "not a repo" }, "owner/name"},
 		{"traversal version", func(c *Config) { c.Version = "../etc" }, "directory name"},
 		{"no control plane", func(c *Config) { c.ControlPlaneURL = "" }, "control-plane-addr"},
@@ -116,7 +116,7 @@ func TestManifest(t *testing.T) {
 	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &m) != nil {
 		t.Fatalf("manifest status=%d body=%s", w.Code, w.Body)
 	}
-	if m.Version != "v1.2.3" || m.PlatformURL != "https://open7x.com" || len(m.Assets) != 2 || m.GitHub == nil ||
+	if m.Version != "v1.2.3" || m.PlatformURL != "https://www.open7x.com" || len(m.Assets) != 2 || m.GitHub == nil ||
 		m.GitHub.BaseURL != "https://github.com/dongmu101/AIServeWeave/releases/download/v1.2.3" {
 		t.Fatalf("manifest = %+v, want release v1.2.3 with 2 assets and a GitHub base URL", m)
 	}
@@ -142,7 +142,7 @@ func TestManifest(t *testing.T) {
 // TestScriptsReplacePlatformURL 检查占位符替换。
 func TestScriptsReplacePlatformURL(t *testing.T) {
 	mux := newTestHandler(t, "v1.2.3", "http://cp", nil)
-	for path, want := range map[string]string{"/agent/install.sh": "PLATFORM=https://open7x.com\n", "/agent/install.ps1": "$p = 'https://open7x.com'\n"} {
+	for path, want := range map[string]string{"/agent/install.sh": "PLATFORM=https://www.open7x.com\n", "/agent/install.ps1": "$p = 'https://www.open7x.com'\n"} {
 		w := get(mux, path)
 		if w.Code != 200 || w.Body.String() != want || w.Header().Get("Cache-Control") != "no-store" {
 			t.Errorf("%s status=%d body=%q, want 200 %q", path, w.Code, w.Body, want)

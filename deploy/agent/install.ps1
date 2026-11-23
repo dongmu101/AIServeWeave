@@ -167,7 +167,7 @@
         if ($Bundle -and !(Test-Path -LiteralPath $Bundle -PathType Leaf)) { throw 'Enrollment ZIP not found.' }
         if (!$Platform -and !$servedPlatform.StartsWith('__AISW_')) { $Platform = $servedPlatform }
         $Platform = if ($Platform) { $Platform.TrimEnd('/') } else { '' }
-        if ($Platform -notmatch '^https://[^/?#\s]+$') { throw "-Platform must be the platform's https origin, e.g. https://open7x.com" }
+        if ($Platform -notmatch '^https://[^/?#\s]+$') { throw "-Platform must be the platform's https origin, e.g. https://www.open7x.com" }
         if ($Source -notin @('platform', 'github') -and $Source -notmatch '^https://') { throw '-Source must be platform, github or an https:// release directory.' }
         $Source = $Source.TrimEnd('/')
 

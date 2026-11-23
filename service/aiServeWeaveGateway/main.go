@@ -238,7 +238,7 @@ func run() error {
 	agentDistDir := flag.String("agent-dist-dir", "",
 		"directory holding <version>/ subdirectories of Agent artifacts and bootstrap scripts, served at /agent/* for one-command installs; must be set together with -agent-public-url and needs -control-plane-addr")
 	agentPublicURL := flag.String("agent-public-url", "",
-		"this platform's public HTTPS origin, e.g. https://open7x.com, written into the served bootstrap scripts; must be set together with -agent-dist-dir")
+		"this platform's public HTTPS origin, e.g. https://www.open7x.com, written into the served bootstrap scripts; must be set together with -agent-dist-dir")
 	agentGitHubRepo := flag.String("agent-github-repo", "",
 		"owner/name of the GitHub repository whose Releases hold the same Agent artifacts; advertised in the manifest only for vX.Y.Z versions")
 	showVersion := flag.Bool("version", false, "print the version and exit")

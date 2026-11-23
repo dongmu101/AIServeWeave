@@ -12,9 +12,9 @@
 # 并打印要加的内容。
 #
 # Usage:
-#   deploy/enable-agent-install.sh https://open7x.com
-#   deploy/enable-agent-install.sh https://open7x.com --platforms "linux/amd64 darwin/arm64 windows/amd64"
-#   deploy/enable-agent-install.sh https://open7x.com --no-build   # reuse images built with a version
+#   deploy/enable-agent-install.sh https://www.open7x.com
+#   deploy/enable-agent-install.sh https://www.open7x.com --platforms "linux/amd64 darwin/arm64 windows/amd64"
+#   deploy/enable-agent-install.sh https://www.open7x.com --no-build   # reuse images built with a version
 #   deploy/enable-agent-install.sh --help
 set -euo pipefail
 
@@ -24,7 +24,7 @@ usage() {
   cat <<'EOF'
 用法: deploy/enable-agent-install.sh 平台站点地址 [选项]
 
-  平台站点地址        平台对外的 HTTPS 站点根地址，如 https://open7x.com
+  平台站点地址        平台对外的 HTTPS 站点根地址，如 https://www.open7x.com
   --platforms "..."   只把这些平台的 Agent 打进 Gateway 镜像，如 "linux/amd64 darwin/arm64 windows/amd64"
                       （默认六个平台，构建约 10 分钟；验收时三个就够）
   --goproxy URL       构建时的 Go 模块代理，如 https://goproxy.cn,direct
@@ -54,7 +54,7 @@ done
 
 [[ -n "$URL" ]] || { usage; exit 1; }
 URL="${URL%/}"
-[[ "$URL" =~ ^https://[^/?#[:space:]]+$ ]] || die "站点地址必须是不带路径的 https 根地址，如 https://open7x.com（收到 ${URL}）"
+[[ "$URL" =~ ^https://[^/?#[:space:]]+$ ]] || die "站点地址必须是不带路径的 https 根地址，如 https://www.open7x.com（收到 ${URL}）"
 
 require_tools curl git
 [[ -f "$ENV_FILE" ]] || die "找不到 ${ENV_FILE}：先用 deploy/install.sh 完成首次部署"

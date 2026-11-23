@@ -287,10 +287,10 @@ type Config struct {
 // PublicURL 控制两个签发兑换码的端点。
 type AgentInstallConf struct {
 	// PublicURL is the platform site's HTTPS root, such as
-	// https://open7x.com. It is returned to the Console so it can print the
+	// https://www.open7x.com. It is returned to the Console so it can print the
 	// install command; empty leaves the two issuing routes unmounted.
 	//
-	// PublicURL 是平台站点的 HTTPS 根地址，如 https://open7x.com。它返回给 Console 以
+	// PublicURL 是平台站点的 HTTPS 根地址，如 https://www.open7x.com。它返回给 Console 以
 	// 生成安装命令；为空时两条签发路由不挂载。
 	PublicURL string `json:",optional"`
 	// RedeemPerMinute bounds redemptions and CA reads per minute across the
@@ -341,7 +341,7 @@ func (a AgentInstallConf) validate(registry RegistryConf) error {
 	}
 	u, err := url.Parse(a.PublicURL)
 	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
-		return errors.New("config: AgentInstall.PublicURL must be an https origin such as https://open7x.com")
+		return errors.New("config: AgentInstall.PublicURL must be an https origin such as https://www.open7x.com")
 	}
 	return nil
 }
