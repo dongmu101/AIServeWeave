@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { SELECT_CLASS } from "@/components/console/account-sales";
 import { BillingDisabled } from "@/components/console/billing-tables";
 import { ConfirmDialog } from "@/components/console/confirm-dialog";
+import { OperatorModelPicker, useOperatorModelNames } from "@/components/console/operator-model-picker";
 import { EmptyState, ErrorState, FormError, LoadingState } from "@/components/console/states";
 import { SubmitButton } from "@/components/console/submit-button";
 import { Pager } from "@/components/console/pager";
@@ -25,8 +26,6 @@ import { formatCredits } from "@/lib/console/billing";
 import { CATALOG_HISTORY_ACTIONS, parseCatalogHistoryDetail, type CatalogHistoryAction } from "@/lib/console/catalog-history";
 import { parseAuditEntries, parsePlatformOperators, type AuditEntry } from "@/lib/console/contract";
 import { formatDateTime } from "@/lib/console/format";
-import { parseGatewaySnapshot, type FleetSnapshot } from "@/lib/console/fleet";
-import { parseRouteSnapshot } from "@/lib/console/model-routes";
 import {
   catalogItems,
   EDITED_METERS,
@@ -255,6 +254,7 @@ export function PricingSection() {
       alias={editing.alias}
       setting={editing.alias ? settings.get(editing.alias) ?? null : null}
       configured={settings}
+      routedModels={view.items.filter((item) => item.routed).map((item) => item.model)}
       revision={cfg.revision.id}
       onClose={() => setEditing(null)}
       onSaved={reload}
@@ -411,10 +411,11 @@ function DefaultPriceDialog({ prices, revision, onClose, onSaved }: { prices: Pr
  * model rate, or clears its settings.
  *
  * ModelPricingDialog 设置一个别名的参照模型、覆盖价与模型倍率，或清除其设置。 */
-function ModelPricingDialog({ alias, setting, configured, revision, onClose, onSaved }: {
+function ModelPricingDialog({ alias, setting, configured, routedModels, revision, onClose, onSaved }: {
   alias: string | null;
   setting: PricingModel | null;
   configured: ReadonlyMap<string, PricingModel>;
+  routedModels: readonly string[];
   revision: number;
   onClose: () => void;
   onSaved: () => void;
@@ -430,32 +431,12 @@ function ModelPricingDialog({ alias, setting, configured, revision, onClose, onS
   const [pending, setPending] = React.useState(false);
   const [error, setError] = React.useState<React.ReactNode>(null);
   const [removing, setRemoving] = React.useState(false);
-  // The reference pick list is a catalog prefix search on what was typed
-  // into the reference box, or on the alias while nothing is typed. Picking
-  // from the list does not change the search, so the other matches stay
-  // listed to pick from again.
-  // 参照模型的选择列表按参照输入框里手动输入的内容做价目表前缀搜索，未输入时按别名搜索。
-  // 从列表选择不改变搜索，其他匹配项仍留在列表里可以重新选择。
   const [query, setQuery] = React.useState("");
   const search = React.useDeferredValue(query.trim() || model.trim());
-  // Only a new alias offers a pick list: published route aliases that have
-  // no pricing settings yet. Picking an already configured one would
-  // overwrite it with blank fields, so those are edited from the table.
-  // 只有新建别名时提供选择列表：已发布、尚未有定价设置的路由别名。选择已配置的
-  // 别名会用空白字段覆盖原设置，因此它们只从表格里编辑。
-  const routes = useResource({ method: "GET", surface: "operator", path: "/operator/v1/routes", parse: parseRouteSnapshot });
-  // Node-reported model ids are offered too: a request may name one
-  // directly when no route covers it.
-  // 也提供节点上报的模型 id：没有路由覆盖时，请求可以直接使用它。
-  const fleet = useResource<FleetSnapshot>({ method: "GET", surface: "operator", path: "/operator/v1/nodes", query: { gateway: "default" }, parse: parseGatewaySnapshot });
-  const routeChoices = React.useMemo(() => [...new Set((routes.data?.routes ?? []).map((route) => route.model))].filter((name) => !configured.has(name)).sort(), [routes.data, configured]);
-  const nodeChoices = React.useMemo(() => {
-    const runtimes = [...(fleet.data?.replicas[0]?.localRuntimes ?? []), ...(fleet.data?.nodes ?? []).flatMap((node) => node.runtimes)];
-    const taken = new Set(routeChoices);
-    return [...new Set(runtimes.flatMap((rt) => rt.models.map((m) => m.id)))].filter((name) => name !== "" && !taken.has(name) && !configured.has(name)).sort();
-  }, [fleet.data, routeChoices, configured]);
-  const choices = React.useMemo(() => [...routeChoices, ...nodeChoices], [routeChoices, nodeChoices]);
-  const choicesLoaded = routes.data !== null || routes.error !== null;
+  const runtimeModels = useOperatorModelNames();
+  const routed = new Set(routedModels);
+  const routeChoices = routedModels.filter((name) => !configured.has(name));
+  const nodeChoices = runtimeModels.names.filter((name) => !routed.has(name) && !configured.has(name));
   const matches = useResource<CatalogPage>({
     method: "GET", surface: "operator", path: "/operator/v1/billing/catalog",
     query: { q: search, limit: search.length >= 2 ? String(REFERENCE_CHOICES) : "1" }, parse: parseCatalogPage,
@@ -483,29 +464,14 @@ function ModelPricingDialog({ alias, setting, configured, revision, onClose, onS
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (pending) return;
-    // A listed alias is shown read-only and sent as it is; only a typed one
-    // is checked here. The control plane has the final word on both.
-    // 已列出的别名只读、原样发送；这里只检查手动输入的别名。两者都以控制面的校验为准。
     const name = alias ?? model.trim();
     if (alias === null && (name === "" || new TextEncoder().encode(name).length > 128)) {
       setError(<Message id="operator.billingProblemModel" />);
       return;
     }
-    // The control plane refuses a reference the catalog lacks with a bare
-    // 400, so it is checked here first to name the cause.
-    // 控制面对价目表中不存在的参照模型只返回笼统的 400，因此先在这里检查，以便说明原因。
-    const ref = reference.trim();
-    if (ref !== "") {
-      try {
-        const page = await run({ method: "GET", surface: "operator", path: "/operator/v1/billing/catalog", query: { q: ref, limit: "1" }, parse: parseCatalogPage });
-        if (!page.items.some((item) => item.model === ref)) {
-          setError(t("operator.pricingReferenceMissing", { model: ref }));
-          return;
-        }
-      } catch {
-        // Left to the control plane, which checks it again on save.
-        // 交给控制面，它在保存时会再检查一次。
-      }
+    if (alias === null && configured.has(name)) {
+      setError(<Message id="operator.pricingAliasAlreadyConfigured" />);
+      return;
     }
     const ratePPM = parseRateInput(rate);
     if (ratePPM === null) {
@@ -526,7 +492,7 @@ function ModelPricingDialog({ alias, setting, configured, revision, onClose, onS
     try {
       await run({
         method: "PUT", surface: "operator", path: "/operator/v1/billing/pricing/models",
-        body: { model: name, catalog_model: reference.trim(), prices: priceItemsBody(prices), rate_ppm: ratePPM, base_revision: revision },
+        body: { model: name, catalog_model: reference, prices: priceItemsBody(prices), rate_ppm: ratePPM, base_revision: revision },
         parse: parsePricingConfig,
       });
       toast.success(<Message id="operator.pricingSaved" />);
@@ -539,15 +505,7 @@ function ModelPricingDialog({ alias, setting, configured, revision, onClose, onS
   }
 
   const found = search.length >= 2 ? (matches.data?.items ?? []).filter((item) => item.status !== "removed") : [];
-  // The saved reference stays listed even when the alias search does not
-  // reach it, so an existing setting shows as picked.
-  // 已保存的参照模型即使不在按别名搜索的结果里也保留在列表中，现有设置因此显示为已选中。
-  const saved = setting?.catalogModel ?? "";
-  const options = saved !== "" && reference.trim() === saved && !found.some((item) => item.model === saved) ? [{ model: saved, provider: "" }, ...found] : found;
-  const referencePlaceholder = search.length < 2 ? t("operator.pricingReferenceTypeMore")
-    : matches.loading ? t("operator.loading")
-    : options.length > 0 ? t("operator.pricingReferencePick")
-    : t("operator.pricingSearchNoMatch", { prefix: search });
+  const options = reference !== "" && !found.some((item) => item.model === reference) ? [{ model: reference, provider: "" }, ...found] : found;
   return <Dialog open onOpenChange={(next) => { if (!next && !pending) onClose(); }}>
     <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-lg">
       <form onSubmit={submit} className="grid gap-4" noValidate>
@@ -557,23 +515,21 @@ function ModelPricingDialog({ alias, setting, configured, revision, onClose, onS
         </DialogHeader>
         <div className="grid gap-1">
           <label htmlFor="pricing-model" className="text-sm font-medium"><Message id="operator.billingModel" /></label>
-          {alias === null ? <select aria-label={t("operator.pricingAliasPick")} className={SELECT_CLASS} value={choices.includes(model.trim()) ? model.trim() : ""} disabled={pending || choices.length === 0} onChange={(e) => setModel(e.target.value)}>
-            <option value="">{!choicesLoaded ? t("operator.loading") : choices.length > 0 ? t("operator.pricingAliasPick") : t("operator.pricingAliasNoChoices")}</option>
-            {routeChoices.length > 0 ? <optgroup label={t("operator.pricingAliasGroupRoutes")}>{routeChoices.map((name) => <option key={name} value={name}>{name}</option>)}</optgroup> : null}
-            {nodeChoices.length > 0 ? <optgroup label={t("operator.pricingAliasGroupNodes")}>{nodeChoices.map((name) => <option key={name} value={name}>{name}</option>)}</optgroup> : null}
-          </select> : null}
-          <Input id="pricing-model" value={model} onChange={(e) => setModel(e.target.value)} disabled={pending || alias !== null} autoComplete="off" spellCheck={false} />
-          {alias === null && choicesLoaded ? <p className="text-xs text-muted-foreground"><Message id={choices.length > 0 ? "operator.pricingAliasHint" : "operator.pricingAliasNone"} /></p> : null}
+          {alias === null ? <OperatorModelPicker id="pricing-model" value={model} onChange={setModel} disabled={pending} loading={runtimeModels.loading} groups={[
+            { label: t("operator.pricingAliasGroupRoutes"), names: routeChoices },
+            { label: t("operator.pricingAliasGroupNodes"), names: nodeChoices },
+          ]} /> : <Input id="pricing-model" value={model} readOnly />}
         </div>
         <div className="grid gap-1">
           <label htmlFor="pricing-reference" className="text-sm font-medium"><Message id="operator.pricingReference" /></label>
-          <select aria-label={t("operator.pricingReferencePick")} className={SELECT_CLASS} value={options.some((item) => item.model === reference.trim()) ? reference.trim() : ""} disabled={pending || options.length === 0} onChange={(e) => setReference(e.target.value)}>
-            <option value="">{referencePlaceholder}</option>
+          <select id="pricing-reference" className={SELECT_CLASS} value={reference} disabled={pending} onChange={(e) => setReference(e.target.value)}>
+            <option value="">{t("operator.pricingReferenceDefault")}</option>
             {options.map((item) => <option key={item.model} value={item.model}>{item.provider ? `${item.model} · ${item.provider}` : item.model}</option>)}
             {search.length >= 2 && matches.data?.nextCursor ? <option value="" disabled>{t("operator.pricingReferenceMore", { count: REFERENCE_CHOICES })}</option> : null}
           </select>
-          <Input id="pricing-reference" value={reference} onChange={(e) => { setReference(e.target.value); setQuery(e.target.value); }} disabled={pending} autoComplete="off" spellCheck={false} />
-          <p className="text-xs text-muted-foreground"><Message id="operator.pricingReferenceHint" /></p>
+          <Input type="search" aria-label={t("operator.pricingReferenceSearch")} placeholder={t("operator.pricingReferenceSearch")} value={query} onChange={(e) => setQuery(e.target.value)} disabled={pending} autoComplete="off" spellCheck={false} />
+          {search.length >= 2 && (matches.loading || matches.error || found.length === 0)
+            ? <p role="status" className="text-xs text-muted-foreground">{matches.loading ? t("operator.loading") : matches.error ?? t("operator.pricingSearchNoMatch", { prefix: search })}</p> : null}
         </div>
         <div className="grid gap-1">
           <label htmlFor="pricing-rate" className="text-sm font-medium"><Message id="operator.pricingModelRate" /></label>
@@ -841,6 +797,11 @@ function planProblem(problem: PlanProblem, t: Translator): React.ReactNode {
 function PlanDialog({ plan, revision, onClose, onSaved }: { plan: PricePlan | null; revision: number; onClose: () => void; onSaved: () => void }) {
   const { t } = useI18n();
   const run = useConsoleRequest();
+  const prices = useResource({ method: "GET", surface: "operator", path: "/operator/v1/billing/effective-prices", parse: parseEffectivePrices });
+  const runtimeModels = useOperatorModelNames();
+  const modelChoices = React.useMemo(() => [...new Set([
+    ...(prices.data?.items.map(item => item.model) ?? []), ...runtimeModels.names,
+  ])].sort(), [prices.data, runtimeModels.names]);
   const [draft, setDraft] = React.useState<PlanDraft>(() => (plan ? planDraft(plan) : emptyPlanDraft()));
   const [pending, setPending] = React.useState(false);
   const [error, setError] = React.useState<React.ReactNode>(null);
@@ -899,7 +860,7 @@ function PlanDialog({ plan, revision, onClose, onSaved }: { plan: PricePlan | nu
             <div className="grid gap-3 sm:grid-cols-3">
               <div className="grid gap-1 sm:col-span-2">
                 <label htmlFor={`plan-term-${row}-model`} className="text-sm font-medium"><Message id="operator.billingModel" /></label>
-                <Input id={`plan-term-${row}-model`} value={term.model} onChange={(e) => setTerm(row, { model: e.target.value })} disabled={pending} autoComplete="off" spellCheck={false} />
+                <OperatorModelPicker id={`plan-term-${row}-model`} value={term.model} onChange={(model) => setTerm(row, { model })} disabled={pending} loading={prices.loading || runtimeModels.loading} groups={[{ names: modelChoices }]} />
               </div>
               <div className="grid gap-1">
                 <label htmlFor={`plan-term-${row}-mode`} className="text-sm font-medium"><Message id="operator.planTermMode" /></label>

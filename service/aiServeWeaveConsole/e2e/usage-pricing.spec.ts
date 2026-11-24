@@ -103,7 +103,7 @@ test("the ledger shows pending usage and links a sealed usage entry to its reque
 
 test("model prices list base-tier sale prices and expand to every tier", async ({ page }) => {
   await page.route("**/api/admin/admin/v1/billing/prices", route => route.fulfill({ json: { items: [{
-    model: "claude-x", routed: true, source: "catalog", rate_ppm: 800_000,
+    model: "claude-x", routed: false, source: "catalog", rate_ppm: 800_000,
     items: [
       { meter: "input", base_micro_per_m: 3_000_000, sale_micro_per_m: 2_400_000 },
       { meter: "input.cache_read", base_micro_per_m: 300_000, sale_micro_per_m: 240_000 },

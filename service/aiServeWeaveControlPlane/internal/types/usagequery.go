@@ -70,10 +70,10 @@ type UsageRecordListResponse struct {
 }
 
 // PriceView is one alias's prices. Ref, ModelRatePPM and PlanRatePPM are
-// operator only; Routed is false for an alias only configured in pricing.
+// operator only. Routed reports whether the model has a published route.
 //
 // PriceView 是一个别名的价格。Ref、ModelRatePPM 与 PlanRatePPM 仅运维可见；只在定价中
-// 配置过的别名 Routed 为 false。
+// 配置过的别名与直连模型的 Routed 为 false。
 type PriceView struct {
 	Model        string          `json:"model"`
 	Routed       bool            `json:"routed"`

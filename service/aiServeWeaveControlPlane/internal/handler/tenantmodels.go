@@ -1,10 +1,12 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 
 	"AIServeWeave/common/nodeaccess"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/fleet"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/logic"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/svc"
 )
 
@@ -22,57 +24,63 @@ func listTenantModels(ctx *svc.ServiceContext) http.HandlerFunc {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
-		visible, err := ctx.Logic.TenantModelFilter(r.Context(), actor)
-		if err != nil {
-			respondErr(w, err)
-			return
-		}
-		allowedNode, err := ctx.Logic.TenantNodeFilter(r.Context(), actor)
-		if err != nil {
-			respondErr(w, err)
-			return
-		}
 		catalog, err := ctx.Fleet.TenantModels(r.Context())
 		recordFleetCall(ctx, err)
 		if err != nil {
 			respondFleetErr(w, err)
 			return
 		}
-		if allowedNode != nil {
-			catalog = catalog.FilterNodes(allowedNode)
-		}
-		allowedAccount, heldAccount, err := ctx.Logic.TenantAccountAccess(r.Context(), actor.TenantID)
+		catalog, err = filterTenantModelCatalog(r.Context(), ctx.Logic, actor, catalog)
 		if err != nil {
 			respondErr(w, err)
 			return
 		}
-		tenantID := actor.TenantID
-		ownNode := func(agentID string) bool {
-			owner, owned := nodeaccess.OwnerOf(agentID)
-			return owned && owner != "" && owner == tenantID
-		}
-		services := catalog.Services[:0]
-		for _, service := range catalog.Services {
-			if allowedAccount(service.AgentID, service.ServiceID) {
-				// The tenant's own Agent or a bought account is dedicated;
-				// everything else is a shared platform service.
-				// 商户自有 Agent 或购买的账号为独享，其余都是平台共享服务。
-				if ownNode(service.AgentID) || heldAccount(service.AgentID, service.ServiceID) {
-					service.Scope = fleet.ScopeDedicated
-				} else {
-					service.Scope = fleet.ScopeCloud
-				}
-				services = append(services, service)
-			}
-		}
-		catalog.Services = services
-		if visible != nil {
-			// The tenant's own nodes are exempt, matching the Gateway's
-			// scheduler.admitModel. / 商户自有节点豁免，与 Gateway 的
-			// scheduler.admitModel 一致。
-			catalog = catalog.FilterExcept(visible, ownNode)
-		}
 		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, http.StatusOK, catalog)
 	}
+}
+
+// filterTenantModelCatalog applies the same inventory permissions to model
+// discovery and to discovery of directly priced models.
+//
+// filterTenantModelCatalog 为模型目录和直连模型价格共用同一份清单权限。
+func filterTenantModelCatalog(ctx context.Context, service *logic.Service, actor logic.Actor, catalog fleet.TenantModelCatalog) (fleet.TenantModelCatalog, error) {
+	visible, err := service.TenantModelFilter(ctx, actor)
+	if err != nil {
+		return fleet.TenantModelCatalog{}, err
+	}
+	allowedNode, err := service.TenantNodeFilter(ctx, actor)
+	if err != nil {
+		return fleet.TenantModelCatalog{}, err
+	}
+	if allowedNode != nil {
+		catalog = catalog.FilterNodes(allowedNode)
+	}
+	allowedAccount, heldAccount, err := service.TenantAccountAccess(ctx, actor.TenantID)
+	if err != nil {
+		return fleet.TenantModelCatalog{}, err
+	}
+	ownNode := func(agentID string) bool {
+		owner, owned := nodeaccess.OwnerOf(agentID)
+		return owned && owner == actor.TenantID
+	}
+	services := catalog.Services[:0]
+	for _, item := range catalog.Services {
+		if !allowedAccount(item.AgentID, item.ServiceID) {
+			continue
+		}
+		if ownNode(item.AgentID) || heldAccount(item.AgentID, item.ServiceID) {
+			item.Scope = fleet.ScopeDedicated
+		} else {
+			item.Scope = fleet.ScopeCloud
+		}
+		services = append(services, item)
+	}
+	catalog.Services = services
+	if visible != nil {
+		// The tenant's own nodes are exempt, as in Gateway scheduling.
+		// 商户自有节点豁免，与 Gateway 的调度规则一致。
+		catalog = catalog.FilterExcept(visible, ownNode)
+	}
+	return catalog, nil
 }

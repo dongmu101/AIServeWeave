@@ -1019,7 +1019,7 @@ Dodo 控制台里要把 webhook 指向 `<控制面地址>/billing/v1/dodo/webhoo
 | `POST /admin/v1/billing/checkout` | 租户 owner/admin | `{package_id, amount_minor?, provider?, pay_type?}`，`fixed` 包不得带金额，`custom` 包金额须在范围内；省略 `provider` 为 Dodo，`"ezfp"` 须带已配置的 `pay_type` 且商品为 CNY。返回 `201 {order_id, checkout_url}`。经 Dodo 首次购买时为租户创建 Dodo 客户；并发的首次购买以先记录的客户为准。服务商未配置或商品不能经它购买 `404`，选择非法 `400`，服务商出错或超时 `503` |
 | `POST /admin/v1/billing/portal` | 租户 owner/admin | 返回 Dodo 客户门户链接（发票、付款记录）；尚无客户时 `404` |
 | `GET /admin/v1/billing/ledger`、`/orders` | 租户会话 | 本租户账目与订单，游标分页；订单带 `provider`、`pay_type`，易支付订单的 `payment_id` 是去掉前缀的交易号。用量账目带 `period_start`、`period_end`、`request_count`；账目响应带 `pending_usage`（尚未封账的累计，金额为负：最新一条 `balance_after` 加上它就是余额） |
-| `GET /admin/v1/billing/prices` | 租户会话 | 本租户方案下、已获授权的路由别名的各计量项与各档售价，只给总倍率 |
+| `GET /admin/v1/billing/prices` | 租户会话 | 本租户方案下已获授权的路由别名，以及默认 Gateway 中已获授权、在服且有单独定价配置的同名直连模型的各档售价，只给总倍率 |
 | `POST /admin/v1/billing/orders/:id/refresh` | 租户会话 | 仅易支付；就本租户一笔待付款的易支付订单查询易支付，已付款则结算，返回订单（同一订单 5 秒内只查一次）；不是本租户的易支付订单 `404` |
 | `GET`、`POST /billing/v1/ezfp/notify` | 公开（RSA 签名） | 仅易支付；验签后结算，纯文本答复：最终结果 `200 success`，签名错误 `401 fail`，存储出错 `500 fail` |
 | `GET/POST /operator/v1/billing/packages`、`PUT .../packages/:id` | 平台会话 | 充值包管理；下架用 `active: false`，不删除（订单引用它） |

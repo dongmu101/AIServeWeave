@@ -36,7 +36,6 @@ test("model pricing warns about unpriced aliases, copies the official price and 
   await page.getByRole("button", { name: `编辑 org/${LONG_TEXT} 的定价`, exact: true }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByLabel("参照模型（价目表条目）", { exact: true })).toHaveValue("claude-x");
-  await expect(dialog.getByLabel("从价目表中选择…", { exact: true })).toHaveValue("claude-x");
   await expect(dialog.getByLabel("模型倍率", { exact: true })).toHaveValue("1.5");
   await dialog.getByRole("button", { name: "从官方价复制", exact: true }).click();
   await expect(dialog.getByLabel("输入单价（点 / 百万 token）", { exact: true })).toHaveValue("3");
@@ -55,6 +54,37 @@ test("model pricing warns about unpriced aliases, copies the official price and 
     model: `org/${LONG_TEXT}`, catalog_model: "claude-x", rate_ppm: 1_500_000, base_revision: 7,
     prices: [{ meter: "input", price_micro_per_m: 2_500_000 }, { meter: "output", price_micro_per_m: 15_000_000 }, { meter: "input.cache_read", price_micro_per_m: 300_000 }],
   } }]);
+});
+
+test("adding pricing uses a discovered model and keeps catalog search separate from the saved reference", async ({ page }) => {
+  const writes: unknown[] = [];
+  const model = "claude-sonnet-5-5";
+  await page.route("**/api/operator/operator/v1/models", route => route.fulfill({ json: {
+    collected_at: PRICING_CONFIG.revision.effective_at, models: [{ id: model, available_deployments: 1, deployments: [] }],
+  } }));
+  await page.route("**/api/operator/operator/v1/billing/pricing/models", async route => {
+    writes.push(route.request().postDataJSON());
+    await route.fulfill({ json: PRICING_CONFIG });
+  });
+  await page.route("**/api/operator/operator/v1/billing/catalog?*", route => route.fulfill({ json: {
+    items: new URL(route.request().url()).searchParams.get("q") === "do-not-save-this-text" ? [] : [CATALOG_ENTRY],
+    sync: { source: "embedded", entry_count: 1, version: 1 },
+  } }));
+  await page.goto("/operator/billing");
+  await page.getByRole("tab", { name: "模型定价", exact: true }).click();
+  await page.getByRole("button", { name: "设置别名定价", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("textbox", { name: "手动填写模型 ID" })).toHaveCount(0);
+  await dialog.getByRole("combobox", { name: "模型别名", exact: true }).selectOption(model);
+  const reference = dialog.getByRole("combobox", { name: "参照模型（价目表条目）", exact: true });
+  await reference.selectOption("claude-x");
+  await dialog.getByRole("searchbox", { name: "搜索价目表模型" }).fill("do-not-save-this-text");
+  await expect(dialog.getByRole("status")).toContainText("do-not-save-this-text");
+  await expect(reference).toHaveValue("claude-x");
+  await reference.selectOption("");
+  await dialog.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(writes).toEqual([{ model, catalog_model: "", prices: [], rate_ppm: 1_000_000, base_revision: 7 }]);
 });
 
 test("the catalog review shows old and new prices and approves exactly once", async ({ page }) => {
@@ -76,11 +106,11 @@ test("the catalog review shows old and new prices and approves exactly once", as
   await expect(tab.getByLabel("1 项待审核", { exact: true })).toBeVisible();
   await tab.click();
   await expect(page.getByText("最大变动 50%", { exact: true })).toBeVisible();
-  const changes = page.getByRole("row").filter({ hasText: "输入" });
+  const changes = page.getByRole("row").filter({ has: page.getByRole("cell", { name: "输入", exact: true }) });
   await expect(changes).toContainText("2");
   await expect(changes).toContainText("3");
   await expect(changes).toContainText("+50%");
-  await expect(page.getByRole("row").filter({ hasText: "输出" })).toHaveCount(0);
+  await expect(page.getByRole("cell", { name: "输出", exact: true })).toHaveCount(0);
 
   await page.getByRole("button", { name: "批准", exact: true }).click();
   await page.getByRole("dialog").getByRole("button", { name: "批准", exact: true }).click();
@@ -92,6 +122,9 @@ test("plans are created with factors and a tenant is moved onto one", async ({ p
   const writes: Write[] = [];
   const vip = { id: "plan_vip", name: "VIP", default_rate_ppm: 800_000, is_default: false, tenant_count: 0, models: [{ model: "a", rate_ppm: 900_000 }] };
   let plans: unknown[] = PRICING_CONFIG.plans;
+  await page.route("**/api/operator/operator/v1/models", route => route.fulfill({ json: {
+    collected_at: PRICING_CONFIG.revision.effective_at, models: [{ id: "a", available_deployments: 1, deployments: [] }],
+  } }));
   await page.route("**/api/operator/operator/v1/billing/plans", async route => {
     const request = route.request();
     if (request.method() === "GET") return route.fulfill({ json: { revision: PRICING_CONFIG.revision, items: plans } });
@@ -118,7 +151,7 @@ test("plans are created with factors and a tenant is moved onto one", async ({ p
   await dialog.getByLabel("名称", { exact: true }).fill("VIP");
   await dialog.getByLabel("默认系数", { exact: true }).fill("0.8");
   await dialog.getByRole("button", { name: "添加别名", exact: true }).click();
-  await dialog.getByLabel("模型别名", { exact: true }).fill("a");
+  await dialog.getByRole("combobox", { name: "模型别名", exact: true }).selectOption("a");
   await dialog.getByLabel("系数", { exact: true }).fill("101");
   await dialog.getByRole("button", { name: "保存", exact: true }).click();
   await expect(dialog.getByRole("alert")).toHaveText("第 1 行 倍率须在 0 到 100 之间，最多六位小数。");

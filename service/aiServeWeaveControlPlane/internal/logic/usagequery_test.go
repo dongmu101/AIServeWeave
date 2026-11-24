@@ -123,7 +123,7 @@ func TestTenantPricesFollowThePlanAndTheModelPolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	prices, err := f.svc.TenantPrices(ctx, f.ownerAt)
+	prices, err := f.svc.TenantPrices(ctx, f.ownerAt, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,10 +133,10 @@ func TestTenantPricesFollowThePlanAndTheModelPolicy(t *testing.T) {
 	if p := prices[0]; p.Ref != "" || p.RatePPM != 500_000 || saleOf(t, p, pricing.MeterOutput).SaleMicroPerM != 7_500_000 {
 		t.Errorf("claude-x = %+v, want no ref and half price", p)
 	}
-	if _, err := f.svc.TenantPrices(ctx, accountOperator); !errors.Is(err, logic.ErrForbidden) {
+	if _, err := f.svc.TenantPrices(ctx, accountOperator, nil); !errors.Is(err, logic.ErrForbidden) {
 		t.Errorf("operator: %v, want ErrForbidden", err)
 	}
-	if _, err := newFixture(t).svc.TenantPrices(ctx, f.ownerAt); !errors.Is(err, logic.ErrNotFound) {
+	if _, err := newFixture(t).svc.TenantPrices(ctx, f.ownerAt, nil); !errors.Is(err, logic.ErrNotFound) {
 		t.Errorf("billing off: %v, want ErrNotFound", err)
 	}
 }

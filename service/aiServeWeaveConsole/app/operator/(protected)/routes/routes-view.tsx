@@ -10,6 +10,7 @@ import * as React from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/console/confirm-dialog";
+import { OperatorModelPicker, useOperatorModelNames } from "@/components/console/operator-model-picker";
 import { useConsoleRequest } from "@/components/console/use-console-request";
 import { createRouteReadGate } from "@/lib/console/route-read-gate";
 import {ApiError } from "@/lib/console/errors";
@@ -21,6 +22,7 @@ const path = "/operator/v1/routes";
 export function RoutesView() {
   const { t } = useI18n();
   const call = useConsoleRequest();
+  const runtimeModels = useOperatorModelNames();
   const reads = React.useRef(createRouteReadGate());
   const draftInitialized = React.useRef(false);
   const [current, setCurrent] = React.useState<RouteSnapshot | null>(null);
@@ -122,8 +124,17 @@ export function RoutesView() {
           <div className="flex items-end gap-2"><label className="grid flex-1 gap-1 text-sm"><Message id="operator.modelAlias_cff727" values={{ content: <Input value={route.model} onChange={(e) => routeChange(index, { ...route, model: e.target.value })} /> }} /></label><Button variant="outline" onClick={() => edit(draft.filter((_, i) => i !== index))}><Message id="operator.deleteAlias" /></Button></div>
           {route.targets.map((target, targetIndex) => {
             const update = (next: typeof target) => routeChange(index, { ...route, targets: route.targets.map((item, i) => i === targetIndex ? next : item) });
+            const modelId = `route-${index}-target-${targetIndex}-model`;
             return <div key={targetIndex} className="space-y-2 rounded bg-muted/30 p-3">
-              <div className="grid gap-2 md:grid-cols-4"><label className="grid gap-1 text-sm"><Message id="operator.runtimeModel_198c4a" values={{ content: <Input value={target.runtime_model} onChange={(e) => update({ ...target, runtime_model: e.target.value })} /> }} /></label><label className="grid gap-1 text-sm"><Message id="operator.priorityLowerFirst_f3f29e" values={{ content: <Input type="number" step="1" value={target.priority ?? 0} onChange={(e) => update({ ...target, priority: Number(e.target.value) })} /> }} /></label><label className="grid gap-1 text-sm"><Message id="operator.weight0IsTreatedAs1_3d0783" values={{ content: <Input type="number" min="0" step="1" value={target.weight ?? 0} onChange={(e) => update({ ...target, weight: Number(e.target.value) })} /> }} /></label><label className="grid gap-1 text-sm"><Message id="operator.minimumVramBytes0ForUnlimited_0dbeb1" values={{ content: <Input type="number" min="0" step="1" value={target.min_gpu_memory_bytes ?? 0} onChange={(e) => update({ ...target, min_gpu_memory_bytes: Number(e.target.value) })} /> }} /></label></div>
+              <div className="grid items-start gap-2 md:grid-cols-4">
+                <div className="grid min-w-0 gap-1 text-sm">
+                  <label htmlFor={modelId}><Message id="operator.runtimeModel" /></label>
+                  <OperatorModelPicker id={modelId} value={target.runtime_model} onChange={(runtime_model) => update({ ...target, runtime_model })} loading={runtimeModels.loading} groups={[{ names: runtimeModels.names }]} />
+                </div>
+                <label className="grid gap-1 text-sm"><Message id="operator.priorityLowerFirst_f3f29e" values={{ content: <Input type="number" step="1" value={target.priority ?? 0} onChange={(e) => update({ ...target, priority: Number(e.target.value) })} /> }} /></label>
+                <label className="grid gap-1 text-sm"><Message id="operator.weight0IsTreatedAs1_3d0783" values={{ content: <Input type="number" min="0" step="1" value={target.weight ?? 0} onChange={(e) => update({ ...target, weight: Number(e.target.value) })} /> }} /></label>
+                <label className="grid gap-1 text-sm"><Message id="operator.minimumVramBytes0ForUnlimited_0dbeb1" values={{ content: <Input type="number" min="0" step="1" value={target.min_gpu_memory_bytes ?? 0} onChange={(e) => update({ ...target, min_gpu_memory_bytes: Number(e.target.value) })} /> }} /></label>
+              </div>
               <p className="text-sm"><Message id="operator.nodeSelectorAllLabelsMustMatchAnEmpty" /></p>
               {Object.entries(target.node_selector ?? {}).map(([key, value], selectorIndex) => <div className="flex gap-2" key={selectorIndex}><Input aria-label={t("operator.labelName")} value={key} onChange={(e) => { if (e.target.value !== key && Object.hasOwn(target.node_selector ?? {}, e.target.value)) { setError(<Message id={"operator.labelNamesMustBeUniqueTheOriginalLabel"} />); return; } update({ ...target, node_selector: Object.fromEntries(Object.entries(target.node_selector ?? {}).map((entry, i) => i === selectorIndex ? [e.target.value, value] : entry)) }); }} /><Input aria-label={t("operator.labelValue")} value={value} onChange={(e) => update({ ...target, node_selector: { ...target.node_selector, [key]: e.target.value } })} /><Button variant="outline" onClick={() => update({ ...target, node_selector: Object.fromEntries(Object.entries(target.node_selector ?? {}).filter(([name]) => name !== key)) })}><Message id="operator.deleteLabel" /></Button></div>)}
               <div className="flex gap-2"><Button variant="outline" onClick={() => { let key = "label"; while (Object.hasOwn(target.node_selector ?? {}, key)) key += "_"; update({ ...target, node_selector: { ...target.node_selector, [key]: "" } }); }}><Message id="operator.addLabel" /></Button><Button variant="outline" onClick={() => routeChange(index, { ...route, targets: route.targets.filter((_, i) => i !== targetIndex) })}><Message id="operator.deleteTarget" /></Button></div>

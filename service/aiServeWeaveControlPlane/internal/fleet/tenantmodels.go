@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"AIServeWeave/common/nodeview"
+	"AIServeWeave/common/runtime"
 )
 
 // TenantModelService is the public description of an Agent-reported AI backend.
@@ -35,6 +36,9 @@ type TenantModelService struct {
 	// CLIUsage 是该服务所运行 CLI 的订阅额度，仅当 codex 或 claude 服务的 Agent 上报过
 	// 才存在。它是 CLI 账户的共享额度，不是按租户划分的数字。
 	CLIUsage *nodeview.CLIUsage `json:"cli_usage,omitempty"`
+
+	serving      bool
+	capabilities map[string]string
 }
 
 // Scope values of TenantModelService.
@@ -80,12 +84,55 @@ func (a *Aggregator) TenantModels(ctx context.Context) (TenantModelCatalog, erro
 				AgentID: node.NodeID, ServiceID: backend.ID,
 				NodeOnline: node.Live, Scope: ScopeCloud,
 				Kind: backend.Kind, State: backend.State, Version: backend.Version,
-				Models:   backend.Models,
-				CLIUsage: cliUsageFor(node.CLIUsage, backend.ID, backend.Kind),
+				Models:       backend.Models,
+				CLIUsage:     cliUsageFor(node.CLIUsage, backend.ID, backend.Kind),
+				serving:      node.Live && !node.Draining && !node.Maintenance && backend.State == string(runtime.StateHealthy),
+				capabilities: backend.Capabilities,
 			})
 		}
 	}
 	return out, nil
+}
+
+// DirectModelIDs returns model IDs backed by an observed serving runtime.
+// Call it after applying the tenant's node, account and model filters.
+//
+// DirectModelIDs 返回有在服运行时的模型 ID，应在应用租户的节点、账号与模型授权后调用。
+func (c TenantModelCatalog) DirectModelIDs() []string {
+	var ids []string
+	seen := make(map[string]bool)
+	for _, service := range c.Services {
+		if !service.serving {
+			continue
+		}
+		for _, m := range service.Models {
+			if m.ID != "" && !seen[m.ID] && servesTokenModel(service.capabilities, m.Capabilities) {
+				ids = append(ids, m.ID)
+				seen[m.ID] = true
+			}
+		}
+	}
+	return ids
+}
+
+// servesTokenModel checks the reported capabilities of both model and runtime.
+// servesTokenModel 按模型与运行时共同上报的能力确认可用的 token 推理入口。
+func servesTokenModel(backend, model map[string]string) bool {
+	for _, cap := range []runtime.Capability{
+		runtime.CapabilityChat, runtime.CapabilityChatStream,
+		runtime.CapabilityMessages, runtime.CapabilityMessagesNative,
+		runtime.CapabilityCompletions, runtime.CapabilityResponses, runtime.CapabilityEmbeddings,
+	} {
+		level, reported := model[string(cap)]
+		runtimeLevel := backend[string(cap)]
+		if !reported {
+			level = runtimeLevel
+		}
+		if level == string(runtime.SupportSupported) && runtimeLevel != string(runtime.SupportUnsupported) {
+			return true
+		}
+	}
+	return false
 }
 
 // Filter keeps only the models visible reports true for, and drops a service

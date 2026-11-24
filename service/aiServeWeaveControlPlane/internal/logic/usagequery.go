@@ -62,9 +62,8 @@ func UsageRecordDetails(r model.UsageRecord) model.UsageDetails {
 // EffectivePrice 是某个别名当前在一个方案下的价格。
 type EffectivePrice struct {
 	Model string
-	// Routed is whether a model route serves the alias; an alias only
-	// configured in pricing is listed with Routed false.
-	// Routed 表示是否有模型路由服务该别名；只在定价中配置过的别名以 Routed 为 false 列出。
+	// Routed is whether a published route serves the alias.
+	// Routed 表示是否有已发布的模型路由服务该别名。
 	Routed bool
 	// Source is where the prices come from (model.PriceSource*); Ref is
 	// the catalog entry when Source is catalog.
@@ -169,13 +168,12 @@ func (s *Service) OperatorEffectivePrices(ctx context.Context, actor Actor, plan
 	return out, nil
 }
 
-// TenantPrices lists the actor's tenant's prices: the routed aliases its
-// model policy allows, under its price plan as of now, without the catalog
-// entries behind them. Billing off is ErrNotFound.
+// TenantPrices lists authorized route aliases and configured direct model IDs
+// from the tenant's filtered live inventory, priced under its current plan.
 //
-// TenantPrices 列出 actor 所属租户的价格：其模型授权允许的路由别名，按其当前所属的价格
-// 方案计价，不含别名背后的价目表条目。计费关闭时返回 ErrNotFound。
-func (s *Service) TenantPrices(ctx context.Context, actor Actor) ([]EffectivePrice, error) {
+// TenantPrices 按租户当前方案为已授权的路由别名和已定价的直连模型计价。
+// directModels 来自已按租户权限过滤的在服模型清单。
+func (s *Service) TenantPrices(ctx context.Context, actor Actor, directModels []string) ([]EffectivePrice, error) {
 	if !s.billingEnabled() {
 		return nil, ErrNotFound
 	}
@@ -199,16 +197,37 @@ func (s *Service) TenantPrices(ctx context.Context, actor Actor) ([]EffectivePri
 	if err != nil {
 		return nil, err
 	}
-	out := []EffectivePrice{}
+	doc := snap.config.Document
+	planID := plans[actor.TenantID]
+	if _, known := doc.Plans[planID]; !known {
+		planID = doc.DefaultPlan
+	}
+	planModels := doc.Plans[planID].Models
+	aliases := make(map[string]bool, len(routed))
 	for _, alias := range routed {
+		aliases[alias] = true
+	}
+	for _, alias := range directModels {
+		_, configured := doc.Models[alias]
+		_, inPlan := planModels[alias]
+		if !aliases[alias] && (configured || inPlan) {
+			aliases[alias] = false
+		}
+	}
+
+	out := []EffectivePrice{}
+	for _, alias := range slices.Sorted(maps.Keys(aliases)) {
 		if !policy.Allows(alias) {
 			continue
 		}
-		price, err := s.effectivePrice(ctx, snap, alias, plans[actor.TenantID], now)
+		price, err := s.effectivePrice(ctx, snap, alias, planID, now)
 		if err != nil {
 			return nil, err
 		}
-		price.Routed, price.Ref = true, ""
+		price.Routed, price.Ref = aliases[alias], ""
+		if !price.Routed && price.Source == model.PriceSourceNone {
+			continue
+		}
 		out = append(out, price)
 	}
 	return out, nil

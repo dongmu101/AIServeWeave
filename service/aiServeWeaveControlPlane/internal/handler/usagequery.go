@@ -172,7 +172,20 @@ func getTenantPrices(ctx *svc.ServiceContext) http.HandlerFunc {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
-		prices, err := ctx.Logic.TenantPrices(r.Context(), actor)
+		var directModels []string
+		if ctx.Fleet != nil && ctx.Logic.UsageCostsVisible() && actor.TenantID != "" && actor.TenantID != model.PlatformScope {
+			catalog, err := ctx.Fleet.TenantModels(r.Context())
+			recordFleetCall(ctx, err)
+			if err == nil && !catalog.Partial {
+				catalog, err = filterTenantModelCatalog(r.Context(), ctx.Logic, actor, catalog)
+				if err != nil {
+					respondErr(w, err)
+					return
+				}
+				directModels = catalog.DirectModelIDs()
+			}
+		}
+		prices, err := ctx.Logic.TenantPrices(r.Context(), actor, directModels)
 		if err != nil {
 			respondErr(w, err)
 			return
