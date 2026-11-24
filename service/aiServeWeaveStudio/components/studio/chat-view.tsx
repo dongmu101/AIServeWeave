@@ -3,7 +3,6 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { useChat } from "@ai-sdk/react";
-import { DefaultChatTransport } from "ai";
 import { BrainIcon, CheckIcon, ChevronRightIcon, CopyIcon, RotateCcwIcon, TriangleAlertIcon } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "cn";
@@ -13,6 +12,7 @@ import { Composer, type ComposerHandle } from "@/components/studio/composer";
 import { takeFirstMessage } from "@/components/studio/first-message";
 import { Markdown } from "@/components/studio/markdown";
 import { sendToSignIn } from "@/components/studio/session-expired";
+import { StudioChatTransport } from "@/lib/studio/chat-transport";
 import { errorMessage, type StudioModel } from "@/lib/studio/contract";
 import { messageText, type Conversation, type StudioUIMessage } from "@/lib/studio/conversations";
 import { buildSendBody } from "@/lib/studio/send-request";
@@ -49,7 +49,7 @@ export function ChatView({
 
   const transport = React.useMemo(
     () =>
-      new DefaultChatTransport<StudioUIMessage>({
+      new StudioChatTransport<StudioUIMessage>({
         api: `/api/studio/conversations/${conversation.id}/stream`,
         fetch: async (input, init) => {
           const response = await fetch(input, init);

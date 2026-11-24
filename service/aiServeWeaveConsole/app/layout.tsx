@@ -32,16 +32,23 @@ export async function generateMetadata(): Promise<Metadata> {
   return { title: t("common.consoleTitle"), description: t("common.consoleDescription"), robots: { index: false, follow: false } };
 }
 
+/**
+ * RootLayout hands the provider only the locale. The catalogue is loaded by
+ * the provider itself (a static chunk in the browser), so it is not inlined
+ * into every HTML page.
+ *
+ * RootLayout 只把语言交给 provider。词典由 provider 自己加载（浏览器中是静态 chunk），因此
+ * 不会内联进每个 HTML 页面。
+ */
 export default async function RootLayout({ children }: LayoutProps<"/">) {
   const locale = await readLocale();
-  const messages = await loadMessages(locale);
   return (
     <html
       lang={locale}
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="flex min-h-full flex-col bg-background text-foreground">
-        <I18nProvider initialLocale={locale} initialMessages={messages}>
+        <I18nProvider initialLocale={locale}>
           {children}
           <Toaster position="top-center" />
         </I18nProvider>

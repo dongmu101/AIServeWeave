@@ -13,7 +13,12 @@ make release VERSION=v3.0.0
 make publish VERSION=v3.1.1 PREBUILT=dist PUBLISH_TAGS="v3.1.1 latest" FORCE=1   # dist/ 须是 v3.1.1 的 build-release.sh 产物；不传 PREBUILT 则在本机编译
 
 更新
-make  upgrade.sh
+
+```bash
+deploy/upgrade.sh
+```
+
+升级收尾时，脚本默认在 Linux 宿主机执行 `sync`，再向 `/proc/sys/vm/drop_caches` 写入 `1`，释放整台宿主机可丢弃的文件页缓存。权限不足、接口受限或刷盘失败时会告警，升级仍会完成。清理后首次读取文件可能增加磁盘 I/O。
 
 升级会重建 Gateway。Compose 给 Gateway 的 `stop_grace_period` 为 75 秒：Gateway 收到 SIGTERM 后先等进行中的请求结束，再关闭 Agent 隧道，每段最多 30 秒，空闲时立即退出。新容器开始监听并等 Agent 重新连上之前，单副本部署的新请求会短暂收到 502 或 503，客户端重试即可。
 

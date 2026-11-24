@@ -59,6 +59,10 @@ before upgrading; do not assume a `0.x` bump is safe by default.
 
 ### Changed
 
+- 减轻前端服务端的单次请求开销，为流量增长做准备：
+  - Console 不再把当前语言的整份词典（约 250 KB）内联进每个 HTML 页面。`I18nProvider` 只接收语言，浏览器以带哈希、可长期缓存的静态 chunk 加载词典，服务端仍输出完整翻译的 HTML。`/login` 从 267 KB 降到约 20 KB。新增 `catalogue()`，每种语言共用同一个 promise。
+  - Studio 的流式回答改为服务端原样转发 Gateway 的 SSE 字节，由浏览器里的 `StudioChatTransport` 翻译成 AI SDK UI 消息流，服务端不再逐个 token 解析和重新编码。截断、停止、拒绝的表现不变。
+  - 公开定价页的目录在每个 Console 进程内缓存 30 秒（`createTtlCache`），失败不缓存；并发访问共用一次在途请求。价格变更最多延迟 30 秒出现在 `/pricing`。
 - Go 服务镜像不再在 Docker 里编译。新增 `scripts/build-go.sh`，在宿主机交叉编译 Registry、ControlPlane、Gateway 及 Gateway 内置的 Agent，产物放进 `.image-build/`。根目录 Dockerfile 只拷贝目标平台的二进制，构建上下文也只剩这个目录，不再下载模块，也不需要 Go 工具链。`make release` 与 `release.yml` 用 `PREBUILT=dist`，对照 `SHA256SUMS.txt` 校验后直接取 `build-release.sh` 的产物，镜像和 GitHub Release 是同一批字节。**行为变化**：
   - `make publish` 的 `AGENT_DIST` 改为 `PREBUILT`。
   - 删除 `make release-agent-dist`、`check-docker-mem`、`BUILD_PARALLELISM`。

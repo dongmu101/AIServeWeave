@@ -1,28 +1,26 @@
-import { createUIMessageStream, createUIMessageStreamResponse } from "ai";
-
 import { errorMessage, studioErrorCode } from "@/lib/studio/contract";
-import type { StudioUIMessage } from "@/lib/studio/conversations";
 import { isTrustedWrite } from "@/lib/studio/request-origin";
 import { parseSendBody } from "@/lib/studio/send-request";
-import { SSEParser } from "@/lib/studio/sse";
-import { createTranslator } from "@/lib/studio/stream-translate";
 import { serverConfig } from "@/lib/server/config";
 import { readBoundedText } from "@/lib/server/responses";
 import { readSession } from "@/lib/server/session";
 
 /**
- * The chat stream: forwards one send to the Gateway's Studio SSE and
- * translates its frames into AI SDK UI message chunks as they arrive. Nothing
- * is persisted here; the Gateway writes both sides of the turn. When the
- * browser stops, its request aborts, which aborts the upstream request, which
- * the Gateway records as an incomplete reply.
+ * The chat stream: authenticates one send, forwards it to the Gateway's
+ * Studio SSE and relays the bytes untouched. The translation into AI SDK UI
+ * message chunks runs in the browser (lib/studio/chat-transport.ts), so a
+ * streamed answer costs this server no per-token parsing. Nothing is
+ * persisted here; the Gateway writes both sides of the turn. When the browser
+ * stops, its request aborts, which aborts the upstream request, which the
+ * Gateway records as an incomplete reply.
  *
  * A refusal answers in plain text with Studio's fixed wording, which is what
  * the AI SDK transport shows as the error; the stable code rides in a header.
  *
- * 对话流：把一次发送转发到 Gateway 的 Studio SSE，并在帧到达时转换为 AI SDK 的 UI
- * message chunk。这里不做任何持久化，一轮的两侧都由 Gateway 写入。浏览器停止时其请求
- * 中止，进而中止上游请求，Gateway 据此记为未完成的回复。
+ * 对话流：鉴权一次发送，转发到 Gateway 的 Studio SSE，并原样转发字节。转换为 AI SDK UI
+ * message chunk 的工作在浏览器里进行（lib/studio/chat-transport.ts），流式回答的每个
+ * token 都不再让本服务端解析。这里不做任何持久化，一轮的两侧都由 Gateway 写入。浏览器
+ * 停止时其请求中止，进而中止上游请求，Gateway 据此记为未完成的回复。
  *
  * 拒绝时以纯文本返回 Studio 的固定文案（AI SDK transport 会把它作为错误展示），稳定
  * 错误码放在响应头里。
@@ -83,27 +81,12 @@ export async function POST(request: Request, context: Context): Promise<Response
     return refuse(upstream.status === 200 ? 502 : upstream.status, code);
   }
 
-  const source = upstream.body.pipeThrough(new TextDecoderStream());
-  const stream = createUIMessageStream<StudioUIMessage>({
-    async execute({ writer }) {
-      const parser = new SSEParser();
-      const translator = createTranslator();
-      const reader = source.getReader();
-      try {
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          for (const frame of parser.push(value)) {
-            for (const chunk of translator.frame(frame)) writer.write(chunk);
-          }
-        }
-      } catch {
-        // The upstream read failed or was aborted; end() below reports it.
-        // 上游读取失败或被中止；下面的 end() 会报告它。
-      }
-      for (const chunk of translator.end()) writer.write(chunk);
-    },
-    onError: () => errorMessage("stream_interrupted"),
+  // The Gateway's bytes go out untouched; only its frames' content reaches
+  // the browser, none of its headers. If the upstream is cut, this response
+  // is cut too and the browser reports the interruption.
+  // Gateway 的字节原样发出；到达浏览器的只有其帧内容，不含它的响应头。上游被截断时本响应
+  // 随之截断，由浏览器报告中断。
+  return new Response(upstream.body, {
+    headers: { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-store", "X-Accel-Buffering": "no" },
   });
-  return createUIMessageStreamResponse({ stream, headers: { "Cache-Control": "no-store" } });
 }

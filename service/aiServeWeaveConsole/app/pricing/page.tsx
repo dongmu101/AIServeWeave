@@ -14,6 +14,7 @@ import {
   type Catalog,
 } from "@/lib/console/billing";
 import { accountKindLabel } from "@/lib/console/account-sales";
+import { createTtlCache } from "@/lib/console/ttl-cache";
 import { loginPath, signupPath } from "@/lib/console/internal-path";
 import { loadMessages } from "@/lib/i18n/messages";
 import { createTranslator } from "@/lib/i18n/translate";
@@ -40,7 +41,7 @@ export async function generateMetadata(): Promise<Metadata> {
  * The control plane uses 404 for billing disabled. A transient failure must
  * not look like an empty catalog. This request needs no session.
  */
-async function loadCatalog(): Promise<Catalog | "disabled" | "failed"> {
+async function fetchCatalog(): Promise<Catalog | "disabled" | "failed"> {
   const result = await callControlPlane({ method: "GET", path: "/billing/v1/catalog" });
   if (result.kind !== "response") return "failed";
   if (result.status === 404) return "disabled";
@@ -51,6 +52,19 @@ async function loadCatalog(): Promise<Catalog | "disabled" | "failed"> {
     return "failed";
   }
 }
+
+/**
+ * The catalog is the same for every visitor and this is the page anonymous
+ * traffic lands on, so each Console process reuses it for CATALOG_TTL_MS
+ * instead of calling the control plane per visit. A price change shows up
+ * within that window. A failure is not kept: the next visit asks again.
+ *
+ * 目录对每个访客都一样，而匿名流量正落在这一页，因此每个 Console 进程在 CATALOG_TTL_MS 内
+ * 复用它，而不是每次访问都调用控制面。价格变更在这段时间内生效。失败不缓存：下一次访问会
+ * 重新请求。
+ */
+const CATALOG_TTL_MS = 30_000;
+const loadCatalog = createTtlCache(fetchCatalog, { ttlMs: CATALOG_TTL_MS, keep: catalog => catalog !== "failed" });
 
 /**
  * The public pricing page. It needs no session: it only reads the catalog. The

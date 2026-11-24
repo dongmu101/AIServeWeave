@@ -42,6 +42,7 @@ usage() {
   默认（跟随模式）  拉取代码与 make release / make publish 最近推送的 :latest 镜像，重启有变化的
                     容器，不在本机构建；.env 未设置 AISW_IMAGE_REPO 时写入 docker.io/dongmu101。
                     已用 --image-tag 固定版本的部署保持固定，恢复跟随用 --follow
+  升级收尾          Linux 宿主机刷盘并释放文件页缓存；无法释放时仅告警
 
   服务...           源码构建时只重建这些服务（registry-init registry controlplane gateway console studio），默认全部
   --build           改为从当前代码在本机构建镜像（写入 .env：AISW_IMAGE_FOLLOW=false，清空
@@ -257,6 +258,14 @@ if (( PRUNE == 1 )); then
     docker image rm "$(project_name)-${service}" >/dev/null 2>&1 || true
   done
   docker builder prune -f --keep-storage 2GB >/dev/null
+fi
+
+if [[ "$OSTYPE" == linux* ]]; then
+  if [[ -w /proc/sys/vm/drop_caches ]] && sync && printf '1\n' > /proc/sys/vm/drop_caches; then
+    log "已释放宿主机文件页缓存"
+  else
+    warn "无法释放宿主机文件页缓存，继续完成升级"
+  fi
 fi
 
 echo

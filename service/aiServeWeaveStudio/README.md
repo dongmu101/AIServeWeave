@@ -13,7 +13,7 @@ Studio 是面向租户成员的 AI 工作台：与平台上的模型对话，以
 - 用户用 Console 的同一套租户账号登录。控制面签发的会话令牌用 AES-256-GCM 密封进 HttpOnly Cookie（`aisw_studio_session`），浏览器读不到。
 - 除登录、登出外，Studio 服务端只调用 Gateway 的 Studio API。浏览器经 `/api/studio/*` 访问，只放行白名单内的方法与路径（`lib/studio/upstream-routes.ts`），错误体只保留稳定错误码。
 - Gateway 用控制面内部接口 `POST /internal/v1/sessions/verify` 校验会话。会话令牌在 `/v1/*` 上无效，API Key 在 `/studio/v1/*` 上也无效。
-- 发送不走白名单转发，而是 `POST /api/studio/conversations/{id}/stream`：转发到 Gateway `POST /studio/v1/conversations/{id}/messages`，把 Gateway 的 SSE 帧翻译成 Vercel AI SDK 的 UI 消息流（`lib/studio/stream-translate.ts`）。对话与消息由 Gateway 存在控制面，Studio 不存储。
+- 发送不走白名单转发，而是 `POST /api/studio/conversations/{id}/stream`：鉴权后转发到 Gateway `POST /studio/v1/conversations/{id}/messages`，并把 Gateway 的 SSE 字节原样转回浏览器。翻译成 Vercel AI SDK UI 消息流的工作在浏览器里完成（`lib/studio/chat-transport.ts` → `gateway-stream.ts` → `stream-translate.ts`），服务端不再逐个 token 解析。浏览器收到的只是 Gateway 帧的内容：用户自己的会话与回答，以及固定文案的错误码，不含任何响应头或令牌。对话与消息由 Gateway 存在控制面，Studio 不存储。
 - Gateway 拒绝会话（401）时，页面经 `/api/session/expired` 清掉失效的 Cookie 再去登录。
 
 ## 本地运行
