@@ -28,6 +28,8 @@ Compose 自动为 Gateway、Registry、ControlPlane、Console 和 Studio 创建 
 
 各服务的标准输出和标准错误会追加到对应文件，并继续出现在 `docker compose logs`。文件按 10 MiB 轮转，保留 `.log.1` 和 `.log.2` 两份归档。文件留在宿主机，容器重建后继续追加。多个副本须分别挂载独立目录。
 
+数据库迁移等通过 `docker compose run` 覆盖命令的一次性操作直接输出到终端。若用 `docker-compose.override.yaml` 覆盖常驻服务的 `command`，首个参数须保留 `--aisw-capture-logs` 才会启用文件日志。
+
 在部署目录下查看或检索日志：
 
 ```bash
