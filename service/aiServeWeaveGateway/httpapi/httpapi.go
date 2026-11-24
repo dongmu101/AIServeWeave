@@ -14,6 +14,7 @@ import (
 	"AIServeWeave/service/aiServeWeaveGateway/ratelimit"
 	"AIServeWeave/service/aiServeWeaveGateway/scheduler"
 	"AIServeWeave/service/aiServeWeaveGateway/workflow"
+	"github.com/redis/go-redis/v9"
 )
 
 // Config configures the HTTP front door.
@@ -328,6 +329,10 @@ type Config struct {
 	// 环境得不到持久化的用量记录，与 RequestLogClient 已经遵循的同一种
 	// 「为 nil 时退化」模式。
 	UsageLedgerClient UsageLedgerClient
+	// UsageLedgerRedis stages records durably before delivery. The supplied
+	// Redis client must support streams and honor context timeouts.
+	UsageLedgerRedis    *redis.Client
+	UsageLedgerConsumer string
 	// UsageLedgerBufferSize bounds the in-memory push buffer. Zero uses
 	// DefaultUsageLedgerBufferSize.
 	//
@@ -525,7 +530,9 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 	// 意味着按租户/模型的持久化用量账本无处可去，本副本因此干脆不记录，而
 	// 不是缓冲一堆永远不会被读取的记录。
 	var usageLedgerPusher *usageLedgerPusher
+	var usageOutbox *usageLedgerOutbox
 	if cfg.UsageLedgerClient != nil {
+		h.metrics.initializeUsageLedger(cfg.UsageLedgerRedis != nil)
 		usageLedgerPusher = newUsageLedgerPusher(cfg.UsageLedgerClient, clock, logger, h.metrics, usageLedgerPushConfig{
 			BufferSize:    cfg.UsageLedgerBufferSize,
 			BatchSize:     cfg.UsageLedgerBatchSize,
@@ -533,6 +540,15 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 		})
 		go usageLedgerPusher.run()
 		h.usageLedger = usageLedgerPusher
+		if cfg.UsageLedgerRedis != nil {
+			consumer := cfg.UsageLedgerConsumer
+			if consumer == "" {
+				consumer = reqid.New()
+			}
+			usageOutbox = newUsageLedgerOutbox(cfg.UsageLedgerRedis, consumer, usageLedgerPusher)
+			usageOutbox.start()
+			h.usageLedger = usageOutbox
+		}
 	}
 
 	// The response-turn persister follows the same nil-degrades pattern: no
@@ -668,6 +684,7 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 		cleaner:           cleaner,
 		requestLogPusher:  pusher,
 		usageLedgerPusher: usageLedgerPusher,
+		usageOutbox:       usageOutbox,
 	}
 }
 
@@ -693,6 +710,7 @@ type Server struct {
 	cleaner           *artifactCleaner
 	requestLogPusher  *requestLogPusher
 	usageLedgerPusher *usageLedgerPusher
+	usageOutbox       *usageLedgerOutbox
 }
 
 // Close stops the background job syncer, persister, recoverer, artifact
@@ -744,6 +762,9 @@ func (s *Server) Close() {
 	}
 	if s.requestLogPusher != nil {
 		s.requestLogPusher.Stop()
+	}
+	if s.usageOutbox != nil {
+		s.usageOutbox.stop()
 	}
 	if s.usageLedgerPusher != nil {
 		s.usageLedgerPusher.Stop()

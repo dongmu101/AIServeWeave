@@ -25,6 +25,8 @@ const site = {
   "site.title": "KI-Modell-API-Plattform",
   "pricing.accountsHint": "Exklusive Nutzung dedizierter Claude-Code- oder Codex-Kapazität für einen Kalendermonat (UTC). Pläne verlängern sich nicht automatisch.",
   "pricing.packagesHint": "Guthaben wird nach bestätigter Zahlung Ihrem Konto gutgeschrieben und pro Token zu den unten stehenden Modellpreisen abgezogen.",
-  "pricing.pricesHint": "Guthaben pro 1 Million Eingabe- und Ausgabe-Token."
+  "pricing.pricesHint": "Guthaben pro 1 Million Eingabe- und Ausgabe-Token.",
+  "pricing.catalogLoadFailed": "Der Preiskatalog konnte nicht geladen werden. Bitte versuchen Sie es später erneut.",
+  "pricing.noModelPrices": "Derzeit sind keine Modellpreise veröffentlicht.",
 } as const;
 export default site;

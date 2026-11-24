@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { DEFAULT_LANDING, internalPath, loginPath } from "./internal-path.ts";
+import { DEFAULT_LANDING, internalPath, loginPath, signupPath } from "./internal-path.ts";
 
 test("internalPath keeps in-site paths and rejects everything else", () => {
   const cases: { name: string; input: string | null | undefined; want: string }[] = [
@@ -15,6 +15,8 @@ test("internalPath keeps in-site paths and rejects everything else", () => {
     { name: "relative path", input: "console", want: DEFAULT_LANDING },
     { name: "login itself", input: "/login", want: DEFAULT_LANDING },
     { name: "login with query", input: "/login?next=/console", want: DEFAULT_LANDING },
+    { name: "signup callback loop", input: "/a/../signup#form", want: DEFAULT_LANDING },
+    { name: "browser strips tab after leading slash", input: "/\t/evil.example", want: DEFAULT_LANDING },
   ];
 
   for (const item of cases) {
@@ -24,6 +26,12 @@ test("internalPath keeps in-site paths and rejects everything else", () => {
       `${item.name}: internalPath(${JSON.stringify(item.input)})`
     );
   }
+});
+
+test("signupPath returns buyers to the selected billing tab", () => {
+  assert.equal(signupPath("/console/billing?tab=packages"), "/signup?next=%2Fconsole%2Fbilling%3Ftab%3Dpackages");
+  assert.equal(signupPath("//evil.example"), "/signup");
+  assert.equal(signupPath("/signup?next=/console"), "/signup");
 });
 
 test("loginPath carries only a sanitized return address", () => {

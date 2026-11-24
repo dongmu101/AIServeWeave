@@ -5,7 +5,7 @@ import { notFound, redirect } from "next/navigation";
 
 import { SignupForm } from "@/app/signup/signup-form";
 import { LEGAL_PATHS, SiteFooter } from "@/components/site/site-footer";
-import { DEFAULT_LANDING } from "@/lib/console/internal-path";
+import { internalPath, loginPath } from "@/lib/console/internal-path";
 import { serverConfig } from "@/lib/server/config";
 import { readSession } from "@/lib/server/session";
 
@@ -17,13 +17,15 @@ import { readSession } from "@/lib/server/session";
  * 自助注册页。只有部署设置了 AISW_CONSOLE_SIGNUP_ENABLED 时它才存在，否则与任何未知
  * 页面一样是 404。已登录的访客会被送往控制台。
  */
-export default async function SignupPage() {
+export default async function SignupPage({ searchParams }: { searchParams: Promise<{ next?: string | string[] }> }) {
   if (!serverConfig().signupEnabled) {
     notFound();
   }
+  const requested = (await searchParams).next;
+  const target = internalPath(Array.isArray(requested) ? requested[0] : requested);
   const session = await readSession();
   if (session) {
-    redirect(DEFAULT_LANDING);
+    redirect(target);
   }
 
   return (
@@ -36,12 +38,12 @@ export default async function SignupPage() {
           <p className="text-sm text-muted-foreground">
             <Message id="auth.createANewTenantAndBecomeItsOwner" /></p>
         </div>
-        <SignupForm />
+        <SignupForm next={target} />
         <p className="mt-4 text-xs text-muted-foreground"><Message id="site.signupConsent" values={{
           terms: <Link href={LEGAL_PATHS.terms} target="_blank" className="underline underline-offset-4"><Message id="site.terms" /></Link>,
           privacy: <Link href={LEGAL_PATHS.privacy} target="_blank" className="underline underline-offset-4"><Message id="site.privacy" /></Link>,
         }} /></p>
-        <p className="mt-4 text-xs text-muted-foreground"><Message id="auth.alreadyHaveAnAccount_e11670" values={{ link: <Link href="/login" className="underline underline-offset-4">
+        <p className="mt-4 text-xs text-muted-foreground"><Message id="auth.alreadyHaveAnAccount_e11670" values={{ link: <Link href={loginPath(target)} className="underline underline-offset-4">
             <Message id="auth.signIn" /></Link> }} /></p>
       </div>
     </main>

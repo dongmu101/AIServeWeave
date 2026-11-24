@@ -25,6 +25,8 @@ const site = {
   "site.title": "AI model API platform",
   "pricing.accountsHint": "Exclusive use of dedicated Claude Code or Codex capacity for one calendar month (UTC). Plans do not renew automatically.",
   "pricing.packagesHint": "Credits are added to your balance once payment is confirmed and are deducted per token at the model prices below.",
-  "pricing.pricesHint": "Credits charged per 1 million input and output tokens."
+  "pricing.pricesHint": "Credits charged per 1 million input and output tokens.",
+  "pricing.catalogLoadFailed": "The pricing catalog could not be loaded. Try again shortly.",
+  "pricing.noModelPrices": "No model prices are published yet.",
 } as const;
 export default site;

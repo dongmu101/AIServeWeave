@@ -26,10 +26,11 @@ export function internalPath(value: string | null | undefined): string {
   if (!value || !value.startsWith("/")) {
     return DEFAULT_LANDING;
   }
-  if (value.startsWith("//") || value.startsWith("/\\")) {
+  if (value.startsWith("//") || value.includes("\\") || Array.from(value).some((character) => character.charCodeAt(0) < 32)) {
     return DEFAULT_LANDING;
   }
-  if (value === "/login" || value.startsWith("/login?")) {
+  const pathname = new URL(value, "https://console.invalid").pathname.replace(/\/$/, "");
+  if (pathname === "/login" || pathname === "/signup" || pathname.startsWith("//")) {
     return DEFAULT_LANDING;
   }
   return value;
@@ -46,4 +47,10 @@ export function loginPath(returnTo?: string | null): string {
     return "/login";
   }
   return `/login?next=${encodeURIComponent(target)}`;
+}
+
+/** Builds the signup link while preserving a safe purchase or console destination. */
+export function signupPath(returnTo?: string | null): string {
+  const target = internalPath(returnTo);
+  return target === DEFAULT_LANDING ? "/signup" : `/signup?next=${encodeURIComponent(target)}`;
 }

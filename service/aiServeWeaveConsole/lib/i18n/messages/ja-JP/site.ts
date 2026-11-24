@@ -25,6 +25,8 @@ const site = {
   "site.title": "AI モデル API プラットフォーム",
   "pricing.accountsHint": "専用の Claude Code または Codex 容量を 1 暦月（UTC）専有できます。自動更新はされません。",
   "pricing.packagesHint": "クレジットは支払い確認後に残高へ加算され、以下のモデル単価に従ってトークン単位で差し引かれます。",
-  "pricing.pricesHint": "入力・出力 100 万トークンあたりのクレジット。"
+  "pricing.pricesHint": "入力・出力 100 万トークンあたりのクレジット。",
+  "pricing.catalogLoadFailed": "料金カタログを読み込めませんでした。しばらくしてから再度お試しください。",
+  "pricing.noModelPrices": "モデルの料金はまだ公開されていません。",
 } as const;
 export default site;

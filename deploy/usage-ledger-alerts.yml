@@ -1,0 +1,25 @@
+groups:
+  - name: aiserveweave-usage-ledger
+    rules:
+      - alert: AIServeWeaveUsageNotCharged
+        expr: sum(increase(gateway_usage_ledger_dropped_total[10m])) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: AIServeWeave could not charge some usage records
+          description: Check Gateway drop and quarantine logs and reconcile the affected requests before reprocessing.
+      - alert: AIServeWeaveUsageOutboxFallback
+        expr: sum(increase(gateway_usage_outbox_stage_failed_total[5m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: AIServeWeave usage fell back to Gateway memory
+          description: Check Redis connectivity and available outbox capacity. A Gateway restart can lose these records.
+      - alert: AIServeWeaveUsageDeliveryFailing
+        expr: sum(increase(gateway_usage_ledger_push_failed_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: AIServeWeave cannot consistently deliver usage to the control plane
+          description: Check the control plane, Gateway authentication, and the usage outbox.

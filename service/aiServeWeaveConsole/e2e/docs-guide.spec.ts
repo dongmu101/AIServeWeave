@@ -1,8 +1,35 @@
 import { test, expect } from "./fixtures";
+import { test as visitor } from "@playwright/test";
 
 // The overview's error table, the client setup page and the per-page table of
 // contents, against the compiled-in documents served by the fixtures.
 // 总览页错误码表、客户端接入页与页内目录，使用 fixture 提供的编译内置文档。
+
+visitor("visitors can find the model prices and API docs from the homepage", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 760 });
+  await page.goto("/");
+  await expect(page.getByRole("link", { name: "模型单价" })).toHaveAttribute("href", "/pricing#models");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(321);
+  await page.getByRole("banner").getByRole("link", { name: "API 文档" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "API 文档" })).toBeVisible();
+  await expect(page.locator("#quick-start")).toBeVisible();
+});
+
+visitor("a buyer can switch between signup and sign-in without losing the billing tab", async ({ page }) => {
+  const target = "/console/billing?tab=packages";
+  const query = `?next=${encodeURIComponent(target)}`;
+  await page.goto(`/login${query}`);
+  await page.getByRole("link", { name: /注册/ }).click();
+  await expect(page).toHaveURL(`/signup${query}`);
+  await expect(page.getByRole("link", { name: /登录/ })).toHaveAttribute("href", `/login${query}`);
+});
+
+test("tenant overview links to the first use and the usage records", async ({ page }) => {
+  await page.goto("/console");
+  await expect(page.getByRole("link", { name: "创建 API Key" })).toHaveAttribute("href", "/console/keys");
+  await expect(page.getByRole("link", { name: "客户端接入" })).toHaveAttribute("href", "/console/docs/clients");
+  await expect(page.getByRole("link", { name: "快速开始示例" })).toHaveAttribute("href", "/console/docs#quick-start");
+});
 
 test("overview lists every gateway status including 402 and links to client setup", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -30,7 +57,7 @@ for (const width of [1440, 390, 320]) {
     await expect(claude.getByRole("tabpanel")).toContainText("ANTHROPIC_BASE_URL=http://127.0.0.1:1");
     await expect(claude.getByRole("tabpanel")).toContainText("ANTHROPIC_MODEL=guide-model");
     await expect(page.locator("#codex").getByRole("tabpanel")).toContainText('base_url = "http://127.0.0.1:1/v1"');
-    await expect(page.getByRole("navigation", { name: "本页内容" }).getByRole("link")).toHaveCount(7);
+    await expect(page.getByRole("navigation", { name: "本页内容" }).getByRole("link")).toHaveCount(8);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width + 1);
   });
 }

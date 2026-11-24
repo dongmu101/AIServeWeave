@@ -25,6 +25,8 @@ const site = {
   "site.title": "Plataforma de API de modelos de IA",
   "pricing.accountsHint": "Uso exclusivo de capacidad dedicada de Claude Code o Codex durante un mes natural (UTC). Los planes no se renuevan automáticamente.",
   "pricing.packagesHint": "Los créditos se añaden a tu saldo una vez confirmado el pago y se descuentan por token según los precios de los modelos de abajo.",
-  "pricing.pricesHint": "Créditos cobrados por cada millón de tokens de entrada y salida."
+  "pricing.pricesHint": "Créditos cobrados por cada millón de tokens de entrada y salida.",
+  "pricing.catalogLoadFailed": "No se pudo cargar el catálogo de precios. Vuelve a intentarlo en unos momentos.",
+  "pricing.noModelPrices": "Todavía no se han publicado precios de modelos.",
 } as const;
 export default site;

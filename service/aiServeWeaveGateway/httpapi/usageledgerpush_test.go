@@ -88,4 +88,7 @@ func TestUsageLedgerPusherStopReturnsPromptly(t *testing.T) {
 	case <-time.After(gatewaytest.Timeout):
 		t.Fatal("Stop() did not return; the run loop likely did not exit")
 	}
+	if got := client.callCount(); got != 1 {
+		t.Fatalf("pushes when draining an accepted record on shutdown = %d, want 1", got)
+	}
 }

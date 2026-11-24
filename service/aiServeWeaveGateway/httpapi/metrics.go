@@ -139,6 +139,9 @@ const (
 	// 原因是有界推送缓冲或重试积压已满，或其批次被控制面拒绝、用尽了推送次数。斜率
 	// 非零意味着账本正在丢失最近的用量，而不是服务这次请求本身出了问题。
 	MetricUsageLedgerDroppedTotal = "gateway_usage_ledger_dropped_total"
+	// MetricUsageOutboxStageFailedTotal counts requests sent to the memory
+	// fallback because the Redis write failed or the outbox reached its cap.
+	MetricUsageOutboxStageFailedTotal = "gateway_usage_outbox_stage_failed_total"
 	// MetricUsageDetailsDroppedTotal counts usage details and attributes
 	// dropped before a push for breaking common/pricing's limits (a bad
 	// meter name, a negative count, too many entries). The record itself is
@@ -385,7 +388,11 @@ func Descriptions() metrics.Descriptions {
 		},
 		MetricUsageLedgerDroppedTotal: {
 			Kind: metrics.KindCounter,
-			Help: "Usage-ledger records dropped because the push buffer was full.",
+			Help: "Usage-ledger records dropped or quarantined without charge.",
+		},
+		MetricUsageOutboxStageFailedTotal: {
+			Kind: metrics.KindCounter,
+			Help: "Usage records sent to the memory fallback after Redis staging failed.",
 		},
 		MetricUsageDetailsDroppedTotal: {
 			Kind: metrics.KindCounter,
@@ -619,6 +626,18 @@ func (r *recorder) RequestLogPushFailed() {
 // UsageLedgerDropped 记录一条因推送缓冲已满而被丢弃的用量记录。
 func (r *recorder) UsageLedgerDropped() {
 	r.sink.Counter(MetricUsageLedgerDroppedTotal, nil).Add(1)
+}
+
+func (r *recorder) initializeUsageLedger(durable bool) {
+	r.sink.Counter(MetricUsageLedgerDroppedTotal, nil).Add(0)
+	r.sink.Counter(MetricUsageLedgerPushFailedTotal, nil).Add(0)
+	if durable {
+		r.sink.Counter(MetricUsageOutboxStageFailedTotal, nil).Add(0)
+	}
+}
+
+func (r *recorder) UsageOutboxStageFailed() {
+	r.sink.Counter(MetricUsageOutboxStageFailedTotal, nil).Add(1)
 }
 
 // UsageDetailsDropped records n usage details or attributes dropped before a

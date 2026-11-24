@@ -10,6 +10,7 @@ import { buttonVariants } from "@/components/ui/button";
 import { formatCredits, parseBillingOverview, type BillingOverview } from "@/lib/console/billing";
 import { roleLabels, type Role } from "@/lib/console/contract";
 import type { SessionUser } from "@/lib/console/session-payload";
+import { canCreateApiKey } from "@/lib/console/permissions";
 
 /** OverviewView renders session facts using the current display language.
  * OverviewView 使用当前显示语言渲染会话事实。 */
@@ -37,6 +38,20 @@ export function OverviewView({ user, expiresAt }: { user: SessionUser; expiresAt
       </div>
 
       <BalanceCard />
+
+      <Card>
+        <CardHeader>
+          <CardTitle><Message id="tenant.quickStart" /></CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-wrap gap-2">
+          {canCreateApiKey(user.role) ? (
+            <Link href="/console/keys" className={buttonVariants({ variant: "outline" })}><Message id="tenant.createApiKey" /></Link>
+          ) : null}
+          <Link href="/console/docs/clients" className={buttonVariants({ variant: "outline" })}><Message id="tenant.docsClientsTitle" /></Link>
+          <Link href="/console/docs#quick-start" className={buttonVariants({ variant: "outline" })}><Message id="tenant.quickStartExample" /></Link>
+          <Link href="/console/usage" className={buttonVariants({ variant: "outline" })}><Message id="tenant.usage" /></Link>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

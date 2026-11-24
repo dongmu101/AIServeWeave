@@ -5,7 +5,8 @@ import { SupportLink } from "@/components/site/support-link";
 import { buttonVariants } from "@/components/ui/button";
 import { loadMessages } from "@/lib/i18n/messages";
 import { createTranslator } from "@/lib/i18n/translate";
-import { DEFAULT_LANDING, loginPath } from "@/lib/console/internal-path";
+import { DEFAULT_LANDING, loginPath, signupPath } from "@/lib/console/internal-path";
+import { PUBLIC_DOCS_ROOT } from "@/lib/console/public-docs";
 import { serverConfig } from "@/lib/server/config";
 import { legalEntity } from "@/lib/server/legal";
 import { readLocale } from "@/lib/server/locale";
@@ -39,7 +40,8 @@ export async function SiteHeader({ signInNext = DEFAULT_LANDING }: { signInNext?
       <div className={cn(SITE_CONTAINER, "flex flex-wrap items-center gap-x-2 gap-y-3 py-3")}>
         <Link href="/" className="mr-auto font-heading text-base font-semibold tracking-tight">{legalEntity().serviceName}</Link>
         <div className="flex items-center gap-1 sm:order-2"><SupportLink label={t("common.telegramSupport")} /><LanguageSwitcher /></div>
-        <nav className="order-3 flex w-full items-center justify-end gap-2 sm:order-1 sm:w-auto">
+        <nav className="order-3 flex w-full flex-wrap items-center justify-end gap-2 sm:order-1 sm:w-auto">
+          <Link href={PUBLIC_DOCS_ROOT} className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}>{t("tenant.apiDocumentation")}</Link>
           <Link href="/pricing" className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}>{t("site.pricing")}</Link>
           {session ? (
             <Link href={DEFAULT_LANDING} className={cn(buttonVariants({ size: "sm" }))}>{t("site.openConsole")}</Link>
@@ -47,7 +49,7 @@ export async function SiteHeader({ signInNext = DEFAULT_LANDING }: { signInNext?
             <>
               <Link href={loginPath(signInNext)} className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>{t("pricing.signIn")}</Link>
               {serverConfig().signupEnabled ? (
-                <Link href="/signup" className={cn(buttonVariants({ size: "sm" }))}>{t("pricing.signUp")}</Link>
+                <Link href={signupPath(signInNext)} className={cn(buttonVariants({ size: "sm" }))}>{t("pricing.signUp")}</Link>
               ) : null}
             </>
           )}

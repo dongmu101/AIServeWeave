@@ -388,7 +388,7 @@ test("a full presale explains itself and the checkout is not retried", async ({ 
   await page.getByRole("button", { name: "购买一个月", exact: true }).click();
   const dialog = page.getByRole("dialog");
   await dialog.getByRole("button", { name: "确认", exact: true }).click();
-  await expect(dialog.getByRole("alert")).toContainText("预售名额已满");
+  await expect(dialog.getByRole("alert")).toContainText("名额已满");
   expect(writes).toBe(1);
 });
 

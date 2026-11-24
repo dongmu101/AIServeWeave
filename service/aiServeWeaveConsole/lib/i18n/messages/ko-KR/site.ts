@@ -25,6 +25,8 @@ const site = {
   "site.title": "AI 모델 API 플랫폼",
   "pricing.accountsHint": "전용 Claude Code 또는 Codex 용량을 1 달력월(UTC) 동안 단독으로 사용합니다. 자동 갱신되지 않습니다.",
   "pricing.packagesHint": "크레딧은 결제가 확인되면 잔액에 추가되며, 아래 모델 단가에 따라 토큰 단위로 차감됩니다.",
-  "pricing.pricesHint": "입력 및 출력 100만 토큰당 차감되는 크레딧입니다."
+  "pricing.pricesHint": "입력 및 출력 100만 토큰당 차감되는 크레딧입니다.",
+  "pricing.catalogLoadFailed": "가격 목록을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.",
+  "pricing.noModelPrices": "아직 공개된 모델 가격이 없습니다.",
 } as const;
 export default site;

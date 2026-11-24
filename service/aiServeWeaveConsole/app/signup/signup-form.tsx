@@ -12,7 +12,6 @@ import { FormError } from "@/components/console/states";
 import { SubmitButton } from "@/components/console/submit-button";
 import { Input } from "@/components/ui/input";
 import { signUp } from "@/lib/console/api-client";
-import { DEFAULT_LANDING } from "@/lib/console/internal-path";
 import {
   MAX_TENANT_NAME_LENGTH,
   MIN_SIGNUP_PASSWORD_LENGTH,
@@ -29,7 +28,7 @@ import {
  * 登录。与登录表单一样，密码只在一次提交期间存活于组件状态中，无论结果如何，尘埃落定即
  * 清除。
  */
-export function SignupForm() {
+export function SignupForm({ next }: { next: string }) {
   const router = useRouter();
   const [tenantName, setTenantName] = React.useState("");
   const [email, setEmail] = React.useState("");
@@ -63,7 +62,7 @@ export function SignupForm() {
       });
       setPassword("");
       setConfirmPassword("");
-      router.replace(DEFAULT_LANDING);
+      router.replace(next);
       router.refresh();
     } catch (failure) {
       setPassword("");

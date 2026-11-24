@@ -1,3 +1,8 @@
+## 公开接入与购买入口
+
+- 公开页头可直接打开 API 文档，首页直达公开模型单价。登录后的概览连接 API Key、客户端设置、首次请求示例与用量，创建 Key 后也可打开客户端设置。
+- 从公开价格页进入购买时，注册与登录保留选中的计费标签。关闭注册的部署仍走登录。公开价格页分别显示目录读取失败、购买未开放和目录为空。
+
 ## 顶栏 Studio 入口（2026-11-17）
 
 设置 `AISW_CONSOLE_STUDIO_URL`（Studio 的公开地址，可带路径前缀）后，控制台顶栏在客服链接左侧显示「Studio」，在新分页打开；未设置或不是绝对 http(s) URL 时不显示。Studio 有自己的登录，这里只是链接。实现在 `lib/server/config.ts` 的 `studioUrl`、`app/console/console-shell.tsx`；Compose 与 `deploy/.env.example` 已同步。
@@ -525,7 +530,7 @@ Agent 接入页面新增默认不勾选的「共享给所有租户」，安装�
 
 ### 公开价格页 /pricing（2026-11-10）
 
-任何人无需登录即可打开 `/pricing`，查看账号包月、点数充值包与模型单价。数据由服务端组件直接读取控制面公开的 `GET /billing/v1/catalog`（不带令牌，不经 `/api/admin/*` 白名单）；控制面未开启计费、不可达或响应不合契约时显示「购买暂未开放」。「购买」按钮是普通链接：有会话 Cookie 时直达 `/console/billing`，没有时跳转 `/login?next=/console/billing`，登录后回到计费页；每次购买仍由控制面授权。`AISW_CONSOLE_SIGNUP_ENABLED` 开启时页头显示注册入口。页面覆盖根布局的 noindex，允许被索引。`proxy.ts` 的 matcher 不含 `/pricing`，天然公开。契约镜像为 `lib/console/billing.ts` 的 `parseCatalog`，八语言文案在 `pricing.*`。
+任何人无需登录即可打开 `/pricing`，查看账号包月、点数充值包与模型单价。数据由服务端组件直接读取控制面公开的 `GET /billing/v1/catalog`（不带令牌，不经 `/api/admin/*` 白名单）；控制面未开启计费时显示「购买暂未开放」，目录已开启但无商品时显示「暂无在售内容」，读取失败时提示稍后重试。「购买」按钮是普通链接：有会话 Cookie 时直达 `/console/billing`，没有时先注册或登录，随后回到选中的计费标签；每次购买仍由控制面授权。`AISW_CONSOLE_SIGNUP_ENABLED` 开启时页头显示注册入口。页面覆盖根布局的 noindex，允许被索引。`proxy.ts` 的 matcher 不含 `/pricing`，天然公开。契约镜像为 `lib/console/billing.ts` 的 `parseCatalog`，八语言文案在 `pricing.*`。
 
 法币标价合并后（2026-11-11），`/pricing` 的账号卡片按 `price_minor` + `currency` 显示法币月价，`parseCatalog` 拒绝零价或非三位大写币种；控制面只开账号包月、未开在线支付时目录不列账号。
 

@@ -3,6 +3,7 @@ package controlplaneclient_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -29,7 +30,7 @@ func TestPushUsageRecordsPostsTheBatchAndAuthenticates(t *testing.T) {
 		}
 		_ = json.NewDecoder(r.Body).Decode(&gotBody)
 		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(map[string]int{"accepted": 1})
+		_ = json.NewEncoder(w).Encode(map[string]int{"accepted": 2})
 	}))
 	defer server.Close()
 
@@ -63,6 +64,21 @@ func TestPushUsageRecordsPostsTheBatchAndAuthenticates(t *testing.T) {
 		if _, present := second[field]; present {
 			t.Errorf("second posted record carries an empty %s field: %s", field, second)
 		}
+	}
+}
+
+func TestPushUsageRecordsReportsAPartialAcceptance(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"accepted":1}`)
+	}))
+	defer server.Close()
+	client, err := controlplaneclient.NewUsageLedgerClient(controlplaneclient.UsageLedgerClientConfig{Endpoint: server.URL, Token: testToken})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = client.PushUsageRecords(context.Background(), []httpapi.UsageRecord{{RequestID: "req_a"}, {RequestID: "req_b"}})
+	if !errors.Is(err, httpapi.ErrUsageBatchRejected) {
+		t.Fatalf("partial acceptance returned %v, want a rejected batch", err)
 	}
 }
 
@@ -106,7 +122,7 @@ func TestPushUsageRecordsMaxBatchFitsTheControlPlanesBodyLimit(t *testing.T) {
 		}
 		gotBodyBytes = len(body)
 		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(map[string]int{"accepted": len(body)})
+		_ = json.NewEncoder(w).Encode(map[string]int{"accepted": httpapi.DefaultUsageLedgerBatchSize})
 	}))
 	defer server.Close()
 

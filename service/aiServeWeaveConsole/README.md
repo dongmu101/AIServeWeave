@@ -263,13 +263,15 @@ Playwright 结果、失败截图与 trace 位于 `test-results/`，指定窄屏�
 | `/pricing` | 公开价格目录（读取控制面 `GET /billing/v1/catalog`），各分区附说明，并注明购买须遵守服务条款与退款政策 |
 | `/terms`、`/privacy`、`/refund` | 服务条款、隐私政策、退款政策 |
 
+公开页头可进入 API 文档，首页也直达 `/pricing#models`。登录后概览提供创建 Key、配置客户端、复制首次请求示例和用量入口。从价格页购买会在注册或登录后回到对应计费标签。
+
 首页、价格、条款、登录与注册页底部都有统一页脚（价格与三份条款的链接、营运方名称与联系邮箱）；注册页注明「创建账号即表示同意服务条款与隐私政策」，Console 计费页注明购买须遵守服务条款与退款政策。这些页面允许搜索引擎索引，其余页面仍为 `noindex`。
 
 - **正文**写在 `lib/legal/content/`，有英文、简体中文、繁体中文三个版本，以英文为准；其他界面语言显示英文正文并附提示。修改正文时同步三个版本并更新 `lib/legal/types.ts` 的 `LEGAL_UPDATED`；`lib/legal/legal.test.ts` 会检查三个版本的章节结构一致。
 - **营运方资讯**从环境变量读取（见 [.env.example](.env.example)）：`AISW_CONSOLE_LEGAL_SERVICE_NAME`（默认 AIServeWeave）、`_COMPANY`、`_ADDRESS`、`_EMAIL`、`_JURISDICTION`、`_REFUND_WINDOW_DAYS`。未设置或格式不对时显示方括号占位符，服务端首次渲染时打印警告，**上线前必须填写**。
 - **退款期限** `AISW_CONSOLE_LEGAL_REFUND_WINDOW_DAYS` 必须与控制面 `Billing.RefundWindowDays` 一致（默认 30；0 时退款政策改为「点数一经入账不予退款」）。Console 不读取控制面配置，两边不一致时页面陈述会与实际规则不符。
 - 退款政策与当前实现一致：点数退款只退未用部分，目前通过邮件申请（Console 尚无租户自助申请界面），由运维在 `/operator/billing` 处理；已开通的账号包月不退；预售未交付可全额退款；支付宝额度支付的订单系统内不可撤销。业务规则变更时须同步修改条款正文。
-- `/pricing` 的商品来自控制面目录，计费未开启或目录为空时只显示「暂未开放购买」，提交支付审核前须先上架商品。
+- `/pricing` 的商品来自控制面目录，计费未开启、目录为空与读取失败分别显示不同提示，提交支付审核前须先上架商品。
 
 ## 预充值计费（Dodo Payments）
 

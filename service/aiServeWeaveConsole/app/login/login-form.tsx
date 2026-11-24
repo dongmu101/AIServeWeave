@@ -14,6 +14,7 @@ import { SubmitButton } from "@/components/console/submit-button";
 import { buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { signIn } from "@/lib/console/api-client";
+import { signupPath } from "@/lib/console/internal-path";
 import { cn } from "cn";
 
 /**
@@ -102,7 +103,7 @@ export function LoginForm({
         <>
           <hr className="border-border" />
           <Link
-            href="/signup"
+            href={signupPath(next)}
             className={cn(buttonVariants({ variant: "outline", size: "lg" }), "h-10 w-full text-sm")}
           >
             <Message id="auth.registerTenant" />

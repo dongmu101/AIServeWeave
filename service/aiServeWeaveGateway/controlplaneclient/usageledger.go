@@ -1,17 +1,6 @@
 // usageledger.go is the Gateway's side of the control plane's usage-ledger
-// push API, per STATUS.md's P2 usage ledger. It mirrors requestlogs.go's
-// shape (a plain net/http client authenticated by the shared InternalToken,
-// no read-back, no retry) for the same reason: the caller (httpapi's
-// usageLedgerPusher) never acts on a partial failure beyond logging it — a
-// dropped batch of usage records is not a condition anything upstream needs
-// to distinguish from "the control plane momentarily answered slowly".
-//
-// usageledger.go 是 Gateway 一侧的控制面用量账本推送 API，对应 STATUS.md 的
-// P2 用量账本。它形态上与 requestlogs.go 相仿（一个由共享 InternalToken
-// 认证的普通 net/http 客户端，没有读回、没有重试），理由相同：调用方
-// （httpapi 的 usageLedgerPusher）除了记日志之外从不对一次部分失败采取任何
-// 行动——一批用量记录被丢弃，不是任何上游需要把它与"控制面这一刻答得慢了
-// 一点"区分开的情形。
+// push API. The caller owns retries. A partial acceptance is treated as a
+// content rejection so the durable worker can isolate unacknowledged records.
 package controlplaneclient
 
 import (
@@ -20,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -194,6 +184,18 @@ func (c *UsageLedgerClient) PushUsageRecords(ctx context.Context, records []http
 	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("controlplaneclient: the control plane answered %d", resp.StatusCode)
+	}
+	var result struct {
+		Accepted *int `json:"accepted"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1024)).Decode(&result); err != nil ||
+		result.Accepted == nil || *result.Accepted < 0 || *result.Accepted > len(records) {
+		return errors.New("controlplaneclient: invalid usage acknowledgement")
+	}
+	// The server counts duplicates as accepted, so retrying the batch is safe.
+	if *result.Accepted < len(records) {
+		return fmt.Errorf("controlplaneclient: accepted %d of %d usage records: %w",
+			*result.Accepted, len(records), httpapi.ErrUsageBatchRejected)
 	}
 	return nil
 }

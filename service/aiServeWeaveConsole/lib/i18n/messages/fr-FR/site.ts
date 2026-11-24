@@ -25,6 +25,8 @@ const site = {
   "site.title": "Plateforme d’API de modèles d’IA",
   "pricing.accountsHint": "Usage exclusif d’une capacité Claude Code ou Codex dédiée pendant un mois civil (UTC). Les forfaits ne se renouvellent pas automatiquement.",
   "pricing.packagesHint": "Les crédits sont ajoutés à votre solde une fois le paiement confirmé, puis déduits au token selon les prix des modèles ci-dessous.",
-  "pricing.pricesHint": "Crédits facturés par million de tokens en entrée et en sortie."
+  "pricing.pricesHint": "Crédits facturés par million de tokens en entrée et en sortie.",
+  "pricing.catalogLoadFailed": "Impossible de charger le catalogue des tarifs. Réessayez dans quelques instants.",
+  "pricing.noModelPrices": "Aucun tarif de modèle n’est encore publié.",
 } as const;
 export default site;

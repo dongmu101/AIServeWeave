@@ -14,10 +14,11 @@ import {
   type Catalog,
 } from "@/lib/console/billing";
 import { accountKindLabel } from "@/lib/console/account-sales";
-import { loginPath } from "@/lib/console/internal-path";
+import { loginPath, signupPath } from "@/lib/console/internal-path";
 import { loadMessages } from "@/lib/i18n/messages";
 import { createTranslator } from "@/lib/i18n/translate";
 import { callControlPlane } from "@/lib/server/control-plane";
+import { serverConfig } from "@/lib/server/config";
 import { readLocale } from "@/lib/server/locale";
 import { readSession } from "@/lib/server/session";
 import { cn } from "@/lib/utils";
@@ -36,48 +37,45 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 /**
- * loadCatalog reads the public catalog. Any failure — a deployment without
- * billing answers 404, a control plane that is down is unreachable — is the same
- * to a visitor: nothing to show yet. No token is sent.
- *
- * loadCatalog 读取公开目录。任何失败——未开启计费的部署回 404，控制面宕机则不可达——
- * 对访客来说都一样：暂时没有可展示的内容。不发送任何令牌。
+ * The control plane uses 404 for billing disabled. A transient failure must
+ * not look like an empty catalog. This request needs no session.
  */
-async function loadCatalog(): Promise<Catalog | null> {
+async function loadCatalog(): Promise<Catalog | "disabled" | "failed"> {
   const result = await callControlPlane({ method: "GET", path: "/billing/v1/catalog" });
-  if (result.kind !== "response" || result.status !== 200) return null;
+  if (result.kind !== "response") return "failed";
+  if (result.status === 404) return "disabled";
+  if (result.status !== 200) return "failed";
   try {
     return parseCatalog(JSON.parse(result.text));
   } catch {
-    return null;
+    return "failed";
   }
 }
 
 /**
  * The public pricing page. It needs no session: it only reads the catalog. The
  * Buy buttons are plain links, so the decision is made by the pages they lead
- * to — a visitor without a session is bounced to sign-in with the purchase page
- * as the return address, and the control plane still authorizes every purchase.
+ * to — a visitor without a session signs up or in before opening the selected
+ * billing tab. The control plane authorizes every purchase.
  *
  * 公开的价格页。它不需要会话，只读取目录。「购买」按钮只是普通链接，决定权在它们通向的
- * 页面——没有会话的访客会被送去登录、并以购买页作为返回地址；每一次购买仍由控制面授权。
+ * 页面。未登录的访客注册或登录后直接进入对应计费标签，每次购买仍由控制面授权。
  */
 export default async function PricingPage() {
   const locale = await readLocale();
   const t = createTranslator(locale, await loadMessages(locale));
   const [catalog, session] = await Promise.all([loadCatalog(), readSession()]);
-  const signedIn = session !== null;
+  const signupEnabled = serverConfig().signupEnabled;
   // Each Buy button opens the billing tab that sells what its card shows.
   // 每个「购买」按钮打开出售该卡片内容的计费分区。
   const buy = (tab: "accounts" | "presales" | "packages") => {
     const target = `${BUY_TARGET}?tab=${tab}`;
     return (
-      <Link href={signedIn ? target : loginPath(target)} className={cn(buttonVariants({ size: "sm" }))}>
+      <Link href={session ? target : signupEnabled ? signupPath(target) : loginPath(target)} className={cn(buttonVariants({ size: "sm" }))}>
         {t("pricing.buy")}
       </Link>
     );
   };
-  const empty = catalog !== null && catalog.accounts.length + catalog.presales.length + catalog.packages.length + catalog.prices.length === 0;
 
   return (
     <>
@@ -86,16 +84,17 @@ export default async function PricingPage() {
       <header>
         <div className="space-y-1">
           <h1 className="font-heading text-2xl font-semibold tracking-tight">{t("pricing.heading")}</h1>
-          <p className="text-sm text-muted-foreground">{t("pricing.subtitle")}</p>
+          <p className="text-sm text-muted-foreground">{t("site.heroSubtitle")}</p>
         </div>
       </header>
 
-      {catalog === null ? (
-        <p className="rounded-lg border p-6 text-center text-sm text-muted-foreground">{t("pricing.unavailable")}</p>
-      ) : empty ? (
-        <p className="rounded-lg border p-6 text-center text-sm text-muted-foreground">{t("pricing.empty")}</p>
+      {typeof catalog === "string" ? (
+        <p id="models" className="rounded-lg border p-6 text-center text-sm text-muted-foreground">{t(catalog === "disabled" ? "pricing.unavailable" : "pricing.catalogLoadFailed")}</p>
       ) : (
         <>
+          {catalog.accounts.length + catalog.presales.length + catalog.packages.length === 0 ? (
+            <p className="rounded-lg border p-6 text-center text-sm text-muted-foreground">{t("pricing.empty")}</p>
+          ) : null}
           {catalog.accounts.length > 0 ? (
             <section className="grid grid-cols-1 gap-3">
               <div className="space-y-1">
@@ -182,12 +181,15 @@ export default async function PricingPage() {
             </section>
           ) : null}
 
-          {catalog.prices.length > 0 ? (
-            <section className="grid grid-cols-1 gap-3">
-              <div className="space-y-1">
-                <h2 className="text-lg font-medium">{t("pricing.prices")}</h2>
-                <p className="text-sm text-muted-foreground">{t("pricing.pricesHint")}</p>
-              </div>
+          <section id="models" className="grid scroll-mt-4 grid-cols-1 gap-3">
+            <div className="space-y-1">
+              <h2 className="text-lg font-medium">{t("pricing.prices")}</h2>
+              <p className="text-sm text-muted-foreground">{t("pricing.pricesHint")}</p>
+              <Link href="/console/docs/clients" className="text-sm font-medium underline underline-offset-4">{t("tenant.docsClientsTitle")}</Link>
+            </div>
+            {catalog.prices.length === 0 ? (
+              <p className="rounded-lg border p-6 text-sm text-muted-foreground">{t("pricing.noModelPrices")}</p>
+            ) : (
               <div className="rounded-lg border">
                 <Table>
                   <TableHeader>
@@ -210,8 +212,8 @@ export default async function PricingPage() {
                   </TableBody>
                 </Table>
               </div>
-            </section>
-          ) : null}
+            )}
+          </section>
         </>
       )}
     </main>

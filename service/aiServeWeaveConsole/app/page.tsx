@@ -60,6 +60,7 @@ export default async function Home() {
           <div className="flex flex-wrap gap-3">
             <Link href="/pricing" className={cn(buttonVariants({ size: "lg" }))}>{t("site.viewPricing")}</Link>
             <Link href={startHref} className={cn(buttonVariants({ variant: "outline", size: "lg" }))}>{t("site.getStarted")}</Link>
+            <Link href="/pricing#models" className={cn(buttonVariants({ variant: "ghost", size: "lg" }))}>{t("pricing.prices")}</Link>
           </div>
         </section>
 

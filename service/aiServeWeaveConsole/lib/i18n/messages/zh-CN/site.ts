@@ -25,6 +25,8 @@ const site = {
   "site.title": "AI 模型 API 平台",
   "pricing.accountsHint": "独占使用一份 Claude Code 或 Codex 运行容量一个自然月（UTC），不会自动续费。",
   "pricing.packagesHint": "付款确认后点数记入余额，并按下方模型单价逐 token 扣除。",
-  "pricing.pricesHint": "每 100 万输入与输出 token 扣除的点数。"
+  "pricing.pricesHint": "每 100 万输入与输出 token 扣除的点数。",
+  "pricing.catalogLoadFailed": "价格目录暂时无法加载，请稍后重试。",
+  "pricing.noModelPrices": "暂无已公布的模型单价。",
 } as const;
 export default site;

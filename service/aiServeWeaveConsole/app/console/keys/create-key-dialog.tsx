@@ -7,13 +7,14 @@ import { Message } from "@/components/i18n/message";
 
 
 import * as React from "react";
+import Link from "next/link";
 import { CopyIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { FormError } from "@/components/console/states";
 import { SubmitButton } from "@/components/console/submit-button";
 import { useConsoleRequest } from "@/components/console/use-console-request";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -232,6 +233,9 @@ export function CreateKeyDialog({ onCreated }: { onCreated: () => void }) {
           </div>
 
           <DialogFooter>
+            <Link href="/console/docs/clients" className={buttonVariants({ variant: "outline" })} onClick={() => setRevealed(null)}>
+              <Message id="tenant.docsClientsTitle" />
+            </Link>
             <Button onClick={() => setRevealed(null)}><Message id="tenant.iVeSavedItClose" /></Button>
           </DialogFooter>
         </DialogContent>

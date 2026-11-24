@@ -300,18 +300,30 @@ func (p *usageLedgerPusher) run() {
 		}
 		batch = make([]UsageRecord, 0, p.cfg.BatchSize)
 	}
+	add := func(record UsageRecord) {
+		batch = append(batch, record)
+		if len(batch) >= p.cfg.BatchSize {
+			flush(false)
+		}
+	}
+	// Process records already in the channel when a timer or shutdown wins
+	// the select. Take its size once so continuous traffic cannot stall a flush.
+	drain := func() {
+		for range len(p.ch) {
+			add(<-p.ch)
+		}
+	}
 
 	for {
 		select {
 		case <-p.stop:
+			drain()
 			flush(true)
 			return
 		case r := <-p.ch:
-			batch = append(batch, r)
-			if len(batch) >= p.cfg.BatchSize {
-				flush(false)
-			}
+			add(r)
 		case <-ticker:
+			drain()
 			flush(false)
 			ticker, stopTicker = p.clock.NewTimer(p.cfg.FlushInterval)
 		}

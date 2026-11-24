@@ -1082,7 +1082,7 @@ Dodo 控制台里要把 webhook 指向 `<控制面地址>/billing/v1/dodo/webhoo
 - `billing` 迁移、`FOR UPDATE` 扣费事务、余额账目与维护命令都有 gormstore live 用例，2026-11-16 在临时 PostgreSQL 16 与 MySQL 9.7 上通过；真实控制面、Gateway、Agent 与 Console 的端到端计价尚未联调。
 - 价目表只用模拟来源与上游原始文件验证，未从真实网络同步。真实 Claude Code、Codex CLI 上报的缓存字段（含 1 小时缓存）未实测。
 - `usage_records/0006` 在 PostgreSQL 分区父表上建索引期间阻塞写入，生产规模的耗时未测。
-- Gateway 用量推送的重试只在进程内，副本崩溃会丢失尚未送达的批次，对应用量不扣费。
+- 配置持久化 Redis 的 Gateway 会在推送前暂存用量，重启后可补推。未配置 Redis、写入失败或队列满时使用内存缓冲，仍可能丢失尚未送达的记录。见 [Gateway 用量账本](../aiServeWeaveGateway/STATUS.md#按租户模型的持久化用量账本statusmd-的-p2)。
 - `billing_webhook_events` 还没有保留期清理，会随事件持续增长。`usage_charges` 已停止写入，下一个版本删除。
 - 手工调整余额（`/adjust`）没有幂等键，重复提交会记两次；Console 只发送一次、不自动重试。
 - 易支付只用模拟接口验证（签名向量、客户端、logic、handler、真实客户端经 HTTPS 的 e2e，临时 PostgreSQL 16 / MySQL 8.0 上的 0009 迁移与 `storetest.EzfpOrders`）：未用真实商户号联调；手机微信 jump 页面、`out_refund_no` 是否真正防重复、通知重投是否重新签名都未实测。`clientip` 是 Console 的地址，微信手机 H5 支付可能因此受限。易支付后台手工发起的退款不会同步进系统；多副本各自运行恢复，查询量随副本数增加。

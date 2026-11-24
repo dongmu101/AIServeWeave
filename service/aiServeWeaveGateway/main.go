@@ -580,6 +580,14 @@ func run() error {
 	// usageLedgerClientAdapter 的文档注释。
 	if usageLedgerClient != nil {
 		httpCfg.UsageLedgerClient = usageLedgerClient
+		if sharedRedis != nil {
+			options := *sharedRedis.Options()
+			options.ContextTimeoutEnabled = true
+			usageRedis := redis.NewClient(&options)
+			defer usageRedis.Close()
+			httpCfg.UsageLedgerRedis = usageRedis
+			httpCfg.UsageLedgerConsumer = id
+		}
 	}
 	// Same guard, same reason: responsesPersist is a concrete
 	// *controlplaneclient.ResponsesPersister, and httpCfg.ResponsesClient is

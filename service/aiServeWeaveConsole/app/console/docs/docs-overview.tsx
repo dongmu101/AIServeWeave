@@ -171,7 +171,7 @@ export function DocsOverview() {
         </div>
       </section>
 
-      <section className="flex flex-col gap-3">
+      <section id="quick-start" className="flex scroll-mt-4 flex-col gap-3">
         <h2 className="font-heading text-lg font-semibold"><Message id="tenant.quickStart" /></h2>
         <ExampleModelField />
         <ExamplePanel title={t("tenant.quickStartExample")} tabs={tabs} />
