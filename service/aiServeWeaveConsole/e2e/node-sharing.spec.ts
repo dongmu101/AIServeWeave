@@ -52,19 +52,96 @@ test("operator changes an Agent from private to shared and back", async ({ page 
     await route.fulfill({ json: { node_id: "agent-private", mode, tenants: [], updated_at: at, updated_by: "operator" } });
   });
   await page.route("**/api/operator/operator/v1/tenants?*", route => route.fulfill({ json: { items: [], next_cursor: "" } }));
-  page.on("dialog", dialog => dialog.accept());
   await page.goto("/operator/node-access");
+  await expect(page.getByRole("heading", { name: "Agent 共享设置", exact: true })).toBeVisible();
   await page.getByRole("button").filter({ hasText: "agent-private" }).click();
-  const modes = page.getByRole("combobox", { name: "访问方式", exact: true });
-  await expect(modes).toHaveValue("private");
-  await modes.selectOption("shared");
-  await page.getByRole("button", { name: "保存", exact: true }).click();
-  await expect.poll(() => writes.length).toBe(1);
+  const save = page.getByRole("button", { name: "保存", exact: true });
+  const privateMode = page.getByRole("radio", { name: "不共享", exact: true });
+  const sharedMode = page.getByRole("radio", { name: "共享", exact: true });
+  await expect(privateMode).toBeChecked();
+  await sharedMode.check();
+  await save.click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("agent-private");
+  expect(writes).toHaveLength(0);
+  await dialog.getByRole("button", { name: "取消", exact: true }).click();
+  await expect(sharedMode).toBeChecked();
+  await save.click();
+  await dialog.getByRole("button", { name: "确认执行", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(save).toBeDisabled();
   expect(writes[0]).toEqual({ mode: "shared", tenants: [] });
-  await modes.selectOption("private");
-  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await privateMode.check();
+  await save.click();
   await expect.poll(() => writes.length).toBe(2);
   expect(writes[1]).toEqual({ mode: "private", tenants: [] });
+});
+
+test("node access preserves tenant selections and confirms before discarding them", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 800 });
+  const writes: unknown[] = [];
+  await page.route("**/api/operator/operator/v1/node-access", route => route.fulfill({ json: { items: [
+    { node_id: "agent-edit", mode: "dedicated", tenants: ["tnt_alpha"], updated_at: at, updated_by: "operator" },
+    { node_id: "agent-other", mode: "private", tenants: [] },
+  ] } }));
+  await page.route("**/api/operator/operator/v1/node-access/agent-edit", async route => {
+    const body = route.request().postDataJSON();
+    writes.push(body);
+    await route.fulfill({ json: { node_id: "agent-edit", ...body, updated_at: at, updated_by: "operator" } });
+  });
+  await page.route("**/api/operator/operator/v1/tenants?*", route => {
+    const query = new URL(route.request().url()).searchParams.get("q");
+    const items = [
+      { id: "tnt_alpha", name: "Alpha", status: "active", created_at: at },
+      { id: "tnt_beta", name: "Beta", status: "active", created_at: at },
+    ].filter(tenant => !query || tenant.name.startsWith(query));
+    return route.fulfill({ json: { items, next_cursor: "" } });
+  });
+
+  await page.goto("/operator/node-access");
+  const edit = page.getByRole("button").filter({ hasText: "agent-edit" });
+  const other = page.getByRole("button").filter({ hasText: "agent-other" });
+  const save = page.getByRole("button", { name: "保存", exact: true });
+  const privateMode = page.getByRole("radio", { name: "不共享", exact: true });
+  const dedicatedMode = page.getByRole("radio", { name: "指定租户", exact: true });
+  const alpha = page.getByRole("checkbox", { name: /Alpha/ });
+  const beta = page.getByRole("checkbox", { name: /Beta/ });
+  const dialog = page.getByRole("dialog");
+  await edit.click();
+  await expect(alpha).toBeChecked();
+  await expect(save).toBeDisabled();
+  await alpha.uncheck();
+  await expect(save).toBeDisabled();
+  await alpha.check();
+  await expect(save).toBeDisabled();
+  await page.getByRole("textbox", { name: "按商户 ID 或名称搜索" }).fill("Beta");
+  await beta.check();
+  await expect(page.getByRole("button", { name: "移除 Alpha" })).toBeVisible();
+
+  await privateMode.check();
+  await save.click();
+  await expect(dialog).toContainText("保存后将移除当前的商户绑定");
+  await dialog.getByRole("button", { name: "取消", exact: true }).click();
+  await dedicatedMode.check();
+  await expect(alpha).toBeChecked();
+  await expect(beta).toBeChecked();
+  await other.click();
+  await expect(dialog).toContainText("agent-other");
+  await dialog.getByRole("button", { name: "取消", exact: true }).click();
+  await expect(beta).toBeChecked();
+  await other.click();
+  await dialog.getByRole("button", { name: "放弃修改", exact: true }).click();
+  await expect(privateMode).toBeChecked();
+  await edit.click();
+  await expect(alpha).toBeChecked();
+  await expect(beta).not.toBeChecked();
+  expect(writes).toHaveLength(0);
+
+  await beta.check();
+  await save.click();
+  await expect(save).toBeDisabled();
+  expect(writes).toEqual([{ mode: "dedicated", tenants: ["tnt_alpha", "tnt_beta"] }]);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(320);
 });
 
 test("fleet node buttons enable and stop sharing after confirmation", async ({ page }) => {
@@ -119,4 +196,11 @@ test("fleet sharing stays disabled when the current sharing policy cannot load",
   await page.route("**/api/operator/operator/v1/node-access", route => route.fulfill({ status: 404, json: { error: "not_found" } }));
   await page.goto("/operator/fleet");
   await expect(page.getByRole("button", { name: "开启共享", exact: true })).toBeDisabled();
+});
+
+test("node access cannot open manual nodes until the current policies load", async ({ page }) => {
+  await page.route("**/api/operator/operator/v1/node-access", route => route.fulfill({ status: 404, json: { error: "not_found" } }));
+  await page.goto("/operator/node-access");
+  await expect(page.getByRole("button", { name: "打开", exact: true })).toBeDisabled();
+  await expect(page.getByRole("radio")).toHaveCount(0);
 });

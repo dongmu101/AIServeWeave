@@ -24,7 +24,7 @@ function navigationItems(t: Translator) { return [
   { href: "/operator/models", label: t("tenant.models_98fd0c") },
   { href: "/operator/routes", label: t("tenant.modelRoutes") },
   { href: "/operator/model-access", label: t("operator.modelAccess") },
-  { href: "/operator/node-access", label: t("operator.nodeAccess") },
+  { href: "/operator/node-access", label: t("operator.sharingSettings") },
   { href: "/operator/workflow-templates", label: t("operator.workflowTemplates") },
   { href: "/operator/workflows", label: t("operator.releaseStatus") },
   { href: "/operator/api-docs", label: t("tenant.apiDocumentation") },
