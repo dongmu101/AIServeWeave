@@ -4,8 +4,24 @@
 
 ## 升级
 
-1. 停止控制面所有副本与 Gateway 写入，记录旧二进制版本和配置，并按下文备份。当前版本尚未承诺混合版本滚动升级。
-2. 用目标版本二进制和数据库配置执行迁移。命令只读取 `Database`，不要求 Redis、JWT 或内部令牌，也不启动 HTTP：
+Docker Compose 部署可以用运行中的控制面容器查看迁移状态。进入仓库的 `deploy/` 目录后执行以下只读命令。
+
+```sh
+docker compose exec -T controlplane /usr/local/bin/service -f /etc/aiserveweave/controlplane.yaml -migrate status
+```
+
+  1. 停止控制面所有副本与 Gateway 写入，记录旧二进制版本和配置，并按下文备份。当前版本尚未承诺混合版本滚动升级。
+2. 用目标版本二进制和数据库配置执行迁移。迁移命令只连接数据库。
+
+   Docker Compose 部署先准备目标版本的 `controlplane` 镜像，保持数据库运行，然后在 `deploy/` 目录执行。一次性容器沿用 `controlplane` 服务的网络、环境变量和配置挂载。
+
+   ```sh
+   docker compose run --rm --no-deps -T controlplane -f /etc/aiserveweave/controlplane.yaml -migrate status
+   docker compose run --rm --no-deps -T controlplane -f /etc/aiserveweave/controlplane.yaml -migrate up
+   docker compose run --rm --no-deps -T controlplane -f /etc/aiserveweave/controlplane.yaml -migrate status
+   ```
+
+   直接部署二进制时，使用实际安装路径和实际配置文件。以下示例假设二进制在 `PATH` 里，配置文件在 `/secure/controlplane.yaml`。
 
    ```sh
    aiserveweave-controlplane -f /secure/controlplane.yaml -migrate status
