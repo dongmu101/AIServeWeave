@@ -745,6 +745,14 @@ const operator = {
   "operator.tenantPlanLabel": "{name}의 요금제",
   "operator.tenantPlanSaved": "요금제를 변경했습니다",
   "operator.tenantPending": "미마감 사용량",
-  "operator.tenantPendingValue": "{credits} 크레딧 · 요청 {count}건"
+  "operator.tenantPendingValue": "{credits} 크레딧 · 요청 {count}건",
+  "operator.billingSettings": "설정",
+  "operator.billingSignupGrant": "가입 증정 크레딧",
+  "operator.billingSignupGrantHint": "직접 가입한 테넌트에게 지급되는 크레딧으로, 증정 크레딧으로 기록됩니다. 0이면 지급하지 않습니다. 변경 사항은 이후 가입하는 테넌트부터 적용됩니다.",
+  "operator.billingSettingsFromConfig": "아직 여기서 저장되지 않았습니다. 현재 값은 컨트롤 플레인 설정 파일에서 가져온 것입니다.",
+  "operator.billingSettingsUpdated": "마지막 저장 {time}",
+  "operator.billingSettingsSaved": "과금 설정이 저장되었습니다",
+  "operator.billingProblemSignupGrant": "0 이상의 크레딧을 소수점 이하 6자리까지 입력하세요",
+  "operator.billingAdjustTypeHint": "증정 크레딧 차감은 테넌트의 현재 증정 크레딧을 초과할 수 없습니다."
 } as const;
 export default operator;

@@ -47,7 +47,8 @@ export const CATALOG_ENTRY = { model: "claude-x", provider: "anthropic", mode: "
 ] };
 /** BILLING_OVERVIEW is the tenant billing read; tests override it per case.
  * BILLING_OVERVIEW 是租户计费读取的样本；各用例可按需覆盖。 */
-export const BILLING_OVERVIEW = { mode: "prepaid", balance_micro: 12_345_678, blocked: false, has_customer: true, packages: [fixedPackage, customPackage] };
+export const BILLING_OVERVIEW = { mode: "prepaid", balance_micro: 12_345_678, purchased_balance_micro: 10_345_678, gift_balance_micro: 2_000_000, blocked: false, has_customer: true, packages: [fixedPackage, customPackage] };
+export const BILLING_SETTINGS = { signup_grant_micro: 5_000_000, saved: true, updated_by: "op_p10", updated_at: "2026-09-12T00:00:00Z" };
 const template = { template_id: LONG_TEXT, revision: 1, digest: "d".repeat(64), created_at: at, actor_id: "op_p10", description: LONG_TEXT, visible_tenant_ids: ["tnt_p10"], inputs: [{ name: "text", node: "1", field: "text", type: "string", required: true }] };
 
 /** auditPage serves at most 200 rows from a synthetic 10,000-entry data set.
@@ -94,7 +95,8 @@ async function installFixtures(page: Page, unexpected: string[]) {
       else if (path === "/operator/v1/billing/catalog") json = { items: [CATALOG_ENTRY], next_cursor: "", sync: { source: "embedded", entry_count: 3689, version: 1, synced_at: at, last_error: "" } };
       else if (path === "/operator/v1/billing/catalog/pending") json = { items: [], next_cursor: "" };
       else if (path === "/operator/v1/billing/plans") json = { revision: PRICING_CONFIG.revision, items: PRICING_CONFIG.plans };
-      else if (path === "/operator/v1/billing/tenants") json = { items: [{ id: user.tenant_id, name: LONG_TEXT, status: "active", mode: "prepaid", balance_micro: 0, blocked: true, created_at: at }], next_cursor: "" };
+      else if (path === "/operator/v1/billing/tenants") json = { items: [{ id: user.tenant_id, name: LONG_TEXT, status: "active", mode: "prepaid", balance_micro: 0, purchased_balance_micro: 0, gift_balance_micro: 0, blocked: true, created_at: at }], next_cursor: "" };
+      else if (path === "/operator/v1/billing/settings") json = BILLING_SETTINGS;
       else if (path === "/operator/v1/billing/orders") json = { items: [{ ...order, tenant_id: user.tenant_id }], next_cursor: "" };
       else if (path === "/operator/v1/billing/ledger") json = { items: [{ ...ledgerEntry, tenant_id: user.tenant_id }], next_cursor: "" };
       else if (path.endsWith("/audit")) json = auditPage(url);

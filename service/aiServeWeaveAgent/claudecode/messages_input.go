@@ -34,6 +34,10 @@ func encodeMessagesJSON(value any) ([]byte, error) {
 //
 // system 与 metadata 从不进入设置文件：CLI 会让它们在代理看到请求之前替换掉 CLI 自己的身份块
 // 与 user_id，因此改由代理接收，并与 CLI 发出的内容合并（见 mergeNativeRequest）。
+//
+// The caller's context_management also goes to the proxy so it can replace
+// the CLI's generated policy, including when the caller omits the field.
+// 调用方的 context_management 也交给代理，以便覆盖 CLI 生成的策略，包括调用方省略该字段时。
 func nativeInputSettings(extra map[string]any) (settings, request []byte, err error) {
 	body, err := encodeMessagesJSON(withoutKeys(extra, "system", "metadata"))
 	if err != nil {
@@ -47,16 +51,16 @@ func nativeInputSettings(extra map[string]any) (settings, request []byte, err er
 		return nil, nil, err
 	}
 	if len(settings) <= maxCLISettingsBytes {
-		identity := make(map[string]any)
-		for _, key := range []string{"system", "metadata"} {
+		relay := make(map[string]any)
+		for _, key := range []string{"system", "metadata", "context_management"} {
 			if value, ok := extra[key]; ok {
-				identity[key] = value
+				relay[key] = value
 			}
 		}
-		if len(identity) == 0 {
+		if len(relay) == 0 {
 			return settings, nil, nil
 		}
-		request, err = encodeMessagesJSON(identity)
+		request, err = encodeMessagesJSON(relay)
 		if err != nil {
 			return nil, nil, err
 		}

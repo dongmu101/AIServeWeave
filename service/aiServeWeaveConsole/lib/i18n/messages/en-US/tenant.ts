@@ -976,6 +976,14 @@ const tenant = {
   "tenant.modelScopeDedicated": "Dedicated AI",
   "tenant.noCloudServices": "No cloud AI is available yet.",
   "tenant.noDedicatedServices": "No dedicated AI yet. Enroll your own Agent or buy a dedicated account to see it here.",
-  "tenant.modelScopeHint": "Cloud AI: platform-operated Agents shared by tenants, free or paid. Dedicated AI: Agents you enrolled and accounts you bought."
+  "tenant.modelScopeHint": "Cloud AI: platform-operated Agents shared by tenants, free or paid. Dedicated AI: Agents you enrolled and accounts you bought.",
+  "tenant.billingPurchasedBalance": "Purchased credits",
+  "tenant.billingGiftBalance": "Gift credits",
+  "tenant.billingGiftFirstHint": "Usage spends gift credits before purchased ones.",
+  "tenant.billingBalanceSplit": "Purchased {purchased} · Gift {gift}",
+  "tenant.billingCreditType": "Credit type",
+  "tenant.billingCreditTypePurchased": "Purchased",
+  "tenant.billingCreditTypeGift": "Gift",
+  "tenant.billingKindRefundReversal": "Refund reversal"
 } as const;
 export default tenant;

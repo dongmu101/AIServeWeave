@@ -25,8 +25,9 @@ const (
 
 // CompactUsageLedger merges each run of consecutive usage entries of a
 // tenant that fall on the same day in loc, with no other entry between
-// them, into the run's first entry: amounts added up, the last
-// balance_after, the run's period and request count. Before
+// them, into the run's first entry: amounts and their gift parts added up,
+// the last balance_after and gift balance_after, the run's period and
+// request count. Before
 // .scratch/token-pricing every pushed batch wrote its own usage entry; this
 // is the optional clean-up of those, and the only code that rewrites ledger
 // entries. The balance chain is the same before and after. Each run is
@@ -35,7 +36,8 @@ const (
 // interrupted and run again. progress is called after each tenant.
 //
 // CompactUsageLedger 把租户在 loc 中同一天、中间没有其他账目的每一串连续用量账目，合并
-// 进这一串的第一条：金额相加、取最后一条的 balance_after、记下这一串的时段与请求数。
+// 进这一串的第一条：金额及其赠送部分相加、取最后一条的 balance_after 与赠送余额、记下
+// 这一串的时段与请求数。
 // .scratch/token-pricing 之前，每个推送批次都会写一条用量账目；这是对它们的可选清理，
 // 也是唯一会改写账目的代码。合并前后余额链完全相同。每一串在租户计费行锁下的一个事务中
 // 合并；已合并的账目会与其后的账目再次合并，因此命令可以中断后再次执行。每处理完一个租户
@@ -119,9 +121,10 @@ func (s *Store) compactTenantLedger(ctx context.Context, tenantID string, loc *t
 // mergeLedgerRun 把 run（从旧到新，至少两条）合并进第一条，并删除其余各条。
 func (s *Store) mergeLedgerRun(ctx context.Context, tenantID string, run []model.CreditLedgerEntry) error {
 	first, last := run[0], run[len(run)-1]
-	amount, count := int64(0), int64(0)
+	amount, gift, count := int64(0), int64(0), int64(0)
 	for _, e := range run {
 		amount += e.AmountMicro
+		gift += e.GiftAmountMicro
 		count += ledgerRequestCount(e)
 	}
 	start, end := first.CreatedAt, last.CreatedAt
@@ -138,6 +141,7 @@ func (s *Store) mergeLedgerRun(ctx context.Context, tenantID string, run []model
 		}
 		if err := tx.Model(&model.CreditLedgerEntry{}).Where("id = ?", first.ID).Updates(map[string]any{
 			"amount_micro": amount, "balance_after_micro": last.BalanceAfterMicro,
+			"gift_amount_micro": gift, "gift_balance_after_micro": last.GiftBalanceAfterMicro,
 			"ref": fmt.Sprintf("%d requests", count), "request_count": count,
 			"period_start": start, "period_end": end,
 		}).Error; err != nil {

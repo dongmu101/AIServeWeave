@@ -17,6 +17,7 @@ dist/
 *.test
 data/open7x
 deploy/config.open7x.yaml
+/deploy/logs/
 
 # Runtime identity material and tokens written by local Registry / Agent runs.
 /data/

@@ -930,7 +930,7 @@ Gateway ◀──verify 响应带 billing_blocked── prepaid 且余额 ≤ 0 
 | `Billing.Dodo.APIKey` / `WebhookSecret` | 空 | 填了任一项即视为配置 Dodo，此时两项都必填，部署里用 `${AISW_DODO_API_KEY}` / `${AISW_DODO_WEBHOOK_SECRET}` 引用；都不填时充值包、结账、客户门户、webhook 与退款路由不挂载 |
 | `Billing.Dodo.Environment` | `test` | `test` 或 `live`；APIKey 带 `dodo_test_` / `dodo_live_` 前缀时必须与之一致，防止测试 key 配上 live 环境 |
 | `Billing.ReturnURL` | 空 | 配置 Dodo 时必填，绝对 `http(s)` 地址，付款完成或取消后 Dodo 回跳的 Console 计费页 |
-| `Billing.SignupGrantCredits` | `0` | 自助注册租户的期初赠送点数 |
+| `Billing.SignupGrantCredits` | `0` | 自助注册租户的期初赠送点数（整点）。运维在 Console 保存过注册赠送点数（`billing_settings`）后以数据库为准，此项只作尚未保存时的默认值 |
 | `Billing.Alipay.Enabled` | `false` | 开启支付宝（一人付）；API Key 只从环境变量 `opcpay_api_key` 读取，缺失时启动失败 |
 | `Billing.Alipay.CreditsPerUnitMicro` | 空 | 开启时必填，每 1 次 / 1 积分兑换的 micro 点数，1 – 10^12 |
 | `Billing.Alipay.ReturnURL` | 空 | 可选，HTTPS，主机与端口须与一人付项目网址一致；建议带 `?tab=alipay&alipay_return=1` |
@@ -962,13 +962,14 @@ Dodo 控制台里要把 webhook 指向 `<控制面地址>/billing/v1/dodo/webhoo
 
 | 表 | 作用 |
 | --- | --- |
-| `tenant_billing` | 每租户一行：`mode`、`balance_micro`、`dodo_customer_id`；`0014` 起另有尚未封账的用量累计（`usage_acc_*`）与上一条账目时间 `last_ledger_at` |
+| `tenant_billing` | 每租户一行：`mode`、`balance_micro`、`dodo_customer_id`；`0014` 起另有尚未封账的用量累计（`usage_acc_*`）与上一条账目时间 `last_ledger_at`；`0016` 起另有 `gift_balance_micro`（余额中赠送的部分）与 `usage_acc_gift_micro`（待封账用量中从赠送点数扣除的部分） |
 | `credit_packages` | 充值包（`pkg_`）：`fixed` 为固定价格产品对应固定点数；`custom` 为 Dodo Pay What You Want 产品，按 `credits_per_minor_unit_micro` 换算，金额在 `min_amount_minor`–`max_amount_minor` 内 |
 | `model_prices` | 旧的别名单价（`*` 为默认价）。2026-11-16 起只在首次读取定价配置时转换成第一个配置版本，之后不再读写，表保留供回退对照 |
 | `catalog_models` / `catalog_prices` / `catalog_pending` / `catalog_sync_state` | 价目表（`0012`）：条目与上游原始 JSON、按计量项 / 变体 / 档位的单价（带 `valid_from` / `valid_to`）、待审核变动、同步状态与价目表版本号 |
 | `pricing_revisions` / `tenant_price_plans` / `pricing_config_state` | 定价配置（`0013`）：每次修改追加的完整 JSON 文档（参照模型、覆盖价、模型倍率、默认价、价格方案）、租户所属方案历史、配置版本号。首个版本由 `EnsurePricingConfig` 在 `pricing_config_state` 行锁下从 `model_prices` 转换，多副本只写一次 |
 | `checkout_orders` | 结账订单（`ord_`）：点数在**创建订单时**算定，webhook 只核对不重算；`dodo_payment_id` 唯一；付款成功后记下实付金额与币种（`paid_amount_minor`/`paid_currency`，`0002_checkout_paid.sql`），退款以它为基准。`provider`（`dodo`/`ezfp`/`opcpay`）与 `pay_type`（易支付的 `alipay`/`wxpay`/`usdt`）见 `0009_ezfp.sql`，旧行为空，空值按 `alipay_amount` 推断为一人付或 Dodo。易支付订单的 `dodo_session_id`/`dodo_payment_id` 存 `ezfp:<trade_no>`，前缀使不同服务商的 id 在唯一索引下不冲突 |
-| `credit_ledger` | 余额的全部变动（`led_`）：`grant`/`topup`/`usage`/`refund`/`dispute`/`dispute_reversal`/`adjust`，带 `balance_after`；`idempotency_key` 唯一。只追加：除存量压缩命令外，控制面不 UPDATE 或 DELETE 这张表。`0014` 起用量账目带 `period_start`、`period_end`、`request_count` |
+| `credit_ledger` | 余额的全部变动（`led_`）：`grant`/`topup`/`alipay_topup`/`usage`/`refund`/`refund_reversal`/`dispute`/`dispute_reversal`/`adjust`（`account_purchase` 已定义但未使用），带 `balance_after`；`idempotency_key` 唯一。只追加：除存量压缩命令外，控制面不 UPDATE 或 DELETE 这张表。`0014` 起用量账目带 `period_start`、`period_end`、`request_count`；`0016` 起每条账目带 `gift_amount_micro`（本条金额中赠送的部分）与 `gift_balance_after_micro` |
+| `billing_settings` | 运维在 Console 保存的计费设置（`0016`），单行 `id = 1`：`signup_grant_micro`、`updated_by`、`updated_at`。没有这一行时注册赠送取 `Billing.SignupGrantCredits` |
 | `usage_charges` | 2026-11-16 起不再写入：扣费防重与费用都移到 `usage_records`。保留供 `-migrate backfill-usage-cost` 回填，下一个版本删除 |
 | `billing_webhook_events` | 已处理的 `webhook-id`，用于去重 |
 
@@ -979,6 +980,14 @@ Dodo 控制台里要把 webhook 指向 `<控制面地址>/billing/v1/dodo/webhoo
 `POST /internal/v1/usagerecords` 在计费开启时先为每条记录计价（写入费用列与 `details`），再走 `Store.ChargeUsage(records, now, sealAt)`，一个 **READ COMMITTED** 事务内：按租户 id 顺序对已有的 `tenant_billing` 行加 `FOR UPDATE`（没有行的租户是 exempt，不锁也不补行）→ 按 `id` 普通读 `usage_records`（不带 `created_at`，跨所有分区，按月分区保留 400 天约 14 次主键探查）→ 只插入尚不存在的记录并设置 `charged` → prepaid 租户扣减余额，金额累计到计费行，不再每批写账目（见下文「余额账目」）。Gateway 并发重推同一批时，后到的事务在租户锁上等前一个提交，再读到它的记录，不会重复扣费；`created_at` 不同的重发同样查得到。隔离级别固定为 READ COMMITTED：在 MySQL 默认的 REPEATABLE READ 下，对尚不存在的 id 做锁定读会加间隙锁，两个副本推送互不相关的批次也会互相死锁。由商户自有节点服务的请求照常计价、`cost_micro` 记 0。
 
 **余额账目**（2026-11-16）：累计在三个时机封成一条 `usage` 账目——扣费时发现已过 `Billing.LedgerTimezone` 的午夜（`sealAt`）、`applyCredit` 写入任何其他账目之前（同一事务）、`RunUsageLedgerSeal` 每分钟扫描 `usage_acc_until` 到期的租户（每轮最多 500 个，每个租户一个事务并在锁内复查）。共用规则在 `store/usageledger.go`。账目时间经 `NextLedgerTime` 严格递增（至少比上一条晚 1 微秒；`last_ledger_at` 为空的旧租户先从账目读最新时间）。余额链由共享场景 `storetest.UsageLedger` / `CheckLedgerChain` 守护。只有注册赠送、`applyCredit` 与封账三处写账目，退款、争议、支付宝入账、调整都经过 `applyCredit`。
+
+**购买与赠送点数**（2026-11-24）：余额分为购买点数与赠送点数，`balance_micro` 仍是总余额（拦截只看它），`gift_balance_micro` 是其中赠送的部分，购买部分 = 总余额 − 赠送部分。不变式 `0 ≤ gift ≤ max(balance, 0)` 由 `model.NormalizeGift` 在每次写余额后维持。
+
+- **入账**：写入方在账目上填 `gift_amount_micro`。注册赠送（`grant`）全部为赠送；运维调整按所选类型；充值、支付宝入账、退款、争议及其撤销为 0，只动购买部分。`store.CreditGift` 计算新的赠送余额，并把账目的 `gift_amount_micro` 改写为赠送余额的实际变动：退款或争议扣回的点数多于购买部分时，超出部分从赠送点数中扣，因此赠送余额也是一条余额链（`CheckLedgerChain` 校验）。
+- **扣费先扣赠送**：`AccrueUsage` 从赠送部分扣到 0 再扣购买部分，扣掉的赠送点数累计在 `usage_acc_gift_micro`，封账时写进用量账目。
+- **负数赠送调整**：要扣的赠送点数多于租户现有时拒绝（`store.ErrInsufficientGift` → `400`），不从购买点数补扣。
+- **退款上限**：「只退未用点数」的上限与租户侧可退金额预估只看购买部分（`refundLimit`、`RefundableOrders`），赠送点数不会抬高可退金额。
+- **历史数据**：迁移前的余额全部算购买点数，迁移前的账目 `gift_amount_micro` 为 0。
 
 **维护命令**：`-migrate backfill-usage-cost` 把 `usage_charges` 的费用写回没有价格来源的记录（`price_source = legacy`，倍率 1）；`-migrate compact-usage-ledger` 按账目时区合并升级前同一天、中间没有其他账目的连续用量账目，设置了 `Database.MaintenanceDSN` 时用它执行。两者都先检查表结构、可重复执行、以 JSON 行输出进度；`-migrate` 为此同时读取配置文件的 `Billing` 段。
 
@@ -1015,7 +1024,7 @@ Dodo 控制台里要把 webhook 指向 `<控制面地址>/billing/v1/dodo/webhoo
 
 | 接口 | 守卫 | 说明 |
 | --- | --- | --- |
-| `GET /admin/v1/billing` | 租户会话 | 模式、余额、是否拦截、上架的充值包 |
+| `GET /admin/v1/billing` | 租户会话 | 模式、余额（另带 `purchased_balance_micro`、`gift_balance_micro`）、是否拦截、上架的充值包 |
 | `POST /admin/v1/billing/checkout` | 租户 owner/admin | `{package_id, amount_minor?, provider?, pay_type?}`，`fixed` 包不得带金额，`custom` 包金额须在范围内；省略 `provider` 为 Dodo，`"ezfp"` 须带已配置的 `pay_type` 且商品为 CNY。返回 `201 {order_id, checkout_url}`。经 Dodo 首次购买时为租户创建 Dodo 客户；并发的首次购买以先记录的客户为准。服务商未配置或商品不能经它购买 `404`，选择非法 `400`，服务商出错或超时 `503` |
 | `POST /admin/v1/billing/portal` | 租户 owner/admin | 返回 Dodo 客户门户链接（发票、付款记录）；尚无客户时 `404` |
 | `GET /admin/v1/billing/ledger`、`/orders` | 租户会话 | 本租户账目与订单，游标分页；订单带 `provider`、`pay_type`，易支付订单的 `payment_id` 是去掉前缀的交易号。用量账目带 `period_start`、`period_end`、`request_count`；账目响应带 `pending_usage`（尚未封账的累计，金额为负：最新一条 `balance_after` 加上它就是余额） |
@@ -1028,9 +1037,10 @@ Dodo 控制台里要把 webhook 指向 `<控制面地址>/billing/v1/dodo/webhoo
 | `PUT /operator/v1/billing/tenants/:id/plan` | 平台会话 | `{plan_id}`，`null` 回到默认方案；方案不存在 `400` |
 | `GET /operator/v1/billing/effective-prices` | 平台会话 | 路由别名 ∪ 已配置别名的价格来源、参照条目、基础价与售价，可选 `plan_id`（不存在 `404`）；另带 `unpriced_aliases`、`unpriced_requests_24h` |
 | `GET /operator/v1/billing/catalog`、`.../catalog/pending`；`POST .../catalog/sync`、`.../catalog/pending/approve`、`.../reject` | 平台会话 | 价目表查询（`q` 前缀）与同步状态、待审核变动、立即同步（路由超时 60 秒）、批准或拒绝 |
-| `GET /operator/v1/billing/tenants` | 平台会话 | 租户及其模式、余额、方案与尚未封账的累计 |
+| `GET /operator/v1/billing/tenants` | 平台会话 | 租户及其模式、余额（另带购买与赠送两部分）、方案与尚未封账的累计 |
 | `PUT /operator/v1/billing/tenants/:id/mode` | 平台会话 | `{mode}`，`204` |
-| `POST /operator/v1/billing/tenants/:id/adjust` | 平台会话 | `{amount_micro, reason}`，写 `adjust` 账目 |
+| `POST /operator/v1/billing/tenants/:id/adjust` | 平台会话 | `{amount_micro, credit_type?, reason}`，写 `adjust` 账目；`credit_type` 为 `gift`（省略时的默认值）或 `purchased`，其他值 `400`；扣减的赠送点数多于租户现有时 `400` |
+| `GET`、`PUT /operator/v1/billing/settings` | 平台会话 | 计费设置：`{signup_grant_micro, saved, updated_by?, updated_at?}`。`PUT {signup_grant_micro}` 须 ≥ 0（缺失或负数 `400`），对此后注册的租户生效；`saved` 为 false 表示仍取配置文件默认值。仅 `Billing.Enabled` 且配置了服务商时挂载 |
 | `GET /operator/v1/billing/orders`、`/ledger` | 平台会话 | 跨租户，可选 `tenant_id`；带 `tenant_id` 时账目响应带 `pending_usage` |
 
 旧的 `/operator/v1/billing/model-prices` 于 2026-11-16 移除。公开目录 `GET /billing/v1/catalog` 的模型价格改为默认方案下的售价：保留 `input_micro_per_mtok` / `output_micro_per_mtok`（基础档售价），另带 `items` 列出全部计量项与档位；没有任何单价的别名不列出。
@@ -1039,7 +1049,7 @@ Dodo 控制台里要把 webhook 指向 `<控制面地址>/billing/v1/dodo/webhoo
 
 `GET /admin/v1/billing` 的 `payment_methods` 为 `{dodo, alipay, ezfp, ezfp_types}`，充值包另带 `dodo_available`/`ezfp_available`；Dodo 或易支付之一配置时挂载充值包、三个结账、退款申请与运维退款路由，客户门户与 Dodo webhook 只随 Dodo 挂载。
 
-写操作的审计动作：`billing.package.create`/`update`、`billing.tenant.mode`、`billing.tenant.adjust`、`billing.checkout.create`（易支付结账在说明中带 `via ezfp <type>`）；定价与价目表：`billing.pricing.model.set`/`delete`、`billing.pricing.default.set`、`billing.plan.create`/`update`/`delete`、`billing.tenant.plan`、`billing.catalog.sync`/`auto_apply`/`approve`/`reject`（一次同步按条目写的审计最多 200 条，另有一条摘要）。`billing.price.update`/`delete` 只出现在旧记录中。
+写操作的审计动作：`billing.package.create`/`update`、`billing.tenant.mode`、`billing.tenant.adjust`（说明中带 `credit_type`）、`billing.settings.update`（说明中带修改前后的 `signup_grant_micro`）、`billing.checkout.create`（易支付结账在说明中带 `via ezfp <type>`）；定价与价目表：`billing.pricing.model.set`/`delete`、`billing.pricing.default.set`、`billing.plan.create`/`update`/`delete`、`billing.tenant.plan`、`billing.catalog.sync`/`auto_apply`/`approve`/`reject`（一次同步按条目写的审计最多 200 条，另有一条摘要）。`billing.price.update`/`delete` 只出现在旧记录中。
 
 ### 支付宝（一人付）
 

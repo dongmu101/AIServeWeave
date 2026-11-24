@@ -88,7 +88,12 @@ func TestLargeNativeProxyForwarding(t *testing.T) {
 			endpoint, _ := url.Parse(proxy.proxyURL)
 			transport := &http.Transport{Proxy: http.ProxyURL(endpoint), TLSClientConfig: &tls.Config{RootCAs: roots}}
 			t.Cleanup(transport.CloseIdleConnections)
-			seed := map[string]any{"stream": kind != "side-call", "messages": []any{map[string]string{"role": "user", "content": "small seed"}}, "metadata": map[string]bool{"generated": true}}
+			seed := map[string]any{
+				"stream":             kind != "side-call",
+				"messages":           []any{map[string]string{"role": "user", "content": "small seed"}},
+				"metadata":           map[string]bool{"generated": true},
+				"context_management": json.RawMessage(`{"edits":[{"type":"clear_thinking_20251015","keep":"all"}]}`),
+			}
 			data, _ := json.Marshal(seed)
 			if strings.HasPrefix(kind, "gzip") {
 				var compressed bytes.Buffer
@@ -126,6 +131,9 @@ func TestLargeNativeProxyForwarding(t *testing.T) {
 				if canonical(body[key]) != canonical(value) {
 					t.Fatalf("changed field %s", key)
 				}
+			}
+			if _, ok := body["context_management"]; kind != "side-call" && ok {
+				t.Fatal("CLI context edits leaked into the caller's request")
 			}
 			if canonical(body["metadata"]) != canonical(seed["metadata"]) || actual.header.Get("Authorization") != req.Header.Get("Authorization") || actual.header.Get("Anthropic-Beta") != "feature-a" || actual.header.Get("Content-Encoding") != "" {
 				t.Fatal("relay changed authentication/selectors/metadata or retained stale compression")

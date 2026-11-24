@@ -74,7 +74,7 @@ func TestNativeCLISafeguardsContract(t *testing.T) {
 	program := installedContractCLI(t)
 	const rounds = 8
 	captured := make(chan nativeContractRequest, 1)
-	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	env := nativeFixtureEnvironment(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasSuffix(r.URL.Path, "/messages") {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(w, `{}`)
@@ -99,20 +99,23 @@ func TestNativeCLISafeguardsContract(t *testing.T) {
 		}
 		writeNativeContractRound(w, guards[0].Context.Round, rounds)
 	}))
-	defer api.Close()
 	account := t.TempDir()
 	if err := os.WriteFile(filepath.Join(account, "CLAUDE.md"), []byte("AGENT_LOCAL_INSTRUCTIONS_MUST_NOT_LEAK"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	b := newMessagesBridge(program, "claude-opus-5-5", map[string]principal{"fixture": {"t", "k"}}, runtime.NewSystemClock())
 	defer b.close()
-	b.env = append(withAccountDir(probeEnv(os.Environ()), account), "ANTHROPIC_API_KEY=loopback-fixture-only", "ANTHROPIC_BASE_URL="+api.URL, "DISABLE_TELEMETRY=1", "DISABLE_NON_ESSENTIAL_MODEL_CALLS=1")
+	b.env = withAccountDir(env, account)
 	ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
 	defer cancel()
 	t.Logf("CLI version: %s", cliprocess.Version(ctx, program, b.env))
 	document := map[string]any{
 		"model": b.model, "max_tokens": 4096, "stream": false,
-		"system":   []any{map[string]any{"type": "text", "text": "CALLER_SYSTEM_MARKER", "cache_control": map[string]string{"type": "ephemeral"}}},
+		"system": []any{
+			json.RawMessage(fixtureBilling),
+			json.RawMessage(fixtureIdentity),
+			map[string]any{"type": "text", "text": "CALLER_SYSTEM_MARKER", "cache_control": map[string]string{"type": "ephemeral"}},
+		},
 		"tools":    []any{map[string]any{"name": "read_file", "description": "Caller tool only", "input_schema": map[string]any{"type": "object", "properties": map[string]any{"path": map[string]string{"type": "string"}}}, "defer_loading": false}},
 		"thinking": map[string]string{"type": "adaptive"}, "output_config": map[string]string{"effort": "high"},
 		"context_management": map[string]any{"edits": []any{}}, "metadata": map[string]string{"user_id": "caller-metadata"},

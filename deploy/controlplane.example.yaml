@@ -283,6 +283,9 @@ TenantNodes:
 #     WebhookSecret: "${AISW_DODO_WEBHOOK_SECRET}"
 #     Environment: test
 #   ReturnURL: https://console.example.com/console/billing
+#   # Default signup gift credits until an operator saves one in the Console
+#   # (/operator/billing → 设置); the saved value then wins.
+#   # 注册赠送点数的默认值；运维在 Console（/operator/billing →「设置」）保存后以数据库为准。
 #   SignupGrantCredits: 0
 #   Alipay:
 #     Enabled: true

@@ -110,12 +110,13 @@ func TestNativeMergeWithoutCLIIdentity(t *testing.T) {
 	}
 }
 
-// TestNativeSettingsRelayIdentityFields keeps system and metadata out of the
-// CLI settings, so the proxy merges them with the CLI's own request.
-// TestNativeSettingsRelayIdentityFields 让 system 与 metadata 不进入 CLI 设置，由代理与 CLI
-// 自己的请求合并。
-func TestNativeSettingsRelayIdentityFields(t *testing.T) {
-	extra := map[string]any{"model": "fixture", "stream": true, "system": "caller", "metadata": map[string]string{"user_id": "u"}, "messages": []any{map[string]string{"role": "user", "content": "hi"}}, "betas": []string{"feature-a"}}
+func TestNativeSettingsRelayFields(t *testing.T) {
+	contextManagement := json.RawMessage(`{"edits":[{"type":"clear_tool_uses_20250919"}]}`)
+	extra := map[string]any{
+		"model": "fixture", "stream": true, "system": "caller",
+		"metadata": map[string]string{"user_id": "u"}, "context_management": contextManagement,
+		"messages": []any{map[string]string{"role": "user", "content": "hi"}}, "betas": []string{"feature-a"},
+	}
 	settings, request, err := nativeInputSettings(extra)
 	if err != nil || request == nil {
 		t.Fatalf("request/error = %t/%v", request != nil, err)
@@ -131,7 +132,13 @@ func TestNativeSettingsRelayIdentityFields(t *testing.T) {
 	if _, ok := body["metadata"]; ok {
 		t.Fatal("metadata entered settings")
 	}
-	if canonical(body["messages"]) != canonical(extra["messages"]) || len(relay) != 2 || canonical(relay["system"]) != canonical(extra["system"]) || canonical(relay["metadata"]) != canonical(extra["metadata"]) {
+	if canonical(body["messages"]) != canonical(extra["messages"]) || canonical(body["context_management"]) != canonical(contextManagement) ||
+		len(relay) != 3 || canonical(relay["system"]) != canonical(extra["system"]) || canonical(relay["metadata"]) != canonical(extra["metadata"]) {
 		t.Fatalf("settings %s relay %s", parsed.Env["CLAUDE_CODE_EXTRA_BODY"], request)
+	}
+	seed := map[string]json.RawMessage{"context_management": json.RawMessage(`{"edits":[{"type":"clear_thinking_20251015"}]}`)}
+	mergeNativeRequest(seed, relay)
+	if canonical(seed["context_management"]) != canonical(contextManagement) {
+		t.Fatalf("caller context edits changed: %s", seed["context_management"])
 	}
 }

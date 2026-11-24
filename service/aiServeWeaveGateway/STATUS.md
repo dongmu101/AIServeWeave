@@ -249,6 +249,8 @@ README 顶层「ComfyUI 任务 API」列出的六个端点已全部落地。产�
 
 ## 请求日志中间件与推送（P09/C28）
 
+Gateway 进程的 JSON 日志输出到标准输出。Compose 将容器输出同时写入宿主机日志文件，见 [部署日志说明](../../deploy/README.md#服务日志文件)。Console 请求检索使用下述控制面记录。
+
 `httpapi/requestlog.go` 与 `httpapi/requestlogpush.go` 是 Gateway 一侧对 STATUS.md P09/C28（请求与错误检索）的实现：把一次已完成、已鉴权的前门请求，采集成可检索的脱敏元数据，异步批量推送给控制面。
 
 1. **中间件插在鉴权之后、限流之前。** 完整链路是 `observe → withLogging → auth.middleware → requestLogMiddleware → rateLimit → mux`。放在 `auth.middleware` 之后，使 `IdentityFrom(ctx)` 已经就绪，不需要跨中间件共享指针；中间件包裹 `rateLimit` 与 `mux`，因此限流拒绝与业务 handler 的最终状态码都能被捕获。只对推理前门生效，`requestLogEndpoint` 把路径映射成封闭短名：`/v1/models`→`models`、`/v1/chat/completions`→`chat`、`/v1/embeddings`→`embeddings`、`/v1/responses`→`responses`、`/v1/images/generations`→`images`、`/v1/messages`→`messages`、`/v1/audio/transcriptions`→`transcriptions`、`/v1/audio/translations`→`translations`、`/v1/rerank`→`rerank`、`/api/chat`→`ollama_chat`、`/api/generate`→`ollama_generate`、`/api/embeddings`→`ollama_embed`。取值刻意不照搬指标或用量账本的名字：控制面 `request_logs.endpoint` 是 `VARCHAR(16)`，`anthropic_messages` 放不下，用短名就不需要迁移。其余路径（工作流 Job、产物下载、从不派发的 Ollama 模型管理路由等）直接跳过，不占用缓冲区容量。key 的展示形式与鉴权取同一把 key（`requestKey`），因此 `/v1/messages` 与 `GET /v1/models` 经 `x-api-key` 认证的请求同样带展示形式。`h.requestLogs` 为 `nil`（未配置控制面推送）时中间件是纯粹透传。
@@ -274,6 +276,8 @@ README 顶层「ComfyUI 任务 API」列出的六个端点已全部落地。产�
    - `error_detail`：派发失败背后的服务端错误，也就是 `dispatchErrorDetails` 写进日志的那个 `err.Error()`（≤1024 字节）。客户端只看到 "internal error" 这类泛化信息，排错需要这一项。`handleDispatchError`、`handleAnthropicDispatchError`、`handleOllamaDispatchError`、原生 Messages 的派发错误和上游错误透传都会调用 `noteDispatchError`，以第一次记下的为准。
 
    所有截断都在 rune 边界上进行。已知限制：流式响应在 200 响应头发出之后才出错的（SSE `error` 事件），状态码仍是 200，按成功记录，不带这些字段。
+
+6. **Messages 请求体解析（2026-11-24）。** `POST /v1/messages` 在运维检索的 `error_detail` 中记录脱敏原因：空请求体、提前结束、JSON 语法或类型错误及字节位置、多个 JSON 值、读取失败或超过大小上限。声明 gzip 时记录固定的 gzip 标记，不记录请求正文或解析器原始错误。校验首个 JSON 值后的内容时若触发大小上限，也返回 413 `request_too_large`。其余 JSON 解析失败继续返回 400 `invalid_request_error`。Gateway 默认测试通过，生产部署待验收，已有请求记录无法补写此次解析详情。
 
 控制面侧的表结构、内部推送端点幂等性、两个检索端点与保留期见 [ControlPlane STATUS「请求日志检索（P09/C28）」](../aiServeWeaveControlPlane/STATUS.md#请求日志检索p09c28)。
 

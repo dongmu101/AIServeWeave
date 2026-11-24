@@ -976,6 +976,14 @@ const tenant = {
   "tenant.modelScopeDedicated": "Dedizierte KI",
   "tenant.noCloudServices": "Noch keine Cloud-KI verfügbar.",
   "tenant.noDedicatedServices": "Noch keine dedizierte KI. Verbinden Sie einen eigenen Agent oder kaufen Sie ein dediziertes Konto, um sie hier zu sehen.",
-  "tenant.modelScopeHint": "Cloud-KI: vom Plattformbetrieb verwaltete, von Mandanten geteilte Agents, kostenlos oder kostenpflichtig. Dedizierte KI: selbst verbundene Agents und gekaufte Konten."
+  "tenant.modelScopeHint": "Cloud-KI: vom Plattformbetrieb verwaltete, von Mandanten geteilte Agents, kostenlos oder kostenpflichtig. Dedizierte KI: selbst verbundene Agents und gekaufte Konten.",
+  "tenant.billingPurchasedBalance": "Gekauftes Guthaben",
+  "tenant.billingGiftBalance": "Geschenktes Guthaben",
+  "tenant.billingGiftFirstHint": "Die Nutzung verbraucht zuerst geschenktes, dann gekauftes Guthaben.",
+  "tenant.billingBalanceSplit": "Gekauft {purchased} · Geschenkt {gift}",
+  "tenant.billingCreditType": "Guthabenart",
+  "tenant.billingCreditTypePurchased": "Gekauft",
+  "tenant.billingCreditTypeGift": "Geschenkt",
+  "tenant.billingKindRefundReversal": "Rückerstattungsstorno"
 } as const;
 export default tenant;

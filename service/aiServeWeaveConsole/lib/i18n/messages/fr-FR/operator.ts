@@ -751,6 +751,14 @@ const operator = {
   "operator.tenantPlanLabel": "Plan tarifaire de {name}",
   "operator.tenantPlanSaved": "Plan tarifaire mis à jour",
   "operator.tenantPending": "Usage non clôturé",
-  "operator.tenantPendingValue": "{credits} crédits · {count} requêtes"
+  "operator.tenantPendingValue": "{credits} crédits · {count} requêtes",
+  "operator.billingSettings": "Paramètres",
+  "operator.billingSignupGrant": "Crédits offerts à l’inscription",
+  "operator.billingSignupGrantHint": "Crédits accordés à un locataire qui s’inscrit lui-même, comptés comme crédits offerts. 0 n’en accorde aucun. La modification s’applique aux locataires inscrits ensuite.",
+  "operator.billingSettingsFromConfig": "Pas encore enregistré ici ; la valeur actuelle provient du fichier de configuration du plan de contrôle.",
+  "operator.billingSettingsUpdated": "Dernier enregistrement {time}",
+  "operator.billingSettingsSaved": "Paramètres de facturation enregistrés",
+  "operator.billingProblemSignupGrant": "Saisissez au moins 0 crédit, avec six décimales au plus",
+  "operator.billingAdjustTypeHint": "Une déduction de crédits offerts ne peut dépasser les crédits offerts actuels du locataire."
 } as const;
 export default operator;

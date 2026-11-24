@@ -2,9 +2,13 @@ package httpapi
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"testing/iotest"
 
 	"AIServeWeave/common/runtime"
 )
@@ -133,6 +137,49 @@ func TestRequestLogMiddlewareFieldsMatchTheRequest(t *testing.T) {
 	}
 	if got.KeyDisplay == "" || got.KeyDisplay == "aisw-abcdefgh12345678" {
 		t.Errorf("KeyDisplay = %q, want a non-empty display form that is not the full plaintext key", got.KeyDisplay)
+	}
+}
+
+func TestMessagesRequestLogRecordsJSONFailure(t *testing.T) {
+	const privateMarker = "PRIVATE_MARKER"
+	for _, tc := range []struct {
+		name, encoding, detail string
+		body                   io.Reader
+		status                 int
+	}{
+		{name: "empty", body: strings.NewReader(""), detail: "Messages request body is empty", status: 400},
+		{name: "truncated", body: strings.NewReader(`{"model":`), detail: "Messages request JSON ended unexpectedly", status: 400},
+		{name: "syntax", body: strings.NewReader(`{"model":PRIVATE_MARKER}`), detail: "Messages request JSON syntax error at byte ", status: 400},
+		{name: "gzip", encoding: "GZip", body: strings.NewReader("\x1f\x8b"), detail: "Messages request JSON syntax error at byte 1 (Content-Encoding: gzip)", status: 400},
+		{name: "type", body: strings.NewReader(`{"model":"fixture","max_tokens":"PRIVATE_MARKER"}`), detail: "Messages request JSON type mismatch at byte ", status: 400},
+		{name: "multiple values", body: strings.NewReader(`{} {}`), detail: "Messages request body contains more than one JSON value", status: 400},
+		{name: "read error", body: iotest.ErrReader(errors.New(privateMarker)), detail: "Messages request body could not be read", status: 400},
+		{name: "size limit after first value", body: io.MultiReader(strings.NewReader(`{}`), iotest.ErrReader(&http.MaxBytesError{Limit: maxMessagesRequestBytes})), detail: "Messages request body exceeds the size limit", status: 413},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sink := &fakeRequestLogSink{}
+			h := &handlers{requestLogs: sink, metrics: newRecorder(nil), clock: runtime.NewSystemClock()}
+			req := httptest.NewRequest(http.MethodPost, "/v1/messages", tc.body)
+			req.Header.Set("Content-Encoding", tc.encoding)
+			ctx := context.WithValue(req.Context(), identityKey{}, Identity{TenantID: "tnt_1"})
+			rec := httptest.NewRecorder()
+			h.requestLogMiddleware(http.HandlerFunc(h.anthropicMessages)).ServeHTTP(rec, req.WithContext(ctx))
+
+			if rec.Code != tc.status || len(sink.records) != 1 {
+				t.Fatalf("status %d, records %d", rec.Code, len(sink.records))
+			}
+			got := sink.records[0]
+			if !strings.HasPrefix(got.ErrorDetail, tc.detail) || strings.Contains(got.ErrorDetail, privateMarker) {
+				t.Fatalf("unexpected error detail %q", got.ErrorDetail)
+			}
+			wantCode, wantMessage := "invalid_request_error", "the request body is not valid JSON"
+			if tc.status == http.StatusRequestEntityTooLarge {
+				wantCode, wantMessage = "request_too_large", "the request body exceeds the size limit"
+			}
+			if got.ErrorCode != wantCode || got.ErrorMessage != wantMessage || strings.Contains(rec.Body.String(), got.ErrorDetail) {
+				t.Fatalf("unexpected public error %s", rec.Body)
+			}
+		})
 	}
 }
 

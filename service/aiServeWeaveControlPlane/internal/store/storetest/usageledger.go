@@ -24,11 +24,13 @@ type UsageLedgerStore interface {
 // (.scratch/token-pricing/spec.md「余额账目」): created_at strictly
 // increases, each balance_after is the previous one plus the entry's amount,
 // and the latest balance_after less the pending accumulation is the
-// balance. It returns the entries oldest first.
+// balance. The gift part keeps the same chain, and never exceeds what is
+// left of the balance. It returns the entries oldest first.
 //
 // CheckLedgerChain 在租户的账目不是健全的余额链时让 t 失败（.scratch/token-pricing/
 // spec.md「余额账目」）：created_at 严格递增，每条 balance_after 等于上一条加上本条金额，
-// 最新一条的 balance_after 减去尚未封账的累计等于余额。它按从旧到新的顺序返回账目。
+// 最新一条的 balance_after 减去尚未封账的累计等于余额。赠送部分也保持同样的余额链，且
+// 从不超过剩余余额。它按从旧到新的顺序返回账目。
 func CheckLedgerChain(t *testing.T, st UsageLedgerStore, tenant string) []model.CreditLedgerEntry {
 	t.Helper()
 	ctx := context.Background()
@@ -46,7 +48,7 @@ func CheckLedgerChain(t *testing.T, st UsageLedgerStore, tenant string) []model.
 		query.Cursor = page.NextCursor
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].CreatedAt.Before(entries[j].CreatedAt) })
-	balance := int64(0)
+	balance, gift := int64(0), int64(0)
 	for i, e := range entries {
 		if i > 0 && !e.CreatedAt.After(entries[i-1].CreatedAt) {
 			t.Fatalf("ledger of %s: entry %d at %v does not come after %v", tenant, i, e.CreatedAt, entries[i-1].CreatedAt)
@@ -55,6 +57,11 @@ func CheckLedgerChain(t *testing.T, st UsageLedgerStore, tenant string) []model.
 		if e.BalanceAfterMicro != balance {
 			t.Fatalf("ledger of %s: entry %d (%s %d) balance_after = %d, want %d", tenant, i, e.Kind, e.AmountMicro, e.BalanceAfterMicro, balance)
 		}
+		gift += e.GiftAmountMicro
+		if e.GiftBalanceAfterMicro != gift || gift != model.NormalizeGift(gift, balance) {
+			t.Fatalf("ledger of %s: entry %d (%s %d, gift %d) gift_balance_after = %d, want %d within balance %d",
+				tenant, i, e.Kind, e.AmountMicro, e.GiftAmountMicro, e.GiftBalanceAfterMicro, gift, balance)
+		}
 	}
 	row, err := st.GetTenantBilling(ctx, tenant)
 	if err != nil {
@@ -62,6 +69,10 @@ func CheckLedgerChain(t *testing.T, st UsageLedgerStore, tenant string) []model.
 	}
 	if balance-row.UsageAccMicro != row.BalanceMicro {
 		t.Fatalf("ledger of %s ends at %d with %d pending, but the balance is %d", tenant, balance, row.UsageAccMicro, row.BalanceMicro)
+	}
+	if gift-row.UsageAccGiftMicro != row.GiftBalanceMicro || row.GiftBalanceMicro != model.NormalizeGift(row.GiftBalanceMicro, row.BalanceMicro) {
+		t.Fatalf("ledger of %s ends with gift %d and %d pending, but the gift balance is %d of %d",
+			tenant, gift, row.UsageAccGiftMicro, row.GiftBalanceMicro, row.BalanceMicro)
 	}
 	return entries
 }

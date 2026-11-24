@@ -1,3 +1,34 @@
+# 购买与赠送点数、注册赠送入库（2026-11-24）
+
+租户余额分为**购买点数**与**赠送点数**，注册赠送点数改由运维在 Console 配置并存入数据库（默认 0）。规则见[按 token 计价「购买点数与赠送点数」](docs/billing-token-pricing.md#购买点数与赠送点数)与 [ControlPlane STATUS](service/aiServeWeaveControlPlane/STATUS.md)。
+
+- **控制面**：
+  - 新增 `tenant_billing.gift_balance_micro`、`usage_acc_gift_micro`，`credit_ledger.gift_amount_micro`、`gift_balance_after_micro`，以及单行表 `billing_settings`。
+  - 用量先扣赠送点数；退款或争议扣回超过购买点数时由赠送点数抵扣。赠送余额与总余额一样形成余额链。
+  - 「只退未用点数」的退款上限只看购买点数。
+  - 新增 `GET`/`PUT /operator/v1/billing/settings`；运维调整余额新增 `credit_type`（`gift` 默认，或 `purchased`），扣减的赠送点数多于现有时 `400`。
+  - 余额概览、运维商户列表、账目响应带上购买与赠送两部分。
+- **Console**：运维计费页新增「设置」标签页与调整类型选项；租户余额卡片、总览与账目显示点数类型。见 [Console STATUS](service/aiServeWeaveConsole/STATUS.md)。
+
+升级须知：
+
+- **顺序**：先迁移并升级控制面，再升级 Console。新 Console 能读取旧控制面的响应（缺少字段时按全部是购买点数显示），但旧控制面没有 `/operator/v1/billing/settings`，「设置」页会显示「计费未开启」。
+- **迁移**：`billing/0016`，四个 `BIGINT NOT NULL DEFAULT 0` 列（MySQL `ALGORITHM=INSTANT`，PostgreSQL 11+ 加带常量默认值的列不重写表）与一张新表。`sql/init.sql` 已同步。
+- **行为变更**：升级前的余额全部算作购买点数，升级前写入的注册赠送不追溯为赠送点数；退款上限与升级前相同，直到产生新的赠送点数。
+- **配置**：`Billing.SignupGrantCredits` 仍然有效，但只作尚未在 Console 保存时的默认值；保存过一次后以数据库为准（保存 0 即关闭赠送）。
+- **回退**：数据库记录了 `billing/0016` 后，旧版控制面会以「unknown database migration」拒绝启动，回退须恢复迁移前的备份。
+
+已通过的检查：
+
+- 控制面 `go vet` 与默认测试；共享余额链校验 `storetest.CheckLedgerChain` 加入赠送余额链与 `0 ≤ 赠送 ≤ max(余额, 0)`，全部既有的账目场景（含并发与时钟倒退）在此校验下通过。
+- 临时用例覆盖：规则函数（收敛、入账、先扣赠送、封账）；memstore 上的完整场景，并发扣费与入账带 `-race`；logic 的注册赠送来源（默认、配置文件、已保存、保存为 0）、设置的权限、校验与审计、调整类型、退款上限只看购买点数；HTTP handler 的设置接口、调整、概览、商户列表与账目字段。临时用例已删除。
+- Console lint、类型检查、445 项单元测试、生产构建；Playwright 相关 276 项通过。
+
+尚未验收：
+
+- **gormstore 实库**：临时 PostgreSQL 与 MySQL 上的 live 用例未运行（本机 Docker 未启动），包括 `0016` 迁移的执行、`billing_settings` upsert 与压缩命令累加赠送部分。
+- 真实控制面与 Console 的端到端联调。
+
 # Studio 对话（2026-11-16）
 
 [Studio](service/aiServeWeaveStudio/README.md) 可以发送消息了：新建对话、流式回答、思考过程、重新生成、停止、历史、重命名与删除。规格见 `.scratch/studio-chat-flows/spec.md`。

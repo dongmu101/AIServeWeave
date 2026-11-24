@@ -751,6 +751,14 @@ const operator = {
   "operator.tenantPlanLabel": "Preisplan von {name}",
   "operator.tenantPlanSaved": "Preisplan aktualisiert",
   "operator.tenantPending": "Nicht abgeschlossene Nutzung",
-  "operator.tenantPendingValue": "{credits} Guthaben · {count} Anfragen"
+  "operator.tenantPendingValue": "{credits} Guthaben · {count} Anfragen",
+  "operator.billingSettings": "Einstellungen",
+  "operator.billingSignupGrant": "Startguthaben bei Registrierung",
+  "operator.billingSignupGrantHint": "Guthaben, das ein selbst registrierter Mandant erhält, gebucht als geschenktes Guthaben. 0 bedeutet keines. Änderungen gelten für danach registrierte Mandanten.",
+  "operator.billingSettingsFromConfig": "Hier noch nicht gespeichert; der aktuelle Wert stammt aus der Konfigurationsdatei der Steuerungsebene.",
+  "operator.billingSettingsUpdated": "Zuletzt gespeichert {time}",
+  "operator.billingSettingsSaved": "Abrechnungseinstellungen gespeichert",
+  "operator.billingProblemSignupGrant": "Geben Sie 0 oder mehr Guthaben ein, mit höchstens sechs Nachkommastellen",
+  "operator.billingAdjustTypeHint": "Ein Abzug von geschenktem Guthaben darf das aktuelle geschenkte Guthaben des Mandanten nicht übersteigen."
 } as const;
 export default operator;

@@ -122,7 +122,7 @@ test("ledger pages carry period fields and the pending usage", () => {
   });
   assert.equal(ledger.items[0]?.requestCount, 2);
   assert.equal(ledger.items[0]?.periodStart, "2026-11-16T07:00:00Z");
-  assert.deepEqual(ledger.pendingUsage, { amountMicro: -40, requestCount: 3, since: at, last: at, sealAt: "2026-11-17T00:00:00Z" });
+  assert.deepEqual(ledger.pendingUsage, { amountMicro: -40, giftAmountMicro: 0, requestCount: 3, since: at, last: at, sealAt: "2026-11-17T00:00:00Z" });
   const old = parseLedgerPage({ items: [{ id: "led_2", kind: "usage", amount_micro: -1, balance_after_micro: 1, ref: "1 requests", created_at: at }] });
   assert.equal(old.items[0]?.periodStart, null);
   assert.equal(old.items[0]?.requestCount, 0);

@@ -755,6 +755,40 @@ func handleAnthropicDispatchError(w http.ResponseWriter, logger *slog.Logger, er
 // Handler
 // -----------------------------------------------------------------------
 
+var errMessagesTrailingJSON = errors.New("multiple JSON values")
+
+// writeMessagesJSONError records only the parse category and byte offset.
+// writeMessagesJSONError 仅记录解析错误的类别与字节位置。
+func writeMessagesJSONError(w http.ResponseWriter, r *http.Request, err error) {
+	var syntax *json.SyntaxError
+	var wrongType *json.UnmarshalTypeError
+	var tooLarge *http.MaxBytesError
+	var detail string
+	switch {
+	case errors.As(err, &tooLarge):
+		noteRequestErrorDetail(r.Context(), "Messages request body exceeds the size limit")
+		writeAnthropicError(w, http.StatusRequestEntityTooLarge, "request_too_large", "the request body exceeds the size limit")
+		return
+	case errors.Is(err, io.EOF):
+		detail = "Messages request body is empty"
+	case errors.Is(err, io.ErrUnexpectedEOF):
+		detail = "Messages request JSON ended unexpectedly"
+	case errors.Is(err, errMessagesTrailingJSON):
+		detail = "Messages request body contains more than one JSON value"
+	case errors.As(err, &syntax):
+		detail = fmt.Sprintf("Messages request JSON syntax error at byte %d", syntax.Offset)
+	case errors.As(err, &wrongType):
+		detail = fmt.Sprintf("Messages request JSON type mismatch at byte %d", wrongType.Offset)
+	default:
+		detail = "Messages request body could not be read"
+	}
+	if strings.EqualFold(strings.TrimSpace(r.Header.Get("Content-Encoding")), "gzip") {
+		detail += " (Content-Encoding: gzip)"
+	}
+	noteRequestErrorDetail(r.Context(), detail)
+	writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "the request body is not valid JSON")
+}
+
 // anthropicMessages implements POST /v1/messages.
 //
 // anthropicMessages 实现 POST /v1/messages。
@@ -763,14 +797,15 @@ func (h *handlers) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 	var req anthropicMessagesRequest
 	var raw json.RawMessage
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxMessagesRequestBytes))
-	if err := decoder.Decode(&raw); err != nil || decoder.Decode(new(any)) != io.EOF {
-		// Like the Messages API, an oversized body is 413 request_too_large.
-		// 与 Messages API 一致，超大请求体返回 413 request_too_large。
-		if tooLarge := new(http.MaxBytesError); errors.As(err, &tooLarge) {
-			writeAnthropicError(w, http.StatusRequestEntityTooLarge, "request_too_large", "the request body exceeds the size limit")
-			return
+	if err := decoder.Decode(&raw); err != nil {
+		writeMessagesJSONError(w, r, err)
+		return
+	}
+	if err := decoder.Decode(new(json.RawMessage)); err != io.EOF {
+		if err == nil {
+			err = errMessagesTrailingJSON
 		}
-		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "the request body is not valid JSON")
+		writeMessagesJSONError(w, r, err)
 		return
 	}
 	r, raw, err := prepareRequest(r, raw, dialectAnthropic)
@@ -778,8 +813,8 @@ func (h *handlers) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return
 	}
-	if json.Unmarshal(raw, &req) != nil {
-		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "the request body is not valid JSON")
+	if err := json.Unmarshal(raw, &req); err != nil {
+		writeMessagesJSONError(w, r, err)
 		return
 	}
 	if req.Model == "" || len(req.Messages) == 0 {

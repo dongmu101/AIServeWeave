@@ -49,6 +49,7 @@ const KIND_KEYS: Record<(typeof LEDGER_KINDS)[number], MessageKey> = {
   topup: "tenant.billingKindTopup",
   usage: "tenant.billingKindUsage",
   refund: "tenant.billingKindRefund",
+  refund_reversal: "tenant.billingKindRefundReversal",
   dispute: "tenant.billingKindDispute",
   dispute_reversal: "tenant.billingKindDisputeReversal",
   adjust: "tenant.billingKindAdjust",
@@ -68,6 +69,33 @@ const STATUS_KEYS: Record<(typeof ORDER_STATUSES)[number], MessageKey> = {
  * ledgerKindLabel 给出账目类型的名称；不认识的较新类型回退为原始值，仍能显示点什么。 */
 export function ledgerKindLabel(kind: string, t: Translator): string {
   return kind in KIND_KEYS ? t(KIND_KEYS[kind as keyof typeof KIND_KEYS]) : kind;
+}
+
+/** CreditSplit shows which part of the balance an amount moved: purchased
+ * or gift credits alone, or both (a usage entry that ran past the gift
+ * credits).
+ *
+ * CreditSplit 显示一笔金额变动的是余额的哪一部分：只有购买或只有赠送点数，或两者都有
+ * （用完赠送点数后继续扣费的用量账目）。 */
+export function CreditSplit({ amountMicro, giftMicro }: { amountMicro: number; giftMicro: number }) {
+  const { t, locale } = useI18n();
+  if (giftMicro === 0) return <Badge variant="outline"><Message id="tenant.billingCreditTypePurchased" /></Badge>;
+  if (giftMicro === amountMicro) return <Badge variant="secondary"><Message id="tenant.billingCreditTypeGift" /></Badge>;
+  return <span className="text-xs whitespace-nowrap">{t("tenant.billingBalanceSplit", {
+    purchased: formatSignedCredits(amountMicro - giftMicro, locale),
+    gift: formatSignedCredits(giftMicro, locale),
+  })}</span>;
+}
+
+/** BalanceSplit is the muted purchased · gift line under a balance.
+ *
+ * BalanceSplit 是余额下方淡色的「购买 · 赠送」一行。 */
+export function BalanceSplit({ balanceMicro, giftMicro }: { balanceMicro: number; giftMicro: number }) {
+  const { t, locale } = useI18n();
+  return <span className="block text-xs font-normal text-muted-foreground whitespace-nowrap">{t("tenant.billingBalanceSplit", {
+    purchased: formatCredits(balanceMicro - giftMicro, locale),
+    gift: formatCredits(giftMicro, locale),
+  })}</span>;
 }
 
 /** orderStatusLabel names an order status, with the same fallback.
@@ -208,6 +236,7 @@ export function LedgerTable({ surface = "admin", tenantId = "" }: { surface?: "a
             <TableHead><Message id="tenant.time" /></TableHead>
             {operator ? <TableHead><Message id="tenant.tenantId" /></TableHead> : null}
             <TableHead><Message id="tenant.billingKind" /></TableHead>
+            <TableHead><Message id="tenant.billingCreditType" /></TableHead>
             <TableHead className="text-right"><Message id="tenant.billingChange" /></TableHead>
             <TableHead className="text-right"><Message id="tenant.billingBalanceAfter" /></TableHead>
             <TableHead><Message id="tenant.billingReference" /></TableHead>
@@ -218,8 +247,9 @@ export function LedgerTable({ surface = "admin", tenantId = "" }: { surface?: "a
               <TableCell className="whitespace-nowrap">{formatDateTime(entry.createdAt, undefined, locale)}</TableCell>
               {operator ? <TableCell><code className="text-xs break-all">{entry.tenantId}</code></TableCell> : null}
               <TableCell className="whitespace-nowrap">{ledgerKindLabel(entry.kind, t)}</TableCell>
+              <TableCell><CreditSplit amountMicro={entry.amountMicro} giftMicro={entry.giftAmountMicro} /></TableCell>
               <TableCell className={`text-right font-mono whitespace-nowrap ${entry.amountMicro < 0 ? "text-destructive" : ""}`}>{formatSignedCredits(entry.amountMicro, locale)}</TableCell>
-              <TableCell className="text-right font-mono whitespace-nowrap">{formatCredits(entry.balanceAfterMicro, locale)}</TableCell>
+              <TableCell className="text-right font-mono whitespace-nowrap">{formatCredits(entry.balanceAfterMicro, locale)}{entry.giftBalanceAfterMicro !== 0 ? <BalanceSplit balanceMicro={entry.balanceAfterMicro} giftMicro={entry.giftBalanceAfterMicro} /> : null}</TableCell>
               <TableCell className="max-w-64">
                 {entry.periodStart !== null && entry.periodEnd !== null ? <span className="grid gap-0.5 text-xs">
                   <span>{t("tenant.billingUsagePeriod", {
@@ -254,6 +284,7 @@ function PendingUsageRow({ pending, operator }: { pending: PendingUsage; operato
     <TableCell className="whitespace-nowrap"><Badge variant="outline"><Message id="tenant.billingPendingUsage" /></Badge></TableCell>
     {operator ? <TableCell /> : null}
     <TableCell className="whitespace-nowrap">{ledgerKindLabel("usage", t)}</TableCell>
+    <TableCell><CreditSplit amountMicro={pending.amountMicro} giftMicro={pending.giftAmountMicro} /></TableCell>
     <TableCell className="text-right font-mono whitespace-nowrap text-destructive">{formatSignedCredits(pending.amountMicro, locale)}</TableCell>
     <TableCell className="text-right text-muted-foreground">—</TableCell>
     <TableCell className="max-w-64"><span className="text-xs">{t("tenant.billingPendingNote", {

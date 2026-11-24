@@ -99,11 +99,17 @@ func TestNativeCLIHistorySizeContract(t *testing.T) {
 	for _, tc := range []struct {
 		size             int
 		guarded, escaped bool
+		thinking         string
 	}{
 		{size: 128 << 10}, {size: 512 << 10}, {size: 1 << 20}, {size: 2 << 20}, {size: 4 << 20}, {size: 16 << 20}, {size: 31 << 20},
 		{size: 4 << 20, guarded: true}, {size: 512 << 10, escaped: true},
+		{size: 64, thinking: "between_tools"},
 	} {
-		t.Run(fmt.Sprintf("%d/guarded=%t/escaped=%t", tc.size, tc.guarded, tc.escaped), func(t *testing.T) {
+		name := fmt.Sprintf("%d/guarded=%t/escaped=%t", tc.size, tc.guarded, tc.escaped)
+		if tc.thinking != "" {
+			name = "thinking=" + tc.thinking
+		}
+		t.Run(name, func(t *testing.T) {
 			var logs bytes.Buffer
 			rt, err := NewFactory(program)(runtime.Config{ID: "fixture", Kind: runtime.KindClaude}, runtime.Dependencies{
 				Clock: runtime.NewSystemClock(), Logger: slog.New(slog.NewJSONHandler(&logs, nil)),
@@ -113,15 +119,23 @@ func TestNativeCLIHistorySizeContract(t *testing.T) {
 			}
 			r := rt.(*Runtime)
 			defer r.Close()
-			r.models = map[string]struct{}{"claude-opus-5-5": {}}
+			model := "claude-opus-5-5"
+			if tc.thinking != "" {
+				model = "claude-sonnet-5-5"
+			}
+			r.models = map[string]struct{}{model: {}}
 			r.bridge.env = env
 			text := strings.Repeat("x", tc.size)
 			if tc.escaped {
 				text = strings.Repeat("\"\\", tc.size/2)
 			}
 			document := map[string]any{
-				"model": "claude-opus-5-5", "max_tokens": 1024,
+				"model": model, "max_tokens": 1024,
 				"messages": []any{map[string]string{"role": "user", "content": text}},
+			}
+			if tc.thinking != "" {
+				document["thinking"] = map[string]string{"type": tc.thinking}
+				document["stop_sequences"] = []string{"</severity>"}
 			}
 			if tc.guarded {
 				document["messages"] = []any{map[string]string{"role": "user", "content": "synthetic guarded request"}}
@@ -130,7 +144,7 @@ func TestNativeCLIHistorySizeContract(t *testing.T) {
 			body, _ := json.Marshal(document)
 			ctx, cancel := context.WithTimeout(t.Context(), 25*time.Second)
 			defer cancel()
-			stream, err := r.Messages(ctx, runtime.MessagesRequest{Model: "claude-opus-5-5", TenantID: "tenant", KeyID: "key", Native: true, JSON: body})
+			stream, err := r.Messages(ctx, runtime.MessagesRequest{Model: model, TenantID: "tenant", KeyID: "key", Native: true, JSON: body})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -146,6 +160,9 @@ func TestNativeCLIHistorySizeContract(t *testing.T) {
 			}
 			select {
 			case document := <-captured:
+				if _, ok := document["context_management"]; ok {
+					t.Fatal("CLI context edits leaked into the caller's request")
+				}
 				var expected map[string]json.RawMessage
 				_ = json.Unmarshal(body, &expected)
 				for key, value := range expected {

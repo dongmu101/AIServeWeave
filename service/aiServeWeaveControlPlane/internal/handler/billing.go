@@ -96,6 +96,7 @@ func billingOverview(ctx *svc.ServiceContext) http.HandlerFunc {
 		}
 		writeJSON(w, http.StatusOK, types.BillingOverviewResponse{
 			Mode: overview.Mode, BalanceMicro: overview.BalanceMicro, Blocked: overview.Blocked,
+			PurchasedBalanceMicro: overview.BalanceMicro - overview.GiftBalanceMicro, GiftBalanceMicro: overview.GiftBalanceMicro,
 			HasCustomer: overview.HasCustomer, Packages: packages, RefundWindowDays: overview.RefundWindowDays,
 			PaymentMethods: types.PaymentMethods{Dodo: overview.Dodo, Alipay: overview.Alipay, Ezfp: overview.Ezfp, EzfpTypes: ezfpTypes},
 		})
@@ -154,14 +155,7 @@ func listBillingLedger(ctx *svc.ServiceContext, operator bool) http.HandlerFunc 
 		}
 		items := make([]types.LedgerEntry, len(page.Items))
 		for i, e := range page.Items {
-			items[i] = types.LedgerEntry{
-				ID: e.ID, Kind: e.Kind, AmountMicro: e.AmountMicro, BalanceAfterMicro: e.BalanceAfterMicro,
-				Ref: e.Ref, CreatedAt: e.CreatedAt,
-				PeriodStart: e.PeriodStart, PeriodEnd: e.PeriodEnd, RequestCount: e.RequestCount,
-			}
-			if operator {
-				items[i].TenantID = e.TenantID
-			}
+			items[i] = renderLedgerEntry(e, operator)
 		}
 		resp := types.LedgerListResponse{Items: items, NextCursor: page.NextCursor}
 		row, pending, err := ctx.Logic.PendingUsage(r.Context(), actor, filter.TenantID)
@@ -328,6 +322,7 @@ func listBillingTenants(ctx *svc.ServiceContext) http.HandlerFunc {
 			items[i] = types.BillingTenant{
 				ID: v.Tenant.ID, Name: v.Tenant.Name, Status: v.Tenant.Status, Mode: v.Billing.Mode,
 				BalanceMicro: v.Billing.BalanceMicro, Blocked: v.Billing.Blocked(), CreatedAt: v.Tenant.CreatedAt,
+				PurchasedBalanceMicro: v.Billing.PurchasedBalanceMicro(), GiftBalanceMicro: v.Billing.GiftBalanceMicro,
 				PricePlanID: v.PricePlanID,
 			}
 			if v.Billing.UsageAccCount > 0 {
@@ -364,16 +359,75 @@ func adjustCredit(ctx *svc.ServiceContext) http.HandlerFunc {
 		if !decode(w, r, &req) {
 			return
 		}
-		entry, err := ctx.Logic.AdjustTenantCredit(r.Context(), actor, pathvar.Vars(r)["id"], req.AmountMicro, req.Reason)
+		entry, err := ctx.Logic.AdjustTenantCredit(r.Context(), actor, pathvar.Vars(r)["id"], req.AmountMicro, req.CreditType, req.Reason)
 		if err != nil {
 			respondErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, types.LedgerEntry{
-			ID: entry.ID, TenantID: entry.TenantID, Kind: entry.Kind, AmountMicro: entry.AmountMicro,
-			BalanceAfterMicro: entry.BalanceAfterMicro, Ref: entry.Ref, CreatedAt: entry.CreatedAt,
-		})
+		writeJSON(w, http.StatusOK, renderLedgerEntry(entry, true))
 	})
+}
+
+// renderLedgerEntry renders one ledger entry; the tenant id only for an
+// operator.
+//
+// renderLedgerEntry 渲染一条账目；只对运维给出租户 id。
+func renderLedgerEntry(e model.CreditLedgerEntry, operator bool) types.LedgerEntry {
+	out := types.LedgerEntry{
+		ID: e.ID, Kind: e.Kind, AmountMicro: e.AmountMicro, BalanceAfterMicro: e.BalanceAfterMicro,
+		GiftAmountMicro: e.GiftAmountMicro, GiftBalanceAfterMicro: e.GiftBalanceAfterMicro,
+		Ref: e.Ref, CreatedAt: e.CreatedAt,
+		PeriodStart: e.PeriodStart, PeriodEnd: e.PeriodEnd, RequestCount: e.RequestCount,
+	}
+	if operator {
+		out.TenantID = e.TenantID
+	}
+	return out
+}
+
+// getBillingSettings handles GET /operator/v1/billing/settings.
+//
+// getBillingSettings 处理 GET /operator/v1/billing/settings。
+func getBillingSettings(ctx *svc.ServiceContext) http.HandlerFunc {
+	return withActorHandler(func(w http.ResponseWriter, r *http.Request, actor logic.Actor) {
+		view, err := ctx.Logic.GetBillingSettings(r.Context(), actor)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, renderBillingSettings(view))
+	})
+}
+
+// putBillingSettings handles PUT /operator/v1/billing/settings.
+//
+// putBillingSettings 处理 PUT /operator/v1/billing/settings。
+func putBillingSettings(ctx *svc.ServiceContext) http.HandlerFunc {
+	return withActorHandler(func(w http.ResponseWriter, r *http.Request, actor logic.Actor) {
+		var req types.BillingSettingsRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		if req.SignupGrantMicro == nil {
+			respondErr(w, logic.ErrInvalidInput)
+			return
+		}
+		view, err := ctx.Logic.PutBillingSettings(r.Context(), actor, *req.SignupGrantMicro)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, renderBillingSettings(view))
+	})
+}
+
+func renderBillingSettings(view logic.BillingSettingsView) types.BillingSettingsResponse {
+	out := types.BillingSettingsResponse{SignupGrantMicro: view.SignupGrantMicro}
+	if view.Saved != nil {
+		at := view.Saved.UpdatedAt
+		out.Saved, out.UpdatedBy, out.UpdatedAt = true, view.Saved.UpdatedBy, &at
+	}
+	return out
 }
 
 // requestRefund handles POST /admin/v1/billing/orders/:id/refund-requests.
@@ -565,7 +619,7 @@ func renderCreditPackage(pkg model.CreditPackage, operator bool) types.CreditPac
 // renderPendingUsage 把计费行上的累计转换为线上形式。
 func renderPendingUsage(row model.TenantBilling) *types.PendingUsage {
 	return &types.PendingUsage{
-		AmountMicro: -row.UsageAccMicro, RequestCount: row.UsageAccCount,
+		AmountMicro: -row.UsageAccMicro, GiftAmountMicro: -row.UsageAccGiftMicro, RequestCount: row.UsageAccCount,
 		Since: row.UsageAccSince, Last: row.UsageAccLast, SealAt: row.UsageAccUntil,
 	}
 }

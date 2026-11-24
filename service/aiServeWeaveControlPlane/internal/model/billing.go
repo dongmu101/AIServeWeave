@@ -102,17 +102,39 @@ const (
 	LedgerKindAccountPurchase = "account_purchase"
 )
 
+// Credit types. A tenant's balance is split into purchased and gift credits:
+// TenantBilling.GiftBalanceMicro is the gift part of BalanceMicro, and
+// CreditLedgerEntry.GiftAmountMicro the gift part of an entry's amount. Usage
+// spends gift credits first, and a refund of unused credits looks only at the
+// purchased part. Types are not stored; they are what an operator picks for
+// an adjustment and what the API shows.
+//
+// 点数类型。租户余额分为购买点数与赠送点数：TenantBilling.GiftBalanceMicro 是
+// BalanceMicro 中赠送的部分，CreditLedgerEntry.GiftAmountMicro 是账目金额中赠送的部分。
+// 用量先扣赠送点数，「只退未用点数」的退款只看购买部分。类型本身不入库，它是运维调整余额
+// 时选择的、也是接口展示的内容。
+const (
+	CreditTypePurchased = "purchased"
+	CreditTypeGift      = "gift"
+)
+
 // TenantBilling is one tenant's billing state. A tenant with no row is
 // exempt with a zero balance.
 //
 // TenantBilling 是一个租户的计费状态。没有这一行的租户是余额为零的 exempt 租户。
 type TenantBilling struct {
-	TenantID       string `gorm:"primaryKey;size:40"`
-	Mode           string `gorm:"size:16;not null"`
-	BalanceMicro   int64  `gorm:"not null"`
-	DodoCustomerID string `gorm:"size:64;not null"`
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	TenantID     string `gorm:"primaryKey;size:40"`
+	Mode         string `gorm:"size:16;not null"`
+	BalanceMicro int64  `gorm:"not null"`
+	// GiftBalanceMicro is the gift part of BalanceMicro, kept within
+	// [0, max(BalanceMicro, 0)] by NormalizeGift; the rest is purchased.
+	//
+	// GiftBalanceMicro 是 BalanceMicro 中赠送的部分，由 NormalizeGift 保持在
+	// [0, max(BalanceMicro, 0)] 之内；其余为购买的部分。
+	GiftBalanceMicro int64  `gorm:"not null;default:0"`
+	DodoCustomerID   string `gorm:"size:64;not null"`
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 	// The usage accumulated since the last usage ledger entry
 	// (.scratch/token-pricing/spec.md「余额账目」): its amount (already taken
 	// off BalanceMicro), how many charged requests it covers, its first and
@@ -122,11 +144,15 @@ type TenantBilling struct {
 	// 自上一条用量账目以来累计的用量（.scratch/token-pricing/spec.md「余额账目」）：
 	// 金额（已经从 BalanceMicro 中扣除）、涵盖的扣费请求数、第一笔与最后一笔扣费时间，
 	// 以及最迟须封账成账目的时间。没有累计时 Count 为零、各时间为 nil。
-	UsageAccMicro int64      `gorm:"not null;default:0"`
-	UsageAccCount int64      `gorm:"not null;default:0"`
-	UsageAccSince *time.Time `gorm:""`
-	UsageAccLast  *time.Time `gorm:""`
-	UsageAccUntil *time.Time `gorm:"index:idx_tenant_billing_usage_acc_until"`
+	UsageAccMicro int64 `gorm:"not null;default:0"`
+	// UsageAccGiftMicro is the part of UsageAccMicro taken from gift credits.
+	//
+	// UsageAccGiftMicro 是 UsageAccMicro 中从赠送点数扣除的部分。
+	UsageAccGiftMicro int64      `gorm:"not null;default:0"`
+	UsageAccCount     int64      `gorm:"not null;default:0"`
+	UsageAccSince     *time.Time `gorm:""`
+	UsageAccLast      *time.Time `gorm:""`
+	UsageAccUntil     *time.Time `gorm:"index:idx_tenant_billing_usage_acc_until"`
 	// LastLedgerAt is the created_at of the tenant's latest ledger entry,
 	// which every new entry must come after; nil until the first entry
 	// written by this release, when the store reads it from the ledger.
@@ -146,6 +172,27 @@ func (TenantBilling) TableName() string { return "tenant_billing" }
 // Blocked 报告 Gateway 是否必须拒绝该租户的流量：余额不为正的 prepaid 租户。
 func (b TenantBilling) Blocked() bool {
 	return b.Mode == BillingModePrepaid && b.BalanceMicro <= 0
+}
+
+// PurchasedBalanceMicro is the purchased part of the balance.
+//
+// PurchasedBalanceMicro 是余额中购买的部分。
+func (b TenantBilling) PurchasedBalanceMicro() int64 {
+	return b.BalanceMicro - b.GiftBalanceMicro
+}
+
+// NormalizeGift clamps a gift balance into [0, max(balance, 0)], so gift
+// credits never exceed what is left: once the purchased part would go
+// negative (a refund or dispute taking back spent credits), the gift part
+// covers it first.
+//
+// NormalizeGift 把赠送余额收敛到 [0, max(balance, 0)]，使赠送点数不超过剩余余额：购买
+// 部分一旦要变为负数（退款或争议扣回已用掉的点数），先由赠送部分抵扣。
+func NormalizeGift(gift, balance int64) int64 {
+	if balance < 0 {
+		balance = 0
+	}
+	return min(max(gift, 0), balance)
 }
 
 // CreditPackage is one purchasable credit offer, backed by one Dodo product.
@@ -600,6 +647,17 @@ type CreditLedgerEntry struct {
 	IdempotencyKey    *string `gorm:"size:160"`
 	ActorID           string  `gorm:"size:40;not null"`
 	CreatedAt         time.Time
+	// GiftAmountMicro is the gift part of AmountMicro, set by the writer: the
+	// whole amount for a gift credit, zero for a purchased one, and the part
+	// taken from gift credits for a usage entry. GiftBalanceAfterMicro is the
+	// gift balance this entry left behind, so gift credits keep a balance
+	// chain of their own.
+	//
+	// GiftAmountMicro 是 AmountMicro 中赠送的部分，由写入方设置：赠送入账为全部金额，购买
+	// 入账为零，用量账目为从赠送点数扣除的部分。GiftBalanceAfterMicro 是本条账目留下的
+	// 赠送余额，使赠送点数也有自己的余额链。
+	GiftAmountMicro       int64 `gorm:"not null;default:0"`
+	GiftBalanceAfterMicro int64 `gorm:"not null;default:0"`
 	// PeriodStart, PeriodEnd and RequestCount describe a usage entry: the
 	// first and last charge it seals and how many charged requests. They are
 	// empty on every other kind and on usage entries written before this
@@ -615,6 +673,29 @@ type CreditLedgerEntry struct {
 //
 // TableName 钉死表名。
 func (CreditLedgerEntry) TableName() string { return "credit_ledger" }
+
+// SettingsRowID is the id of the single billing_settings row.
+//
+// SettingsRowID 是 billing_settings 唯一一行的 id。
+const SettingsRowID = 1
+
+// BillingSettings is the billing configuration an operator saves from the
+// console: the credits a self-registered tenant is given. While no row is
+// saved, Billing.SignupGrantCredits in the config file stands in.
+//
+// BillingSettings 是运维在 Console 中保存的计费设置：自助注册的租户获赠的点数。尚未保存
+// 时由配置文件中的 Billing.SignupGrantCredits 代替。
+type BillingSettings struct {
+	ID               int    `gorm:"primaryKey;autoIncrement:false"`
+	SignupGrantMicro int64  `gorm:"not null"`
+	UpdatedBy        string `gorm:"size:40;not null"`
+	UpdatedAt        time.Time
+}
+
+// TableName pins the table name.
+//
+// TableName 钉死表名。
+func (BillingSettings) TableName() string { return "billing_settings" }
 
 // UsageCharge is what one usage record cost. Its key is the usage record's
 // request id, so a usage record is charged at most once however often the

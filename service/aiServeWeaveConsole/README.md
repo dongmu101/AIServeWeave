@@ -69,7 +69,7 @@ Next.js 服务端负责会话 Cookie 与受限的接口转发，控制面负责�
 | 我的节点 | `GET/POST /admin/v1/nodes`、`DELETE /admin/v1/nodes/:node_id` | `/console/nodes` | 商户自带机器，只供本商户使用。控制面 `TenantNodes` 默认开启，配齐对外地址与 Registry 后生效，每商户最多同时 10 台；未生效时 `404`，页面显示「未开启」。任何角色可看列表与在线状态；owner/admin 可生成接入包（ZIP 只返回一次，不自动重试）和删除节点（Registry 停用并断开连接）。跑在自有节点上的请求不扣点数 |
 | 用量 | `GET /admin/v1/usage/summary`、`GET /admin/v1/usage/records` | `/console/usage` | 按模型 / 用户 / Key 汇总 token、缓存读写与消耗点数（计费开启时），以及逐笔明细（各计量项的数量、单价与费用）。明细的时间参数是 `since` / `until`，与汇总一致 |
 | 预充值计费 | `GET /admin/v1/billing`、`POST /admin/v1/billing/{checkout,portal}`、`GET /admin/v1/billing/{ledger,orders,prices}` | `/console/billing` | 仅在控制面 `Billing.Enabled` 时存在，否则全部 `404`，页面显示「计费未开启」。任何角色可看余额、账目与订单；仅 owner/admin 可购买与打开客户门户。结账与门户链接由控制面向 Dodo Payments 申请，Console 只校验其为 https 后跳转 |
-| 计费管理 | `/operator/v1/billing/{packages,pricing,plans,catalog,effective-prices,tenants,orders,ledger}` | `/operator/billing` | **平台运维接口**：充值包新建/编辑（无删除，下架即 `active:false`）、模型定价（参照模型、覆盖价、模型倍率、默认价）、价目表审核、价格方案、租户计费模式、方案与余额调整、跨租户订单与账目。规则见[按 token 计价](../../docs/billing-token-pricing.md) |
+| 计费管理 | `/operator/v1/billing/{packages,pricing,plans,catalog,effective-prices,tenants,orders,ledger,settings}` | `/operator/billing` | **平台运维接口**：充值包新建/编辑（无删除，下架即 `active:false`）、模型定价（参照模型、覆盖价、模型倍率、默认价）、价目表审核、价格方案、租户计费模式、方案与余额调整（可选购买或赠送点数，默认赠送）、跨租户订单与账目、「设置」中的注册赠送点数。规则见[按 token 计价](../../docs/billing-token-pricing.md) |
 | 审计 | `GET /admin/v1/audit` | `/console/audit` | 支持 `action`、`actor_id`、`since`、`until` 筛选与游标分页 |
 | 机群清单 | `GET /operator/v1/nodes`、`GET /operator/v1/models` | `/operator/fleet`、`/operator/models` | **不是租户接口**：节点是所有租户共用的基础设施，由平台会话守卫；清单依赖控制面 Fleet 配置，节点写操作依赖 Registry 配置 |
 | 工作流菜单 | `GET /admin/v1/workflows` | `/console/workflows` | 租户接口，返回模板与输入声明；**不含工作流的图**。控制面在返回前清空副本 id 与内部 endpoint |
@@ -282,7 +282,7 @@ Playwright 结果、失败截图与 trace 位于 `test-results/`，指定窄屏�
 计费的业务与支付全部在控制面：点数余额、账目、订单、计价（价目表、定价配置、价格方案）与 Dodo Payments 的 API Key、Webhook 密钥都只在控制面。**Console 不持有任何 Dodo 凭据，不引入 Dodo SDK，也不直连 Dodo**；页面只经 `/api/admin/*`、`/api/operator/*` 白名单调用控制面，Dodo 的 Webhook 直接打到控制面 `POST /billing/v1/dodo/webhook`，不经过 Console、也不在白名单里。
 
 - 单位：点数在线上是 micro 点整数（1 点 = 1,000,000 micro），展示与输入都以「点」为单位并按字符串精确换算，最多 6 位小数；金额是货币最小单位整数，按货币的小数位数（Intl 解析，JPY 为 0、USD 为 2）展示与输入。换算与校验集中在 `lib/console/billing.ts`，有单元测试。
-- 租户 `/console/billing`：余额卡片（预充值且 `blocked` 时醒目提示 API 将返回 HTTP 402；免计费租户不显示计费模式与免计费说明）、充值包（固定包显示点数与价格，自定义包按 `credits_per_minor_unit_micro` 实时换算并校验上下限）、「管理付款与收据」（`has_customer` 且 owner/admin 时显示，首次购买前门户 `404` 显示固定文案）、「模型价格」分区（本租户方案下的各计量项售价，长上下文档位与服务等级可展开）、账目与订单两张游标分页表。账目最上面显示尚未封账的「进行中」一行（预计封账时间）；用量账目显示时间段与请求数，并链接到用量页「明细」的对应时间范围（往前多取 10 分钟以补偿推送延迟）。结账与门户都是只发一次的写请求；`503` 显示「支付服务暂时不可用」，上游错误原文不渲染。
+- 租户 `/console/billing`：余额卡片（总余额、购买点数、赠送点数；有赠送点数时提示用量先扣赠送；预充值且 `blocked` 时醒目提示 API 将返回 HTTP 402；免计费租户不显示计费模式与免计费说明）、充值包（固定包显示点数与价格，自定义包按 `credits_per_minor_unit_micro` 实时换算并校验上下限）、「管理付款与收据」（`has_customer` 且 owner/admin 时显示，首次购买前门户 `404` 显示固定文案）、「模型价格」分区（本租户方案下的各计量项售价，长上下文档位与服务等级可展开）、账目与订单两张游标分页表。账目带「点数类型」列（购买、赠送，或用量跨过赠送点数时两者分列）。账目最上面显示尚未封账的「进行中」一行（预计封账时间）；用量账目显示时间段与请求数，并链接到用量页「明细」的对应时间范围（往前多取 10 分钟以补偿推送延迟）。结账与门户都是只发一次的写请求；`503` 显示「支付服务暂时不可用」，上游错误原文不渲染。
 - 「模型价格」列表按输入、输出、缓存读取、缓存写入的顺序展示基础档售价，并包含已单独定价、当前在服且商户有权使用的同名直连模型。
 - 支付回跳：Dodo 回跳 `return_url` 时附带 `status`、`payment_id`。页面**只把它们当作「开始等待」的提示**，从不据此判定到账；随后每 3 秒读取一次余额与最近一笔订单，最多 10 次，订单不再是 `pending` 即停止，到账一律以服务端记录为准。
 - 运维 `/operator/billing`：充值包、模型定价、价目表审核、价格方案、商户、订单、账目等标签页。

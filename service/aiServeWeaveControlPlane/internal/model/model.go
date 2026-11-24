@@ -436,6 +436,7 @@ const (
 	ActionBillingPriceDelete   = "billing.price.delete"
 	ActionBillingTenantMode    = "billing.tenant.mode"
 	ActionBillingTenantAdjust  = "billing.tenant.adjust"
+	ActionBillingSettings      = "billing.settings.update"
 	ActionBillingCheckout      = "billing.checkout.create"
 	ActionBillingOrderDelete   = "billing.order.delete"
 	ActionAccountSaleSave      = "billing.account.save"

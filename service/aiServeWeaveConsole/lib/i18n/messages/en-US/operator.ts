@@ -754,6 +754,14 @@ const operator = {
   "operator.tenantPlanLabel": "Price plan of {name}",
   "operator.tenantPlanSaved": "Price plan updated",
   "operator.tenantPending": "Unsealed usage",
-  "operator.tenantPendingValue": "{credits} credits · {count} requests"
+  "operator.tenantPendingValue": "{credits} credits · {count} requests",
+  "operator.billingSettings": "Settings",
+  "operator.billingSignupGrant": "Signup gift credits",
+  "operator.billingSignupGrantHint": "Credits a self-registered tenant is given, booked as gift credits. 0 gives none. A change applies to tenants that register afterwards.",
+  "operator.billingSettingsFromConfig": "Not saved here yet; the current value comes from the control plane config file.",
+  "operator.billingSettingsUpdated": "Last saved {time}",
+  "operator.billingSettingsSaved": "Billing settings saved",
+  "operator.billingProblemSignupGrant": "Enter credits of 0 or more, with at most six decimal places",
+  "operator.billingAdjustTypeHint": "A gift deduction cannot exceed the tenant's current gift credits."
 } as const;
 export default operator;

@@ -542,7 +542,11 @@ func (s *Service) createTenantWithOwner(ctx context.Context, name, ownerEmail, o
 	// prepaid 租户的计费行在其 owner 之前写入，因此一次失败留下的是一个没有 owner 的
 	// 惰性租户，而不是一个有人能登录、无需余额就能使用的租户：没有计费行的租户是 exempt。
 	if prepaid {
-		if row, grant := s.initialBilling(tenant.ID); row != nil {
+		row, grant, err := s.initialBilling(ctx, tenant.ID)
+		if err != nil {
+			return model.Tenant{}, model.User{}, translate(err)
+		}
+		if row != nil {
 			if err := s.store.InitTenantBilling(ctx, *row, grant); err != nil {
 				return model.Tenant{}, model.User{}, translate(err)
 			}

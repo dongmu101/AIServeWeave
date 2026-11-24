@@ -39,11 +39,18 @@ type CreditPackage struct {
 //
 // BillingOverviewResponse 是 GET /admin/v1/billing 的响应。
 type BillingOverviewResponse struct {
-	Mode         string          `json:"mode"`
-	BalanceMicro int64           `json:"balance_micro"`
-	Blocked      bool            `json:"blocked"`
-	HasCustomer  bool            `json:"has_customer"`
-	Packages     []CreditPackage `json:"packages"`
+	Mode         string `json:"mode"`
+	BalanceMicro int64  `json:"balance_micro"`
+	// PurchasedBalanceMicro and GiftBalanceMicro split BalanceMicro into
+	// purchased and gift credits; usage spends gift credits first.
+	//
+	// PurchasedBalanceMicro 与 GiftBalanceMicro 把 BalanceMicro 分为购买点数与赠送
+	// 点数；用量先扣赠送点数。
+	PurchasedBalanceMicro int64           `json:"purchased_balance_micro"`
+	GiftBalanceMicro      int64           `json:"gift_balance_micro"`
+	Blocked               bool            `json:"blocked"`
+	HasCustomer           bool            `json:"has_customer"`
+	Packages              []CreditPackage `json:"packages"`
 	// RefundWindowDays is how long after a purchase the tenant may ask for a
 	// refund; zero means it may not.
 	//
@@ -112,6 +119,13 @@ type LedgerEntry struct {
 	BalanceAfterMicro int64     `json:"balance_after_micro"`
 	Ref               string    `json:"ref"`
 	CreatedAt         time.Time `json:"created_at"`
+	// GiftAmountMicro is the gift part of AmountMicro (the rest is purchased
+	// credits) and GiftBalanceAfterMicro the gift part of BalanceAfterMicro.
+	//
+	// GiftAmountMicro 是 AmountMicro 中赠送的部分（其余为购买点数），
+	// GiftBalanceAfterMicro 是 BalanceAfterMicro 中赠送的部分。
+	GiftAmountMicro       int64 `json:"gift_amount_micro"`
+	GiftBalanceAfterMicro int64 `json:"gift_balance_after_micro"`
 	// PeriodStart, PeriodEnd and RequestCount are set on a usage entry
 	// written by this release: the first and last charge it covers and how
 	// many charged requests.
@@ -130,11 +144,15 @@ type LedgerEntry struct {
 // PendingUsage 是已经从余额中扣除、但尚未封账成账目的用量。AmountMicro 与用量账目一样
 // 为负数：最新一条账目的 balance_after 加上 AmountMicro 就是余额。
 type PendingUsage struct {
-	AmountMicro  int64      `json:"amount_micro"`
-	RequestCount int64      `json:"request_count"`
-	Since        *time.Time `json:"since,omitempty"`
-	Last         *time.Time `json:"last,omitempty"`
-	SealAt       *time.Time `json:"seal_at,omitempty"`
+	AmountMicro int64 `json:"amount_micro"`
+	// GiftAmountMicro is the part of AmountMicro taken from gift credits.
+	//
+	// GiftAmountMicro 是 AmountMicro 中从赠送点数扣除的部分。
+	GiftAmountMicro int64      `json:"gift_amount_micro"`
+	RequestCount    int64      `json:"request_count"`
+	Since           *time.Time `json:"since,omitempty"`
+	Last            *time.Time `json:"last,omitempty"`
+	SealAt          *time.Time `json:"seal_at,omitempty"`
 }
 
 // LedgerListResponse is one page of ledger entries. PendingUsage is present
@@ -253,13 +271,18 @@ type CreditPackageListResponse struct {
 //
 // BillingTenant 是一个租户及其计费状态。
 type BillingTenant struct {
-	ID           string    `json:"id"`
-	Name         string    `json:"name"`
-	Status       string    `json:"status"`
-	Mode         string    `json:"mode"`
-	BalanceMicro int64     `json:"balance_micro"`
-	Blocked      bool      `json:"blocked"`
-	CreatedAt    time.Time `json:"created_at"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Status       string `json:"status"`
+	Mode         string `json:"mode"`
+	BalanceMicro int64  `json:"balance_micro"`
+	// PurchasedBalanceMicro and GiftBalanceMicro split BalanceMicro.
+	//
+	// PurchasedBalanceMicro 与 GiftBalanceMicro 是 BalanceMicro 的两部分。
+	PurchasedBalanceMicro int64     `json:"purchased_balance_micro"`
+	GiftBalanceMicro      int64     `json:"gift_balance_micro"`
+	Blocked               bool      `json:"blocked"`
+	CreatedAt             time.Time `json:"created_at"`
 	// PricePlanID is the tenant's current price plan, present only when
 	// billing is enabled.
 	//
@@ -288,12 +311,39 @@ type BillingModeRequest struct {
 }
 
 // CreditAdjustRequest adds AmountMicro (negative to deduct) to a tenant's
-// balance; Reason is recorded on the ledger entry.
+// balance; Reason is recorded on the ledger entry. CreditType is "gift" (the
+// default when empty) or "purchased": the part of the balance it moves.
 //
 // CreditAdjustRequest 把 AmountMicro（为负则扣减）记入租户余额；Reason 记录在账目上。
+// CreditType 为 "gift"（为空时的默认值）或 "purchased"：变动的是余额的哪一部分。
 type CreditAdjustRequest struct {
 	AmountMicro int64  `json:"amount_micro"`
+	CreditType  string `json:"credit_type,omitempty"`
 	Reason      string `json:"reason"`
+}
+
+// BillingSettingsResponse is GET and PUT /operator/v1/billing/settings.
+// Saved is false while the config file's Billing.SignupGrantCredits stands
+// in; UpdatedBy and UpdatedAt describe the last save.
+//
+// BillingSettingsResponse 是 GET 与 PUT /operator/v1/billing/settings 的响应。仍由
+// 配置文件的 Billing.SignupGrantCredits 代替时 Saved 为 false；UpdatedBy 与 UpdatedAt
+// 描述最近一次保存。
+type BillingSettingsResponse struct {
+	SignupGrantMicro int64      `json:"signup_grant_micro"`
+	Saved            bool       `json:"saved"`
+	UpdatedBy        string     `json:"updated_by,omitempty"`
+	UpdatedAt        *time.Time `json:"updated_at,omitempty"`
+}
+
+// BillingSettingsRequest is PUT /operator/v1/billing/settings.
+// SignupGrantMicro is the micro-credits a self-registered tenant is given;
+// zero turns the grant off.
+//
+// BillingSettingsRequest 是 PUT /operator/v1/billing/settings 的请求。
+// SignupGrantMicro 是自助注册的租户获赠的 micro 点数；为零时关闭赠送。
+type BillingSettingsRequest struct {
+	SignupGrantMicro *int64 `json:"signup_grant_micro"`
 }
 
 // RefundRequest is one refund of one order. AmountMinor is in Currency, the

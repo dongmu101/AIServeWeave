@@ -201,6 +201,13 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 			billingRoute(http.MethodDelete, "/operator/v1/billing/plans/:id", requirePlatformSession, deletePricePlan(ctx)),
 			billingRoute(http.MethodPut, "/operator/v1/billing/tenants/:id/plan", requirePlatformSession, setTenantPricePlan(ctx)),
 		})
+		// Billing settings an operator saves: the signup grant.
+		//
+		// 运维保存的计费设置：注册赠送点数。
+		server.AddRoutes([]rest.Route{
+			billingRoute(http.MethodGet, "/operator/v1/billing/settings", requirePlatformSession, getBillingSettings(ctx)),
+			billingRoute(http.MethodPut, "/operator/v1/billing/settings", requirePlatformSession, putBillingSettings(ctx)),
+		})
 		// Prices as charging resolves them now: every alias under one plan
 		// for the operator, the caller's own under its plan for a tenant.
 		//

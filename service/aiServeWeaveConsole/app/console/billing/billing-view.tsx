@@ -378,11 +378,20 @@ function BalanceSummary({ overview, canPurchase }: { overview: BillingOverview; 
           <dt className="text-xs text-muted-foreground"><Message id="tenant.billingBalance" /></dt>
           <dd className="font-heading text-2xl font-semibold break-all">{t("tenant.billingCreditsValue", { credits: formatCredits(overview.balanceMicro, locale) })}</dd>
         </div>
+        <div className="grid min-w-0 gap-1">
+          <dt className="text-xs text-muted-foreground"><Message id="tenant.billingPurchasedBalance" /></dt>
+          <dd className="font-mono text-base break-all">{formatCredits(overview.purchasedBalanceMicro, locale)}</dd>
+        </div>
+        <div className="grid min-w-0 gap-1">
+          <dt className="text-xs text-muted-foreground"><Message id="tenant.billingGiftBalance" /></dt>
+          <dd className="font-mono text-base break-all">{formatCredits(overview.giftBalanceMicro, locale)}</dd>
+        </div>
         {exempt ? null : <div className="grid gap-1.5">
           <dt className="text-xs text-muted-foreground"><Message id="tenant.billingMode" /></dt>
           <dd><Badge variant="outline">{overview.mode === "account_monthly" ? t("tenant.billingModeAccountMonthly") : t("tenant.billingModePrepaid")}</Badge></dd>
         </div>}
       </dl>
+      {overview.giftBalanceMicro > 0 ? <p className="text-xs text-muted-foreground"><Message id="tenant.billingGiftFirstHint" /></p> : null}
       {!exempt && overview.blocked ? <p role="alert" className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm font-medium text-destructive"><Message id="tenant.billingBlocked" /></p> : null}
       {!canPurchase ? <p className="text-sm text-muted-foreground"><Message id="tenant.billingPurchaseOwnerOnly" /></p> : null}
     </CardContent>

@@ -64,6 +64,8 @@ x-logging: &logging
     max-size: "10m"
     max-file: "3"
 
+x-log-script: &log_script ./service-logs.sh:/usr/local/bin/service-logs.sh:ro
+
 services:
   postgres:
     profiles: ["postgres"]
@@ -138,7 +140,7 @@ services:
       start_period: 30s
 
   redis:
-    image: redis:8-alpine
+    image: &redis_image redis:8-alpine
     restart: unless-stopped
     logging: *logging
     # P05 会话吊销以 Redis 为权威状态；确认成功的写入必须先 fsync。
@@ -227,8 +229,10 @@ services:
     # loadAdminToken 从磁盘读取），所以这个入口先把环境变量写进数据卷一次，再
     # exec 真正的二进制——与下面 bootstrap 的 shell 包装同一个理由，只是用在了
     # ENTRYPOINT 而不是 command 上。
-    entrypoint: ["/bin/sh", "-c"]
+    init: true
+    entrypoint: ["/bin/sh", "/usr/local/bin/service-logs.sh", "/var/log/aisw/registry.log", "/bin/sh"]
     command:
+      - --aisw-capture-logs
       - |
         set -eu
         echo "$$AISW_REGISTRY_ADMIN_TOKEN" > /data/admin-token
@@ -251,6 +255,8 @@ services:
       # compose-internal network (P08's MetricsHistory collector), not to
       # open it beyond the host.
     volumes:
+      - *log_script
+      - ./logs/registry:/var/log/aisw
       - registry-data:/data
     ports:
       # Remote Agents register and renew over TLS; restrict ingress to their source IPs.
@@ -258,6 +264,8 @@ services:
       - "0.0.0.0:${REGISTRY_PORT:-9443}:9443"
       - "127.0.0.1:${REGISTRY_METRICS_PORT:-9091}:9091"
     depends_on:
+      logs-init:
+        condition: service_completed_successfully
       registry-init:
         condition: service_completed_successfully
 
@@ -269,7 +277,9 @@ services:
         SERVICE: aiServeWeaveControlPlane
     restart: unless-stopped
     logging: *logging
-    command: ["-f", "/etc/aiserveweave/controlplane.yaml"]
+    init: true
+    entrypoint: ["/bin/sh", "/usr/local/bin/service-logs.sh", "/var/log/aisw/controlplane.log", "/usr/local/bin/service"]
+    command: ["--aisw-capture-logs", "-f", "/etc/aiserveweave/controlplane.yaml"]
     mem_limit: ${CONTROLPLANE_MEM_LIMIT:-384m}
     environment:
       GOMEMLIMIT: ${CONTROLPLANE_GOMEMLIMIT:-300MiB}
@@ -321,6 +331,8 @@ services:
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-aiserveweave}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-aiserveweave}
     volumes:
+      - *log_script
+      - ./logs/controlplane:/var/log/aisw
       - ./controlplane.yaml:/etc/aiserveweave/controlplane.yaml:ro
       # 只读，读的是 registry-init 签发的同一份 CA（见本目录 README「证书链是怎么
       # 闭合的」），供 Registry.CACertFile 校验 Registry 的服务端证书。
@@ -332,6 +344,8 @@ services:
     ports:
       - "127.0.0.1:${CONTROLPLANE_PORT:-8090}:8090"
     depends_on:
+      logs-init:
+        condition: service_completed_successfully
       mysql:
         condition: service_healthy
       redis:
@@ -449,6 +463,9 @@ services:
       context: ../service/aiServeWeaveConsole
     restart: unless-stopped
     logging: *logging
+    init: true
+    entrypoint: ["/bin/sh", "/usr/local/bin/service-logs.sh", "/var/log/aisw/console.log", "/usr/local/bin/docker-entrypoint.sh"]
+    command: ["--aisw-capture-logs", "node", "server.js"]
     mem_limit: ${CONSOLE_MEM_LIMIT:-384m}
     environment:
       # Cap the V8 old-space heap below the container limit, leaving room for
@@ -478,9 +495,14 @@ services:
       AISW_CONSOLE_LEGAL_EMAIL: ${AISW_CONSOLE_LEGAL_EMAIL:-}
       AISW_CONSOLE_LEGAL_JURISDICTION: ${AISW_CONSOLE_LEGAL_JURISDICTION:-}
       AISW_CONSOLE_LEGAL_REFUND_WINDOW_DAYS: ${AISW_CONSOLE_LEGAL_REFUND_WINDOW_DAYS:-}
+    volumes:
+      - *log_script
+      - ./logs/console:/var/log/aisw
     ports:
       - "127.0.0.1:${CONSOLE_PORT:-3000}:3000"
     depends_on:
+      logs-init:
+        condition: service_completed_successfully
       controlplane:
         condition: service_started
     healthcheck:
@@ -501,6 +523,9 @@ services:
       context: ../service/aiServeWeaveStudio
     restart: unless-stopped
     logging: *logging
+    init: true
+    entrypoint: ["/bin/sh", "/usr/local/bin/service-logs.sh", "/var/log/aisw/studio.log", "/usr/local/bin/docker-entrypoint.sh"]
+    command: ["--aisw-capture-logs", "node", "server.js"]
     mem_limit: ${STUDIO_MEM_LIMIT:-384m}
     environment:
       # 与 Console 相同的理由：把 V8 老生代堆限制在容器上限之下。
@@ -520,9 +545,14 @@ services:
       # Console origins (comma-separated); empty accepts same-site posts only.
       AISW_STUDIO_HANDOFF_SECRET: ${AISW_STUDIO_HANDOFF_SECRET:-}
       AISW_STUDIO_CONSOLE_URL: ${AISW_STUDIO_CONSOLE_URL:-}
+    volumes:
+      - *log_script
+      - ./logs/studio:/var/log/aisw
     ports:
       - "127.0.0.1:${STUDIO_PORT:-3100}:3100"
     depends_on:
+      logs-init:
+        condition: service_completed_successfully
       controlplane:
         condition: service_started
       gateway:
@@ -535,6 +565,31 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
+
+  logs-init:
+    image: *redis_image
+    restart: "no"
+    logging: *logging
+    network_mode: none
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-ec"]
+    # The Go images run as uid 10001, and the Node images as uid 1000.
+    # Go 镜像使用 UID 10001，Node 镜像使用 UID 1000。
+    command:
+      - |
+        for service in gateway registry controlplane console studio; do
+          case "$$service" in console|studio) uid=1000;; *) uid=10001;; esac
+          dir="/logs/$$service"
+          if [ -L "$$dir" ]; then
+            echo "Log directory must not be a symbolic link: $$dir" >&2
+            exit 1
+          fi
+          mkdir -p "$$dir"
+          chmod 0750 "$$dir"
+          chown "$$uid" "$$dir"
+        done
+    volumes:
+      - ./logs:/logs
 
   gateway:
     image: ${AISW_IMAGE_REPO:-ghcr.io/dongmu101}/aiserveweave-gateway:${AISW_IMAGE_TAG:-latest}
@@ -557,11 +612,14 @@ services:
     # 20–60 秒的 Messages 流，因此覆盖两段；空闲的 Gateway 仍会立即退出。
     stop_grace_period: 75s
     logging: *logging
+    init: true
+    entrypoint: ["/bin/sh", "/usr/local/bin/service-logs.sh", "/var/log/aisw/gateway.log", "/usr/local/bin/service"]
     # The largest Go cap: request bodies are deliberately unbounded (Claude
     # Code sends very large ones), so concurrent big requests need headroom.
     # Go 服务里上限最高：请求体刻意不设上限（Claude Code 会发很大的请求），并发的大请求需要余量。
     mem_limit: ${GATEWAY_MEM_LIMIT:-512m}
     command:
+      - --aisw-capture-logs
       - -addr=:8080
       - -tunnel-addr=:8443
       # Advertise the DNS-only endpoint reachable by remote Agents. Existing .env values override it.
@@ -677,6 +735,8 @@ services:
       # The private key is 0600 and both images run as the same uid, which is
       # what makes it readable.
       - registry-data:/registry-data:ro
+      - *log_script
+      - ./logs/gateway:/var/log/aisw
     ports:
       - "127.0.0.1:${GATEWAY_PORT:-8080}:8080"
       # The Agent tunnel terminates mTLS directly; the HTTP API stays behind Nginx.
@@ -684,6 +744,8 @@ services:
       - "0.0.0.0:${GATEWAY_TUNNEL_PORT:-8443}:8443"
       - "127.0.0.1:${GATEWAY_METRICS_PORT:-9090}:9090"
     depends_on:
+      logs-init:
+        condition: service_completed_successfully
       registry:
         condition: service_started
       controlplane:

@@ -964,6 +964,14 @@ const tenant = {
   "tenant.modelScopeDedicated": "獨享AI",
   "tenant.noCloudServices": "暫無可用的雲AI。",
   "tenant.noDedicatedServices": "暫無獨享AI。接入自有 Agent 或購買獨享帳號後會顯示在這裡。",
-  "tenant.modelScopeHint": "雲AI：平台維運、多個租戶共用的 Agent，含免費與收費。獨享AI：你自行接入的 Agent 與購買的獨享帳號。"
+  "tenant.modelScopeHint": "雲AI：平台維運、多個租戶共用的 Agent，含免費與收費。獨享AI：你自行接入的 Agent 與購買的獨享帳號。",
+  "tenant.billingPurchasedBalance": "購買點數",
+  "tenant.billingGiftBalance": "贈送點數",
+  "tenant.billingGiftFirstHint": "用量先扣贈送點數，再扣購買點數。",
+  "tenant.billingBalanceSplit": "購買 {purchased} · 贈送 {gift}",
+  "tenant.billingCreditType": "點數類型",
+  "tenant.billingCreditTypePurchased": "購買",
+  "tenant.billingCreditTypeGift": "贈送",
+  "tenant.billingKindRefundReversal": "退款撤銷"
 } as const;
 export default tenant;

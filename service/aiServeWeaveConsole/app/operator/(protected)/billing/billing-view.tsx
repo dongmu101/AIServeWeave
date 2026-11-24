@@ -6,7 +6,7 @@ import { CurrencySelect } from "@/components/console/currency-select";
 import { PresaleAdmin } from "@/components/console/account-presales";
 import { toast } from "sonner";
 
-import { BillingDisabled, LedgerTable, OrdersTable, TenantIdFilter } from "@/components/console/billing-tables";
+import { BalanceSplit, BillingDisabled, LedgerTable, OrdersTable, TenantIdFilter } from "@/components/console/billing-tables";
 import { ConfirmDialog } from "@/components/console/confirm-dialog";
 import { Pager } from "@/components/console/pager";
 import { EmptyState, ErrorState, FormError, LoadingState } from "@/components/console/states";
@@ -28,23 +28,29 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   adjustRequest,
+  CREDIT_TYPES,
   emptyPackageDraft,
   formatCredits,
   formatMoney,
   packageDraft,
   packageRequest,
+  settingsRequest,
+  parseBillingSettings,
   parseBillingTenants,
   parseCreditPackage,
   parseCreditPackages,
   parseLedgerEntry,
   type BillingMode,
+  type BillingSettings,
   type BillingTenant,
+  type CreditType,
   type CreditPackage,
   type PackageDraft,
   type PackageKind,
   type PackageProblem,
 } from "@/lib/console/billing";
 import { parseNoContent } from "@/lib/console/contract";
+import { formatDateTime } from "@/lib/console/format";
 import { parsePricingConfig, parseTenantPricing, type PricingConfig, type TenantPricing } from "@/lib/console/pricing";
 import type { MessageKey } from "@/lib/i18n/messages";
 import type { Translator } from "@/lib/i18n/translate";
@@ -61,6 +67,10 @@ const PACKAGE_PROBLEMS: Record<PackageProblem, MessageKey> = {
   range: "operator.billingProblemRange",
   sort_order: "operator.billingProblemSortOrder",
 };
+
+function creditTypeLabel(type: CreditType, t: Translator): string {
+  return type === "gift" ? t("tenant.billingCreditTypeGift") : t("tenant.billingCreditTypePurchased");
+}
 
 function modeLabel(mode: BillingMode, t: Translator): string {
   return mode === "account_monthly" ? t("tenant.billingModeAccountMonthly") : mode === "exempt" ? t("tenant.billingModeExempt") : t("tenant.billingModePrepaid");
@@ -93,6 +103,7 @@ export function BillingAdminView() {
         <TabsTrigger value="tenants" className="flex-none"><Message id="operator.billingTenants" /></TabsTrigger>
         <TabsTrigger value="orders" className="flex-none"><Message id="tenant.billingOrders" /></TabsTrigger>
         <TabsTrigger value="ledger" className="flex-none"><Message id="tenant.billingLedger" /></TabsTrigger>
+        <TabsTrigger value="settings" className="flex-none"><Message id="operator.billingSettings" /></TabsTrigger>
       </TabsList>
       <TabsContent value="packages" className="pt-2"><PackagesSection /></TabsContent>
       <TabsContent value="accounts" className="pt-2"><AccountSales operator /></TabsContent>
@@ -103,8 +114,81 @@ export function BillingAdminView() {
       <TabsContent value="tenants" className="pt-2"><TenantsSection /></TabsContent>
       <TabsContent value="orders" className="pt-2"><FilteredHistory kind="orders" /></TabsContent>
       <TabsContent value="ledger" className="pt-2"><FilteredHistory kind="ledger" /></TabsContent>
+      <TabsContent value="settings" className="pt-2"><SettingsSection /></TabsContent>
     </Tabs>
   </div>;
+}
+
+/** SettingsSection shows and edits the billing settings saved in the
+ * control plane: the credits a self-registered tenant is given. Saving is
+ * sent once and followed by a re-read.
+ *
+ * SettingsSection 展示并编辑保存在控制面的计费设置：自助注册的租户获赠的点数。保存只
+ * 发送一次，之后重新读取。 */
+function SettingsSection() {
+  const { t, locale } = useI18n();
+  const run = useConsoleRequest();
+  const settings = useResource<BillingSettings>({ method: "GET", surface: "operator", path: "/operator/v1/billing/settings", parse: parseBillingSettings });
+  const [draft, setDraft] = React.useState<string | null>(null);
+  const [pending, setPending] = React.useState(false);
+  const [error, setError] = React.useState<React.ReactNode>(null);
+
+  if (settings.errorKind === "not_found") return <BillingDisabled />;
+  if (settings.error) return <ErrorState message={settings.error} onRetry={settings.reload} />;
+  if (settings.loading || !settings.data) return <LoadingState label={t("operator.loading")} rows={2} />;
+  const current = settings.data;
+  const value = draft ?? formatCreditsInput(current.signupGrantMicro);
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (pending) return;
+    const built = settingsRequest({ signupGrant: value });
+    if (built.problem !== null) {
+      setError(<Message id="operator.billingProblemSignupGrant" />);
+      return;
+    }
+    setPending(true);
+    setError(null);
+    try {
+      await run({ method: "PUT", surface: "operator", path: "/operator/v1/billing/settings", body: built.request, parse: parseBillingSettings });
+      toast.success(<Message id="operator.billingSettingsSaved" />);
+      setDraft(null);
+    } catch (failure) {
+      setError(<ErrorMessage error={failure} />);
+    } finally {
+      setPending(false);
+      settings.reload();
+    }
+  }
+
+  return <Card>
+    <CardHeader><CardTitle><Message id="operator.billingSettings" /></CardTitle></CardHeader>
+    <CardContent>
+      <form onSubmit={submit} className="grid max-w-md gap-3" noValidate>
+        <div className="grid gap-2">
+          <label htmlFor="billing-signup-grant" className="text-sm font-medium"><Message id="operator.billingSignupGrant" /></label>
+          <Input id="billing-signup-grant" inputMode="decimal" value={value} onChange={(e) => setDraft(e.target.value)} disabled={pending} />
+          <p className="text-xs text-muted-foreground"><Message id="operator.billingSignupGrantHint" /></p>
+          <p className="text-xs text-muted-foreground">{current.saved && current.updatedAt
+            ? t("operator.billingSettingsUpdated", { time: formatDateTime(current.updatedAt, undefined, locale) })
+            : t("operator.billingSettingsFromConfig")}</p>
+        </div>
+        <FormError message={error} />
+        <div><SubmitButton pending={pending}><Message id="common.save" /></SubmitButton></div>
+      </form>
+    </CardContent>
+  </Card>;
+}
+
+/** formatCreditsInput renders micro-credits as an editable decimal without
+ * grouping, the inverse of parseCreditsInput.
+ *
+ * formatCreditsInput 把 micro 点渲染为不带分组的可编辑小数，是 parseCreditsInput 的
+ * 逆操作。 */
+function formatCreditsInput(micro: number): string {
+  const whole = Math.trunc(micro / 1_000_000);
+  const fraction = String(Math.abs(micro % 1_000_000)).padStart(6, "0").replace(/0+$/, "");
+  return fraction === "" ? String(whole) : `${whole}.${fraction}`;
 }
 
 /** FilteredHistory is the cross-tenant order or ledger list with a tenant
@@ -320,7 +404,7 @@ function TenantsSection() {
             return <TableRow key={tenant.id}>
               <TableCell className="max-w-64"><span className="grid gap-0.5"><span className="flex flex-wrap items-center gap-2 break-all">{tenant.name || tenant.id}{tenant.status !== "active" ? <Badge variant="destructive">{tenant.status}</Badge> : null}</span><code className="text-xs text-muted-foreground break-all">{tenant.id}</code></span></TableCell>
               <TableCell><span className="flex flex-wrap gap-1"><Badge variant={tenant.mode === "exempt" ? "secondary" : "outline"}>{modeLabel(tenant.mode, t)}</Badge>{tenant.blocked && tenant.mode === "prepaid" ? <Badge variant="destructive"><Message id="operator.billingBlocked" /></Badge> : null}</span></TableCell>
-              <TableCell className="text-right font-mono whitespace-nowrap">{formatCredits(tenant.balanceMicro, locale)}</TableCell>
+              <TableCell className="text-right font-mono whitespace-nowrap">{formatCredits(tenant.balanceMicro, locale)}<BalanceSplit balanceMicro={tenant.balanceMicro} giftMicro={tenant.giftBalanceMicro} /></TableCell>
               <TableCell className="text-right whitespace-nowrap text-xs">{tenant.pendingUsage ? t("operator.tenantPendingValue", { credits: formatCredits(-tenant.pendingUsage.amountMicro, locale), count: tenant.pendingUsage.requestCount }) : "—"}</TableCell>
               <TableCell>{plans.data ? <TenantPlanSelect tenantId={tenant.id} tenantName={tenant.name || tenant.id} planId={tenant.pricePlanId} plans={plans.data.items} onSaved={tenants.reload} /> : <span className="text-xs text-muted-foreground">—</span>}</TableCell>
               <TableCell><span className="flex flex-wrap gap-2">
@@ -361,6 +445,7 @@ function AdjustDialog({ tenant, onClose, onSaved }: { tenant: BillingTenant; onC
   const { t, locale } = useI18n();
   const run = useConsoleRequest();
   const [amount, setAmount] = React.useState("");
+  const [creditType, setCreditType] = React.useState<CreditType>("gift");
   const [reason, setReason] = React.useState("");
   const [pending, setPending] = React.useState(false);
   const [error, setError] = React.useState<React.ReactNode>(null);
@@ -369,7 +454,7 @@ function AdjustDialog({ tenant, onClose, onSaved }: { tenant: BillingTenant; onC
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (pending) return;
-    const built = adjustRequest({ amount, reason });
+    const built = adjustRequest({ amount, reason, creditType });
     if (built.problem !== null) {
       setError(<Message id={built.problem === "amount" ? "operator.billingProblemAdjustAmount" : "operator.billingProblemReason"} />);
       return;
@@ -397,8 +482,21 @@ function AdjustDialog({ tenant, onClose, onSaved }: { tenant: BillingTenant; onC
       <form onSubmit={submit} className="grid gap-4" noValidate>
         <DialogHeader>
           <DialogTitle className="break-all">{t("operator.billingAdjustTitle", { name })}</DialogTitle>
-          <DialogDescription>{t("tenant.billingBalance")}: {t("tenant.billingCreditsValue", { credits: formatCredits(tenant.balanceMicro, locale) })}</DialogDescription>
+          <DialogDescription>{t("tenant.billingBalance")}: {t("tenant.billingCreditsValue", { credits: formatCredits(tenant.balanceMicro, locale) })}
+            {" "}({t("tenant.billingBalanceSplit", { purchased: formatCredits(tenant.purchasedBalanceMicro, locale), gift: formatCredits(tenant.giftBalanceMicro, locale) })})</DialogDescription>
         </DialogHeader>
+        <div className="grid gap-2">
+          <label htmlFor="adjust-credit-type" className="text-sm font-medium"><Message id="tenant.billingCreditType" /></label>
+          <Select value={creditType} onValueChange={(next) => { if (next === "gift" || next === "purchased") setCreditType(next); }} disabled={pending}>
+            <SelectTrigger id="adjust-credit-type" className="w-full">
+              <SelectValue>{creditTypeLabel(creditType, t)}</SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              {CREDIT_TYPES.map((value) => <SelectItem key={value} value={value}>{creditTypeLabel(value, t)}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground"><Message id="operator.billingAdjustTypeHint" /></p>
+        </div>
         <div className="grid gap-2">
           <label htmlFor="adjust-amount" className="text-sm font-medium"><Message id="operator.billingAdjustAmount" /></label>
           <Input id="adjust-amount" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} disabled={pending} />

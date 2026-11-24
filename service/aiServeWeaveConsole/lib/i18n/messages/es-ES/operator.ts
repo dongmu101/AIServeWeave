@@ -745,6 +745,14 @@ const operator = {
   "operator.tenantPlanLabel": "Plan de precios de {name}",
   "operator.tenantPlanSaved": "Plan de precios actualizado",
   "operator.tenantPending": "Uso sin cerrar",
-  "operator.tenantPendingValue": "{credits} créditos · {count} solicitudes"
+  "operator.tenantPendingValue": "{credits} créditos · {count} solicitudes",
+  "operator.billingSettings": "Ajustes",
+  "operator.billingSignupGrant": "Créditos de regalo al registrarse",
+  "operator.billingSignupGrantHint": "Créditos que recibe un inquilino que se registra por su cuenta, contabilizados como créditos de regalo. 0 no concede ninguno. El cambio se aplica a los inquilinos que se registren después.",
+  "operator.billingSettingsFromConfig": "Aún no se ha guardado aquí; el valor actual procede del archivo de configuración del plano de control.",
+  "operator.billingSettingsUpdated": "Guardado por última vez {time}",
+  "operator.billingSettingsSaved": "Ajustes de facturación guardados",
+  "operator.billingProblemSignupGrant": "Introduce 0 o más créditos, con un máximo de seis decimales",
+  "operator.billingAdjustTypeHint": "Una deducción de créditos de regalo no puede superar los créditos de regalo actuales del inquilino."
 } as const;
 export default operator;

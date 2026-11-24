@@ -745,6 +745,14 @@ const operator = {
   "operator.tenantPlanLabel": "{name} の料金プラン",
   "operator.tenantPlanSaved": "料金プランを更新しました",
   "operator.tenantPending": "未締めの使用量",
-  "operator.tenantPendingValue": "{credits} クレジット · {count} リクエスト"
+  "operator.tenantPendingValue": "{credits} クレジット · {count} リクエスト",
+  "operator.billingSettings": "設定",
+  "operator.billingSignupGrant": "登録時の付与クレジット",
+  "operator.billingSignupGrantHint": "セルフ登録したテナントに付与されるクレジットで、付与クレジットとして計上されます。0 は付与しません。変更はその後に登録するテナントに適用されます。",
+  "operator.billingSettingsFromConfig": "まだここで保存されていません。現在の値はコントロールプレーンの設定ファイルによるものです。",
+  "operator.billingSettingsUpdated": "最終保存 {time}",
+  "operator.billingSettingsSaved": "課金設定を保存しました",
+  "operator.billingProblemSignupGrant": "0 以上のクレジットを小数点以下 6 桁までで入力してください",
+  "operator.billingAdjustTypeHint": "付与クレジットの減算は、テナントの現在の付与クレジットを超えられません。"
 } as const;
 export default operator;

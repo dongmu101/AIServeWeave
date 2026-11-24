@@ -302,7 +302,7 @@ test("package drafts validate per kind and zero the other kind's fields", () => 
 });
 
 test("adjustments convert credits to micro-credits", () => {
-  assert.deepEqual(adjustRequest({ amount: "-12.5", reason: " chargeback " }), { problem: null, request: { amount_micro: -12_500_000, reason: "chargeback" } });
+  assert.deepEqual(adjustRequest({ amount: "-12.5", reason: " chargeback " }), { problem: null, request: { amount_micro: -12_500_000, credit_type: "gift", reason: "chargeback" } });
   const adjustments: { name: string; draft: { amount: string; reason: string }; problem: string }[] = [
     { name: "zero", draft: { amount: "0", reason: "r" }, problem: "amount" },
     { name: "not a number", draft: { amount: "ten", reason: "r" }, problem: "amount" },

@@ -86,9 +86,13 @@ func WithBilling(cfg BillingConfig) Option {
 type BillingOverview struct {
 	Mode         string
 	BalanceMicro int64
-	Blocked      bool
-	HasCustomer  bool
-	Packages     []model.CreditPackage
+	// GiftBalanceMicro is the gift part of BalanceMicro.
+	//
+	// GiftBalanceMicro 是 BalanceMicro 中赠送的部分。
+	GiftBalanceMicro int64
+	Blocked          bool
+	HasCustomer      bool
+	Packages         []model.CreditPackage
 	// RefundWindowDays is how long after a purchase the tenant may ask for
 	// a refund; zero means it may not.
 	//
@@ -212,11 +216,12 @@ func (s *Service) BillingOverview(ctx context.Context, actor Actor) (BillingOver
 		return BillingOverview{}, err
 	}
 	if !s.billingEnabled() {
-		return BillingOverview{Mode: row.Mode, BalanceMicro: row.BalanceMicro, Packages: []model.CreditPackage{}}, nil
+		return BillingOverview{Mode: row.Mode, BalanceMicro: row.BalanceMicro, GiftBalanceMicro: row.GiftBalanceMicro, Packages: []model.CreditPackage{}}, nil
 	}
 	out := BillingOverview{
-		Mode: row.Mode, BalanceMicro: row.BalanceMicro, Blocked: row.Blocked(), Packages: []model.CreditPackage{},
-		Dodo: s.dodoEnabled(), Alipay: s.alipayEnabled(), Ezfp: s.ezfpEnabled(), EzfpTypes: s.ezfpTypes(),
+		Mode: row.Mode, BalanceMicro: row.BalanceMicro, GiftBalanceMicro: row.GiftBalanceMicro, Blocked: row.Blocked(),
+		Packages: []model.CreditPackage{},
+		Dodo:     s.dodoEnabled(), Alipay: s.alipayEnabled(), Ezfp: s.ezfpEnabled(), EzfpTypes: s.ezfpTypes(),
 	}
 	if !s.fiatEnabled() {
 		return out, nil
@@ -533,22 +538,96 @@ func (s *Service) billingBlocked(ctx context.Context, tenantID string) (bool, er
 }
 
 // initialBilling is the billing row and opening grant a self-registered tenant
-// starts with, or nil when billing is off.
+// starts with, or nil when billing is off. The grant is gift credits, of the
+// amount signupGrantMicro reads.
 //
-// initialBilling 是自助注册的租户起步时的计费行与期初赠送；计费关闭时为 nil。
-func (s *Service) initialBilling(tenantID string) (*model.TenantBilling, *model.CreditLedgerEntry) {
+// initialBilling 是自助注册的租户起步时的计费行与期初赠送；计费关闭时为 nil。期初赠送
+// 是赠送点数，金额由 signupGrantMicro 读出。
+func (s *Service) initialBilling(ctx context.Context, tenantID string) (*model.TenantBilling, *model.CreditLedgerEntry, error) {
 	if !s.billingEnabled() {
-		return nil, nil
+		return nil, nil, nil
+	}
+	amount, _, err := s.signupGrantMicro(ctx)
+	if err != nil {
+		return nil, nil, err
 	}
 	now := s.clock.Now()
 	row := &model.TenantBilling{TenantID: tenantID, Mode: model.BillingModePrepaid, CreatedAt: now, UpdatedAt: now}
-	if s.billing.SignupGrantCredits <= 0 {
-		return row, nil
+	if amount <= 0 {
+		return row, nil, nil
 	}
 	return row, &model.CreditLedgerEntry{
 		ID: model.NewID(model.PrefixCreditLedger), TenantID: tenantID, Kind: model.LedgerKindGrant,
-		AmountMicro: s.billing.SignupGrantCredits * model.MicroPerCredit, Ref: "signup", CreatedAt: now,
+		AmountMicro: amount, GiftAmountMicro: amount, Ref: "signup", CreatedAt: now,
+	}, nil
+}
+
+// signupGrantMicro returns the micro-credits a self-registered tenant is
+// given, and whether they come from settings an operator saved: until one
+// does, Billing.SignupGrantCredits in the config file stands in.
+//
+// signupGrantMicro 返回自助注册的租户获赠的 micro 点数，以及它是否来自运维保存的设置：
+// 运维保存之前，由配置文件中的 Billing.SignupGrantCredits 代替。
+func (s *Service) signupGrantMicro(ctx context.Context) (int64, *model.BillingSettings, error) {
+	saved, err := s.store.GetBillingSettings(ctx)
+	if errors.Is(err, store.ErrNotFound) {
+		return s.billing.SignupGrantCredits * model.MicroPerCredit, nil, nil
 	}
+	if err != nil {
+		return 0, nil, err
+	}
+	return saved.SignupGrantMicro, &saved, nil
+}
+
+// BillingSettingsView is the billing settings an operator sees. Saved is nil
+// while the config file's defaults stand in.
+//
+// BillingSettingsView 是运维看到的计费设置。仍由配置文件的默认值代替时 Saved 为 nil。
+type BillingSettingsView struct {
+	SignupGrantMicro int64
+	Saved            *model.BillingSettings
+}
+
+// GetBillingSettings returns the billing settings in effect.
+//
+// GetBillingSettings 返回当前生效的计费设置。
+func (s *Service) GetBillingSettings(ctx context.Context, actor Actor) (BillingSettingsView, error) {
+	if err := s.requireBillingOperator(actor); err != nil {
+		return BillingSettingsView{}, err
+	}
+	amount, saved, err := s.signupGrantMicro(ctx)
+	if err != nil {
+		return BillingSettingsView{}, err
+	}
+	return BillingSettingsView{SignupGrantMicro: amount, Saved: saved}, nil
+}
+
+// PutBillingSettings saves the billing settings. signupGrantMicro zero turns
+// the signup grant off; it applies to tenants that register afterwards.
+//
+// PutBillingSettings 保存计费设置。signupGrantMicro 为零时关闭注册赠送；它对此后注册
+// 的租户生效。
+func (s *Service) PutBillingSettings(ctx context.Context, actor Actor, signupGrantMicro int64) (BillingSettingsView, error) {
+	if err := s.requireBillingOperator(actor); err != nil {
+		return BillingSettingsView{}, err
+	}
+	if signupGrantMicro < 0 {
+		return BillingSettingsView{}, ErrInvalidInput
+	}
+	before, _, err := s.signupGrantMicro(ctx)
+	if err != nil {
+		return BillingSettingsView{}, err
+	}
+	saved := model.BillingSettings{
+		ID: model.SettingsRowID, SignupGrantMicro: signupGrantMicro, UpdatedBy: actor.UserID,
+		UpdatedAt: s.clock.Now().UTC().Truncate(time.Microsecond),
+	}
+	if err := s.store.PutBillingSettings(ctx, saved); err != nil {
+		return BillingSettingsView{}, translate(err)
+	}
+	s.audit(ctx, model.PlatformScope, actor.UserID, model.ActionBillingSettings, "signup_grant",
+		fmt.Sprintf("signup_grant_micro=%d->%d", before, signupGrantMicro), actor.IP)
+	return BillingSettingsView{SignupGrantMicro: signupGrantMicro, Saved: &saved}, nil
 }
 
 // ListCreditPackagesAll returns every package, archived ones included, for
@@ -669,11 +748,15 @@ func (s *Service) SetTenantBillingMode(ctx context.Context, actor Actor, tenantI
 }
 
 // AdjustTenantCredit adds amountMicro (negative to deduct) to a tenant's
-// balance, with reason as the ledger reference.
+// balance, with reason as the ledger reference. creditType says which part
+// of the balance it moves: gift credits (the default, for an empty
+// creditType) or purchased ones. Deducting more gift credits than the tenant
+// holds is refused.
 //
 // AdjustTenantCredit 把 amountMicro（为负则扣减）记入租户余额，以 reason 作为账目
-// 引用。
-func (s *Service) AdjustTenantCredit(ctx context.Context, actor Actor, tenantID string, amountMicro int64, reason string) (model.CreditLedgerEntry, error) {
+// 引用。creditType 指明变动余额的哪一部分：赠送点数（creditType 为空时的默认值）或购买
+// 点数。扣除的赠送点数多于租户现有时拒绝。
+func (s *Service) AdjustTenantCredit(ctx context.Context, actor Actor, tenantID string, amountMicro int64, creditType, reason string) (model.CreditLedgerEntry, error) {
 	if err := s.requireAccountOperator(actor); err != nil {
 		return model.CreditLedgerEntry{}, err
 	}
@@ -681,13 +764,24 @@ func (s *Service) AdjustTenantCredit(ctx context.Context, actor Actor, tenantID 
 	if amountMicro == 0 || reason == "" || utf8.RuneCountInString(reason) > 128 || len(reason) > 128 {
 		return model.CreditLedgerEntry{}, ErrInvalidInput
 	}
+	var gift int64
+	switch creditType {
+	case "", model.CreditTypeGift:
+		creditType, gift = model.CreditTypeGift, amountMicro
+	case model.CreditTypePurchased:
+	default:
+		return model.CreditLedgerEntry{}, ErrInvalidInput
+	}
 	if _, err := s.store.GetTenant(ctx, tenantID); err != nil {
 		return model.CreditLedgerEntry{}, translate(err)
 	}
 	entry, changed, err := s.store.AdjustCredit(ctx, model.CreditLedgerEntry{
 		ID: model.NewID(model.PrefixCreditLedger), TenantID: tenantID, Kind: model.LedgerKindAdjust,
-		AmountMicro: amountMicro, Ref: reason, ActorID: actor.UserID, CreatedAt: s.clock.Now(),
+		AmountMicro: amountMicro, GiftAmountMicro: gift, Ref: reason, ActorID: actor.UserID, CreatedAt: s.clock.Now(),
 	})
+	if errors.Is(err, store.ErrInsufficientGift) {
+		return model.CreditLedgerEntry{}, ErrInvalidInput
+	}
 	if err != nil {
 		return model.CreditLedgerEntry{}, translate(err)
 	}
@@ -695,7 +789,8 @@ func (s *Service) AdjustTenantCredit(ctx context.Context, actor Actor, tenantID 
 		s.invalidator.InvalidateAll(ctx)
 	}
 	s.audit(ctx, model.PlatformScope, actor.UserID, model.ActionBillingTenantAdjust, tenantID,
-		fmt.Sprintf("amount_micro=%d balance_after_micro=%d", amountMicro, entry.BalanceAfterMicro), actor.IP)
+		fmt.Sprintf("amount_micro=%d credit_type=%s balance_after_micro=%d gift_balance_after_micro=%d",
+			amountMicro, creditType, entry.BalanceAfterMicro, entry.GiftBalanceAfterMicro), actor.IP)
 	return entry, nil
 }
 

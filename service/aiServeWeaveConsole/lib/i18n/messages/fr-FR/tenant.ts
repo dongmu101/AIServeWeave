@@ -976,6 +976,14 @@ const tenant = {
   "tenant.modelScopeDedicated": "IA dédiée",
   "tenant.noCloudServices": "Aucune IA cloud disponible pour l’instant.",
   "tenant.noDedicatedServices": "Aucune IA dédiée pour l’instant. Connectez votre propre Agent ou achetez un compte dédié pour la voir ici.",
-  "tenant.modelScopeHint": "IA cloud : Agents exploités par la plateforme et partagés entre locataires, gratuits ou payants. IA dédiée : Agents que vous avez connectés et comptes achetés."
+  "tenant.modelScopeHint": "IA cloud : Agents exploités par la plateforme et partagés entre locataires, gratuits ou payants. IA dédiée : Agents que vous avez connectés et comptes achetés.",
+  "tenant.billingPurchasedBalance": "Crédits achetés",
+  "tenant.billingGiftBalance": "Crédits offerts",
+  "tenant.billingGiftFirstHint": "L’utilisation consomme d’abord les crédits offerts, puis les crédits achetés.",
+  "tenant.billingBalanceSplit": "Achetés {purchased} · Offerts {gift}",
+  "tenant.billingCreditType": "Type de crédit",
+  "tenant.billingCreditTypePurchased": "Acheté",
+  "tenant.billingCreditTypeGift": "Offert",
+  "tenant.billingKindRefundReversal": "Annulation de remboursement"
 } as const;
 export default tenant;

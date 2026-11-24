@@ -57,6 +57,12 @@ var ErrConflict = errors.New("store: conflict")
 // 调用方可以据此行动——从第一页重新开始——而一行记录的缺失完全是另一回事。
 var ErrInvalidCursor = errors.New("store: invalid cursor")
 
+// ErrInsufficientGift is returned for a ledger entry that would take more gift
+// credits than the tenant holds.
+//
+// ErrInsufficientGift 用于要扣除的赠送点数多于租户现有赠送点数的账目。
+var ErrInsufficientGift = errors.New("store: insufficient gift credits")
+
 // DefaultPageSize and MaxPageSize bound one list read.
 //
 // The cap is not a suggestion: these lists grow without limit — an audit trail
@@ -1421,12 +1427,25 @@ type Billing interface {
 	// 先记录的客户生效：租户已有客户时保留并返回它，因此两次并发的首次购买会落到同一个
 	// 客户上。
 	SetDodoCustomerID(ctx context.Context, tenantID, customerID string, now time.Time) (string, error)
-	// AdjustCredit applies entry.AmountMicro to entry.TenantID's balance and
-	// appends entry with its resulting balance filled in.
+	// AdjustCredit applies entry.AmountMicro to entry.TenantID's balance,
+	// entry.GiftAmountMicro of it to the gift part (store.CreditGift), and
+	// appends entry with its resulting balances filled in.
+	// ErrInsufficientGift when it takes more gift credits than the tenant
+	// holds.
 	//
-	// AdjustCredit 把 entry.AmountMicro 记入 entry.TenantID 的余额，并追加填好结果余额
-	// 的 entry。
+	// AdjustCredit 把 entry.AmountMicro 记入 entry.TenantID 的余额，其中
+	// entry.GiftAmountMicro 记入赠送部分（store.CreditGift），并追加填好结果余额的 entry。
+	// 扣除的赠送点数多于租户现有时返回 ErrInsufficientGift。
 	AdjustCredit(ctx context.Context, entry model.CreditLedgerEntry) (model.CreditLedgerEntry, bool, error)
+	// GetBillingSettings reads the saved billing settings, or ErrNotFound when
+	// none were ever saved.
+	//
+	// GetBillingSettings 读取已保存的计费设置；从未保存过时返回 ErrNotFound。
+	GetBillingSettings(ctx context.Context) (model.BillingSettings, error)
+	// PutBillingSettings saves the billing settings, replacing what was saved.
+	//
+	// PutBillingSettings 保存计费设置，替换已保存的内容。
+	PutBillingSettings(ctx context.Context, settings model.BillingSettings) error
 	// ChargeUsage inserts the records whose id is not yet in usage_records
 	// and charges each of them its CostMicro when its tenant is prepaid, in
 	// one transaction; the store sets each inserted record's Charged. The

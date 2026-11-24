@@ -89,7 +89,21 @@ export const PACKAGE_KINDS: readonly PackageKind[] = ["fixed", "custom"];
  * offered as the ledger filter.
  *
  * LEDGER_KINDS 是控制面写入的词汇表（model.LedgerKind*），用作账目筛选项。 */
-export const LEDGER_KINDS = ["grant", "topup", "usage", "refund", "dispute", "dispute_reversal", "adjust", "account_purchase", "alipay_topup"] as const;
+export const LEDGER_KINDS = ["grant", "topup", "usage", "refund", "refund_reversal", "dispute", "dispute_reversal", "adjust", "account_purchase", "alipay_topup"] as const;
+
+/** CreditType is which part of a balance credits belong to
+ * (model.CreditType*): bought, or given by the platform. Usage spends gift
+ * credits first.
+ *
+ * CreditType 表示点数属于余额的哪一部分（model.CreditType*）：购买的，或平台赠送的。
+ * 用量先扣赠送点数。 */
+export type CreditType = "purchased" | "gift";
+
+/** CREDIT_TYPES is the closed set of credit types, gift first as the
+ * adjustment default.
+ *
+ * CREDIT_TYPES 是点数类型的封闭集合，赠送在前，作为调整的默认值。 */
+export const CREDIT_TYPES: readonly CreditType[] = ["gift", "purchased"];
 
 /** ORDER_STATUSES is the vocabulary the control plane writes
  * (model.OrderStatus*), offered as the order filter.
@@ -131,6 +145,14 @@ export interface CreditPackage {
 export interface BillingOverview {
   mode: BillingMode;
   balanceMicro: number;
+  /** purchasedBalanceMicro and giftBalanceMicro split balanceMicro; a
+   * control plane from before the split sends neither, read as all
+   * purchased.
+   *
+   * purchasedBalanceMicro 与 giftBalanceMicro 是 balanceMicro 的两部分；拆分之前的
+   * 控制面两者都不发送，此时视为全部是购买点数。 */
+  purchasedBalanceMicro: number;
+  giftBalanceMicro: number;
   blocked: boolean;
   hasCustomer: boolean;
   packages: CreditPackage[];
@@ -186,6 +208,14 @@ export interface LedgerEntry {
   kind: string;
   amountMicro: number;
   balanceAfterMicro: number;
+  /** giftAmountMicro is the gift part of amountMicro (the rest is purchased)
+   * and giftBalanceAfterMicro the gift part of balanceAfterMicro; 0 from a
+   * control plane from before the split.
+   *
+   * giftAmountMicro 是 amountMicro 中赠送的部分（其余为购买），giftBalanceAfterMicro
+   * 是 balanceAfterMicro 中赠送的部分；拆分之前的控制面为 0。 */
+  giftAmountMicro: number;
+  giftBalanceAfterMicro: number;
   ref: string;
   createdAt: string;
   /** periodStart, periodEnd and requestCount describe a usage entry sealed
@@ -210,6 +240,9 @@ export interface LedgerEntry {
  * amountMicro 与用量账目一样为负数，因此最新一条账目的余额加上它就是当前余额。 */
 export interface PendingUsage {
   amountMicro: number;
+  /** giftAmountMicro is the part of amountMicro taken from gift credits.
+   * giftAmountMicro 是 amountMicro 中从赠送点数扣除的部分。 */
+  giftAmountMicro: number;
   requestCount: number;
   since: string | null;
   last: string | null;
@@ -285,8 +318,22 @@ export interface BillingTenant {
   status: string;
   mode: BillingMode;
   balanceMicro: number;
+  purchasedBalanceMicro: number;
+  giftBalanceMicro: number;
   blocked: boolean;
   createdAt: string;
+}
+
+/** BillingSettings mirrors types.BillingSettingsResponse. `saved` is false
+ * while the control plane's config file default stands in.
+ *
+ * BillingSettings 镜像 types.BillingSettingsResponse。仍由控制面配置文件的默认值代替时
+ * `saved` 为 false。 */
+export interface BillingSettings {
+  signupGrantMicro: number;
+  saved: boolean;
+  updatedBy: string;
+  updatedAt: string | null;
 }
 
 function fail(): never {
@@ -366,6 +413,14 @@ function optionalCount(source: Record<string, unknown>, key: string): number {
     fail();
   }
   return value;
+}
+
+/** optionalInteger reads an integer a control plane from before it was added
+ * does not send; absent takes `fallback`.
+ *
+ * optionalInteger 读取一个较旧控制面不会发送的整数；缺席时取 `fallback`。 */
+function optionalInteger(source: Record<string, unknown>, key: string, fallback: number): number {
+  return source[key] === undefined ? fallback : integer(source, key);
 }
 
 export function count(source: Record<string, unknown>, key: string): number {
@@ -564,9 +619,12 @@ export function parseCatalog(value: unknown): Catalog {
  * parseBillingOverview 校验 GET /admin/v1/billing。 */
 export function parseBillingOverview(value: unknown): BillingOverview {
   const source = record(value);
+  const balanceMicro = integer(source, "balance_micro");
   return {
     mode: mode(source, "mode"),
-    balanceMicro: integer(source, "balance_micro"),
+    balanceMicro,
+    purchasedBalanceMicro: optionalInteger(source, "purchased_balance_micro", balanceMicro),
+    giftBalanceMicro: optionalInteger(source, "gift_balance_micro", 0),
     blocked: boolean(source, "blocked"),
     hasCustomer: boolean(source, "has_customer"),
     packages: list(source.packages, parseCreditPackage),
@@ -633,6 +691,8 @@ export function parseLedgerEntry(value: unknown): LedgerEntry {
     kind: required(source, "kind"),
     amountMicro: integer(source, "amount_micro"),
     balanceAfterMicro: integer(source, "balance_after_micro"),
+    giftAmountMicro: optionalInteger(source, "gift_amount_micro", 0),
+    giftBalanceAfterMicro: optionalInteger(source, "gift_balance_after_micro", 0),
     ref: text(source, "ref"),
     createdAt: timestamp(source, "created_at"),
     periodStart: optionalTimestamp(source, "period_start"),
@@ -654,6 +714,7 @@ export function parsePendingUsage(value: unknown): PendingUsage {
   const source = record(value);
   return {
     amountMicro: integer(source, "amount_micro"),
+    giftAmountMicro: optionalInteger(source, "gift_amount_micro", 0),
     requestCount: count(source, "request_count"),
     since: optionalTimestamp(source, "since"),
     last: optionalTimestamp(source, "last"),
@@ -742,12 +803,15 @@ export function parseOrderPage(value: unknown): Page<CheckoutOrder> {
 
 function parseBillingTenant(value: unknown): BillingTenant {
   const source = record(value);
+  const balanceMicro = integer(source, "balance_micro");
   return {
     id: required(source, "id"),
     name: text(source, "name"),
     status: required(source, "status"),
     mode: mode(source, "mode"),
-    balanceMicro: integer(source, "balance_micro"),
+    balanceMicro,
+    purchasedBalanceMicro: optionalInteger(source, "purchased_balance_micro", balanceMicro),
+    giftBalanceMicro: optionalInteger(source, "gift_balance_micro", 0),
     blocked: boolean(source, "blocked"),
     createdAt: timestamp(source, "created_at"),
   };
@@ -758,6 +822,33 @@ function parseBillingTenant(value: unknown): BillingTenant {
  * parseBillingTenants 校验 GET /operator/v1/billing/tenants 的一页。 */
 export function parseBillingTenants(value: unknown): Page<BillingTenant> {
   return page(value, parseBillingTenant);
+}
+
+/** parseBillingSettings validates GET and PUT /operator/v1/billing/settings.
+ *
+ * parseBillingSettings 校验 GET 与 PUT /operator/v1/billing/settings。 */
+export function parseBillingSettings(value: unknown): BillingSettings {
+  const source = record(value);
+  return {
+    signupGrantMicro: count(source, "signup_grant_micro"),
+    saved: boolean(source, "saved"),
+    updatedBy: optionalText(source, "updated_by"),
+    updatedAt: optionalTimestamp(source, "updated_at"),
+  };
+}
+
+/** settingsRequest validates a signup grant typed in whole or fractional
+ * credits and builds types.BillingSettingsRequest. Zero is allowed: it turns
+ * the grant off.
+ *
+ * settingsRequest 校验以点为单位输入的注册赠送点数（可带小数），并构造
+ * types.BillingSettingsRequest。允许为零：表示关闭赠送。 */
+export function settingsRequest(draft: { signupGrant: string }):
+  | { request: { signup_grant_micro: number }; problem: null }
+  | { request: null; problem: "signup_grant" } {
+  const amount = parseCreditsInput(draft.signupGrant, { allowNegative: false });
+  if (amount === null || amount < 0) return { request: null, problem: "signup_grant" };
+  return { request: { signup_grant_micro: amount }, problem: null };
 }
 
 /** currencyDigits returns how many minor-unit digits a currency has, as
@@ -1056,8 +1147,8 @@ export type AdjustProblem = "amount" | "reason";
  *
  * adjustRequest 校验以点为单位输入的调整（为负则扣减），并构造
  * types.CreditAdjustRequest。与服务端一致拒绝零：什么都不改变的调整只会多出一行账目。 */
-export function adjustRequest(draft: { amount: string; reason: string }):
-  | { request: { amount_micro: number; reason: string }; problem: null }
+export function adjustRequest(draft: { amount: string; reason: string; creditType?: CreditType }):
+  | { request: { amount_micro: number; credit_type: CreditType; reason: string }; problem: null }
   | { request: null; problem: AdjustProblem } {
   const amount = parseCreditsInput(draft.amount, { allowNegative: true });
   if (amount === null || amount === 0) return { request: null, problem: "amount" };
@@ -1065,7 +1156,7 @@ export function adjustRequest(draft: { amount: string; reason: string }):
   if (reason === "" || runes(reason) > MAX_TEXT_RUNES || new TextEncoder().encode(reason).length > MAX_TEXT_RUNES) {
     return { request: null, problem: "reason" };
   }
-  return { request: { amount_micro: amount, reason }, problem: null };
+  return { request: { amount_micro: amount, credit_type: draft.creditType ?? "gift", reason }, problem: null };
 }
 
 /** isPaymentReturn reports whether the page was reached from the provider's

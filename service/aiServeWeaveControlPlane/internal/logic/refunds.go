@@ -76,7 +76,7 @@ func (s *Service) RefundableOrders(ctx context.Context, actor Actor, orders []mo
 			!s.refundProviderEnabled(o) {
 			continue
 		}
-		if amount := o.UnusedRefundMinor(row.BalanceMicro); amount > 0 {
+		if amount := o.UnusedRefundMinor(row.PurchasedBalanceMicro()); amount > 0 {
 			out[o.ID] = amount
 		}
 	}

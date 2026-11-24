@@ -524,7 +524,10 @@ func refundLimit(tx BillingTx, order model.CheckoutOrder, policy RefundPolicy, e
 		if err != nil {
 			return 0, err
 		}
-		limit = order.UnusedRefundMinor(row.BalanceMicro)
+		// Gift credits are not the order's: only the purchased part counts
+		// as the order's credits left unused.
+		// 赠送点数不属于订单：只有购买部分算作订单未用掉的点数。
+		limit = order.UnusedRefundMinor(row.PurchasedBalanceMicro())
 	}
 	if limit <= 0 {
 		return 0, &RefundRefusedError{Reason: RefundRefusedNothing}

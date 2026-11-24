@@ -55,6 +55,11 @@ func (s *Store) InitTenantBilling(ctx context.Context, billing model.TenantBilli
 		if grant != nil {
 			billing.BalanceMicro = grant.AmountMicro
 			grant.BalanceAfterMicro = grant.AmountMicro
+			gift, err := store.CreditGift(model.TenantBilling{}, grant, grant.AmountMicro)
+			if err != nil {
+				return err
+			}
+			billing.GiftBalanceMicro = gift
 			grant.CreatedAt = store.NextLedgerTime(nil, grant.CreatedAt)
 			billing.LastLedgerAt = &grant.CreatedAt
 		}
@@ -581,18 +586,25 @@ func applyCredit(tx *gorm.DB, entry *model.CreditLedgerEntry) (changed, duplicat
 	if err != nil {
 		return false, false, err
 	}
-	// The pending usage is sealed first, so the usage entry lands before
-	// this one and the balance chain holds (store.SealUsage).
-	// 先为尚未封账的用量封账，使用量账目排在本条之前，余额链保持成立（store.SealUsage）。
-	if err := sealUsage(tx, &row, entry.CreatedAt); err != nil {
-		return false, false, err
-	}
 	after, ok := addBalance(row.BalanceMicro, entry.AmountMicro)
 	if !ok {
 		return false, false, errBalanceOverflow
 	}
+	gift, err := store.CreditGift(row, entry, after)
+	if err != nil {
+		return false, false, err
+	}
+	// The pending usage is sealed first, so the usage entry lands before
+	// this one and the balance chain holds (store.SealUsage). Sealing moves
+	// neither the balance nor its gift part, both already charged.
+	// 先为尚未封账的用量封账，使用量账目排在本条之前，余额链保持成立（store.SealUsage）。
+	// 封账不改变余额及其赠送部分，二者都已扣过。
+	if err := sealUsage(tx, &row, entry.CreatedAt); err != nil {
+		return false, false, err
+	}
 	entry.CreatedAt = store.NextLedgerTime(row.LastLedgerAt, entry.CreatedAt)
 	row.LastLedgerAt = &entry.CreatedAt
+	row.GiftBalanceMicro = gift
 	columns := store.UsageAccumulationColumns(row)
 	columns["balance_micro"], columns["updated_at"] = after, entry.CreatedAt
 	if err := tx.Model(&model.TenantBilling{}).Where("tenant_id = ?", entry.TenantID).Updates(columns).Error; err != nil {

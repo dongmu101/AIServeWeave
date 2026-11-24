@@ -333,7 +333,7 @@ test("operator billing edits send micro-credit and minor-unit integers", async (
   expect(writes).toEqual([
     { method: "POST", path: "/api/operator/operator/v1/billing/packages", body: { name: "JPY pack", kind: "fixed", dodo_product_id: "pdt_jpy", currency: "JPY", active: true, credits_micro: 1_000_000, price_minor: 1000, credits_per_minor_unit_micro: 0, min_amount_minor: 0, max_amount_minor: 0, sort_order: 0 } },
     { method: "PUT", path: "/api/operator/operator/v1/billing/pricing/models", body: { model: "fixture-model", catalog_model: "", prices: [], rate_ppm: 1_500_000, base_revision: 7 } },
-    { method: "POST", path: "/api/operator/operator/v1/billing/tenants/tnt_p10/adjust", body: { amount_micro: -2_500_000, reason: "chargeback" } },
+    { method: "POST", path: "/api/operator/operator/v1/billing/tenants/tnt_p10/adjust", body: { amount_micro: -2_500_000, credit_type: "gift", reason: "chargeback" } },
   ]);
 });
 

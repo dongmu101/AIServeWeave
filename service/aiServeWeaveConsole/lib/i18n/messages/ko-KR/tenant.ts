@@ -964,6 +964,14 @@ const tenant = {
   "tenant.modelScopeDedicated": "전용 AI",
   "tenant.noCloudServices": "아직 사용 가능한 클라우드 AI가 없습니다.",
   "tenant.noDedicatedServices": "아직 전용 AI가 없습니다. 자체 Agent를 연결하거나 전용 계정을 구매하면 여기에 표시됩니다.",
-  "tenant.modelScopeHint": "클라우드 AI: 플랫폼이 운영하며 테넌트 간에 공유되는 Agent(무료·유료). 전용 AI: 직접 연결한 Agent와 구매한 계정."
+  "tenant.modelScopeHint": "클라우드 AI: 플랫폼이 운영하며 테넌트 간에 공유되는 Agent(무료·유료). 전용 AI: 직접 연결한 Agent와 구매한 계정.",
+  "tenant.billingPurchasedBalance": "구매 크레딧",
+  "tenant.billingGiftBalance": "증정 크레딧",
+  "tenant.billingGiftFirstHint": "사용량은 증정 크레딧을 먼저 차감한 뒤 구매 크레딧을 차감합니다.",
+  "tenant.billingBalanceSplit": "구매 {purchased} · 증정 {gift}",
+  "tenant.billingCreditType": "크레딧 유형",
+  "tenant.billingCreditTypePurchased": "구매",
+  "tenant.billingCreditTypeGift": "증정",
+  "tenant.billingKindRefundReversal": "환불 취소"
 } as const;
 export default tenant;

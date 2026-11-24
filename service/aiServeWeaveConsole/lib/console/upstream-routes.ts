@@ -345,6 +345,10 @@ const OPERATOR_ROUTES: readonly UpstreamRoute[] = [
   { method: "GET", segments: [literal("operator"), literal("v1"), literal("billing"), literal("catalog"), literal("pending")], query: ["limit", "cursor"] },
   { method: "POST", segments: [literal("operator"), literal("v1"), literal("billing"), literal("catalog"), literal("pending"), literal("approve")], query: [] },
   { method: "POST", segments: [literal("operator"), literal("v1"), literal("billing"), literal("catalog"), literal("pending"), literal("reject")], query: [] },
+  // Billing settings an operator saves: the signup grant.
+  // 运维保存的计费设置：注册赠送点数。
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("billing"), literal("settings")], query: [] },
+  { method: "PUT", segments: [literal("operator"), literal("v1"), literal("billing"), literal("settings")], query: [] },
   { method: "GET", segments: [literal("operator"), literal("v1"), literal("billing"), literal("tenants")], query: ["limit", "cursor", "status", "q"] },
   { method: "PUT", segments: [literal("operator"), literal("v1"), literal("billing"), literal("tenants"), param(), literal("mode")], query: [] },
   { method: "POST", segments: [literal("operator"), literal("v1"), literal("billing"), literal("tenants"), param(), literal("adjust")], query: [] },

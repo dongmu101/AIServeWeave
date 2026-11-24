@@ -964,6 +964,14 @@ const tenant = {
   "tenant.modelScopeDedicated": "専有AI",
   "tenant.noCloudServices": "利用可能なクラウドAIはまだありません。",
   "tenant.noDedicatedServices": "専有AIはまだありません。自社の Agent を接続するか専有アカウントを購入すると、ここに表示されます。",
-  "tenant.modelScopeHint": "クラウドAI：プラットフォームが運用し、テナント間で共有される Agent（無料・有料）。専有AI：自分で接続した Agent と購入したアカウント。"
+  "tenant.modelScopeHint": "クラウドAI：プラットフォームが運用し、テナント間で共有される Agent（無料・有料）。専有AI：自分で接続した Agent と購入したアカウント。",
+  "tenant.billingPurchasedBalance": "購入クレジット",
+  "tenant.billingGiftBalance": "付与クレジット",
+  "tenant.billingGiftFirstHint": "利用分は付与クレジットから先に差し引かれ、その後に購入クレジットから差し引かれます。",
+  "tenant.billingBalanceSplit": "購入 {purchased} · 付与 {gift}",
+  "tenant.billingCreditType": "クレジット種別",
+  "tenant.billingCreditTypePurchased": "購入",
+  "tenant.billingCreditTypeGift": "付与",
+  "tenant.billingKindRefundReversal": "返金取消"
 } as const;
 export default tenant;

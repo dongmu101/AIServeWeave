@@ -184,12 +184,10 @@ type RequestLogRecord struct {
 	// internal_error、某个运行时错误码……）与错误体中的信息。
 	ErrorCode    string
 	ErrorMessage string
-	// ErrorDetail is the server-side error behind a dispatch failure, which
-	// the client never sees — "internal error" alone says nothing about what
-	// broke. Only the operator search shows it.
+	// ErrorDetail is the server-side reason for a failure. Only the operator
+	// search shows it.
 	//
-	// ErrorDetail 是派发失败背后的服务端错误，客户端看不到——单凭 "internal
-	// error" 说明不了哪里坏了。只有运维检索会显示它。
+	// ErrorDetail 是请求失败的服务端原因。只有运维检索会显示它。
 	ErrorDetail string
 }
 
@@ -211,11 +209,9 @@ const (
 )
 
 // requestLogNote collects the failure context of one request while it is
-// served: handlers record the model they parsed and the dispatch error they
-// classified, and the middleware reads it back only if the request failed.
+// served. The middleware reads it back only if the request failed.
 //
-// requestLogNote 在请求服务期间收集它的失败上下文：handler 记下解析出的模型与
-// 归类的派发错误，中间件只在请求失败时读回。
+// requestLogNote 在请求服务期间收集失败上下文，中间件只在请求失败时读回。
 type requestLogNote struct {
 	model     string
 	errorCode string
@@ -231,6 +227,12 @@ type requestLogNoteKey struct{}
 func noteRequestModel(ctx context.Context, model string) {
 	if note, ok := ctx.Value(requestLogNoteKey{}).(*requestLogNote); ok && note.model == "" {
 		note.model = model
+	}
+}
+
+func noteRequestErrorDetail(ctx context.Context, detail string) {
+	if note, ok := ctx.Value(requestLogNoteKey{}).(*requestLogNote); ok && note.detail == "" {
+		note.detail = detail
 	}
 }
 

@@ -745,6 +745,14 @@ const operator = {
   "operator.tenantPlanLabel": "{name} 的价格方案",
   "operator.tenantPlanSaved": "价格方案已更新",
   "operator.tenantPending": "未封账用量",
-  "operator.tenantPendingValue": "{credits} 点 · {count} 次请求"
+  "operator.tenantPendingValue": "{credits} 点 · {count} 次请求",
+  "operator.billingSettings": "设置",
+  "operator.billingSignupGrant": "注册赠送点数",
+  "operator.billingSignupGrantHint": "自助注册的新商户获赠的点数，记为赠送点数。0 表示不赠送。修改只对之后注册的商户生效。",
+  "operator.billingSettingsFromConfig": "尚未在后台保存，当前值来自控制面配置文件。",
+  "operator.billingSettingsUpdated": "最后保存于 {time}",
+  "operator.billingSettingsSaved": "计费设置已保存",
+  "operator.billingProblemSignupGrant": "请输入不小于 0 的点数，最多六位小数",
+  "operator.billingAdjustTypeHint": "扣减赠送点数时，不能超过该商户现有的赠送点数。"
 } as const;
 export default operator;

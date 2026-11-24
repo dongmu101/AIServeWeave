@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -63,16 +64,24 @@ func NextLedgerTime(last *time.Time, now time.Time) time.Time {
 // AccrueUsage adds a charged batch to the tenant's accumulation: amount
 // micro-credits over count requests charged at now. A new accumulation is
 // due for sealing at sealAt. The caller has already taken amount off the
-// balance.
+// balance; AccrueUsage takes it off the gift part first, so usage spends gift
+// credits before purchased ones.
 //
 // AccrueUsage 把一个已扣费的批次加入租户的累计：在 now 扣费、涵盖 count 个请求、金额
-// amount micro 点。新开的累计在 sealAt 到期封账。调用方已经从余额中扣掉 amount。
+// amount micro 点。新开的累计在 sealAt 到期封账。调用方已经从余额中扣掉 amount；
+// AccrueUsage 先从赠送部分扣，使用量先花赠送点数、再花购买点数。
 func AccrueUsage(row *model.TenantBilling, amount int64, count int, now, sealAt time.Time) {
 	now = now.UTC()
 	if row.UsageAccCount == 0 {
 		since, until := now, sealAt.UTC()
 		row.UsageAccSince, row.UsageAccUntil = &since, &until
 	}
+	if amount > 0 {
+		fromGift := min(max(row.GiftBalanceMicro, 0), amount)
+		row.GiftBalanceMicro -= fromGift
+		row.UsageAccGiftMicro += fromGift
+	}
+	row.GiftBalanceMicro = model.NormalizeGift(row.GiftBalanceMicro, row.BalanceMicro)
 	row.UsageAccMicro += amount
 	row.UsageAccCount += int64(count)
 	row.UsageAccLast = &now
@@ -101,6 +110,7 @@ func SealUsage(row *model.TenantBilling, now time.Time) *model.CreditLedgerEntry
 	entry := &model.CreditLedgerEntry{
 		ID: model.NewID(model.PrefixCreditLedger), TenantID: row.TenantID, Kind: model.LedgerKindUsage,
 		AmountMicro: -row.UsageAccMicro, BalanceAfterMicro: row.BalanceMicro,
+		GiftAmountMicro: -row.UsageAccGiftMicro, GiftBalanceAfterMicro: row.GiftBalanceMicro,
 		Ref:         fmt.Sprintf("%d requests", row.UsageAccCount),
 		PeriodStart: row.UsageAccSince, PeriodEnd: row.UsageAccLast, RequestCount: row.UsageAccCount,
 		CreatedAt: at,
@@ -114,7 +124,7 @@ func SealUsage(row *model.TenantBilling, now time.Time) *model.CreditLedgerEntry
 //
 // ClearUsageAccumulation 重置累计字段。
 func ClearUsageAccumulation(row *model.TenantBilling) {
-	row.UsageAccMicro, row.UsageAccCount = 0, 0
+	row.UsageAccMicro, row.UsageAccGiftMicro, row.UsageAccCount = 0, 0, 0
 	row.UsageAccSince, row.UsageAccLast, row.UsageAccUntil = nil, nil, nil
 }
 
@@ -124,11 +134,48 @@ func ClearUsageAccumulation(row *model.TenantBilling) {
 // UsageAccumulationColumns 返回用量账目规则会改动的计费行列，供 gorm 按列更新。
 func UsageAccumulationColumns(row model.TenantBilling) map[string]any {
 	return map[string]any{
-		"usage_acc_micro": row.UsageAccMicro, "usage_acc_count": row.UsageAccCount,
+		"usage_acc_micro": row.UsageAccMicro, "usage_acc_gift_micro": row.UsageAccGiftMicro,
+		"gift_balance_micro": row.GiftBalanceMicro, "usage_acc_count": row.UsageAccCount,
 		"usage_acc_since": row.UsageAccSince, "usage_acc_last": row.UsageAccLast, "usage_acc_until": row.UsageAccUntil,
 		"last_ledger_at": row.LastLedgerAt,
 	}
 }
+
+// CreditGift applies entry's gift part to row, whose balance is becoming
+// after, and returns the new gift balance. The entry's GiftAmountMicro is
+// rewritten to the gift balance's actual change, which differs from what the
+// writer asked for only when NormalizeGift moves credits between the parts
+// (a take-back larger than the purchased part comes out of gift credits), and
+// its GiftBalanceAfterMicro is set, so the gift chain holds like the balance
+// chain. A gift part with a sign other than the amount's, or larger than it,
+// is ErrInvalidGift; taking more gift credits than the tenant holds is
+// ErrInsufficientGift.
+//
+// CreditGift 把 entry 的赠送部分作用到 row 上（row 的余额正变为 after），返回新的赠送
+// 余额。entry 的 GiftAmountMicro 会改写为赠送余额的实际变动——只有 NormalizeGift 在两
+// 部分之间挪动点数时（扣回的点数多于购买部分，超出的从赠送点数中扣），它才与写入方的要求
+// 不同——并设置其 GiftBalanceAfterMicro，使赠送余额链与余额链一样成立。赠送部分与金额
+// 符号不同或大于金额时返回 ErrInvalidGift；扣除的赠送点数多于租户现有时返回
+// ErrInsufficientGift。
+func CreditGift(row model.TenantBilling, entry *model.CreditLedgerEntry, after int64) (int64, error) {
+	gift := entry.GiftAmountMicro
+	if (gift > 0 && (entry.AmountMicro < gift)) || (gift < 0 && entry.AmountMicro > gift) {
+		return 0, ErrInvalidGift
+	}
+	before := model.NormalizeGift(row.GiftBalanceMicro, row.BalanceMicro)
+	if gift < 0 && before < -gift {
+		return 0, ErrInsufficientGift
+	}
+	next := model.NormalizeGift(before+gift, after)
+	entry.GiftAmountMicro, entry.GiftBalanceAfterMicro = next-before, next
+	return next, nil
+}
+
+// ErrInvalidGift is returned for a ledger entry whose gift part does not fit
+// within its amount: a programming error in the writer.
+//
+// ErrInvalidGift 用于赠送部分超出金额范围的账目：属于写入方的编程错误。
+var ErrInvalidGift = errors.New("store: gift part outside the entry's amount")
 
 // NextLocalMidnight returns the first midnight in loc after now: the end of
 // now's day on the ledger's clock.

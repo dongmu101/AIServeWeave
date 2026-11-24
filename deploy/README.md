@@ -22,6 +22,21 @@ deploy/upgrade.sh
 
 升级会重建 Gateway。Compose 给 Gateway 的 `stop_grace_period` 为 75 秒：Gateway 收到 SIGTERM 后先等进行中的请求结束，再关闭 Agent 隧道，每段最多 30 秒，空闲时立即退出。新容器开始监听并等 Agent 重新连上之前，单副本部署的新请求会短暂收到 502 或 503，客户端重试即可。
 
+## 服务日志文件
+
+Compose 自动为 Gateway、Registry、ControlPlane、Console 和 Studio 创建 `deploy/logs/<服务>/`。在 `/opt/AIServeWeave` 部署时，文件路径为 `/opt/AIServeWeave/deploy/logs/<服务>/<服务>.log`，例如 `logs/controlplane/controlplane.log`。
+
+各服务的标准输出和标准错误会追加到对应文件，并继续出现在 `docker compose logs`。文件按 10 MiB 轮转，保留 `.log.1` 和 `.log.2` 两份归档。文件留在宿主机，容器重建后继续追加。多个副本须分别挂载独立目录。
+
+在部署目录下查看或检索日志：
+
+```bash
+tail -F logs/gateway/gateway.log
+grep -F '<请求 ID>' logs/gateway/*.log*
+```
+
+同步 `docker-compose.yaml` 和 `service-logs.sh` 后，在部署目录运行 `docker compose up -d --no-build --pull never`，用现有镜像按配置重建容器。部署目录里的文件从启用后开始记录。旧容器现存日志可在重建前用 `docker compose logs` 导出。
+
 ## 公开站点与计费检查
 
 - 7x 的公开 Console 入口为 `https://www.open7x.com`。从公网检查 `/`、`/signup`、`/console/docs/clients` 和 `/pricing`，再对照源站 Console 与 HTTPS 反向代理的响应。源站返回 200 无法证明公网 DNS 与 TLS 正常。

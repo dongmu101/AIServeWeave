@@ -91,6 +91,7 @@ function BalanceCard() {
           <dl className="grid min-w-0 gap-1">
             <dt className="text-xs text-muted-foreground"><Message id="tenant.billingBalance" /></dt>
             <dd className="font-heading text-2xl font-semibold break-all">{t("tenant.billingCreditsValue", { credits: formatCredits(data.balanceMicro, locale) })}</dd>
+            <dd className="text-xs text-muted-foreground break-all">{t("tenant.billingBalanceSplit", { purchased: formatCredits(data.purchasedBalanceMicro, locale), gift: formatCredits(data.giftBalanceMicro, locale) })}</dd>
           </dl>
           <Link href="/console/billing" className={buttonVariants({ variant: "outline" })}><Message id="tenant.billing" /></Link>
         </div>

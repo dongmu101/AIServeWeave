@@ -35,6 +35,8 @@ type billingState struct {
 
 	alipayPurchases   map[string]model.AlipayPurchase
 	alipayRedemptions map[string]model.AlipayRedemption
+
+	settings *model.BillingSettings
 }
 
 func newBillingState() billingState {
@@ -66,6 +68,29 @@ func (s *Store) GetTenantBilling(_ context.Context, tenantID string) (model.Tena
 	return row, nil
 }
 
+// GetBillingSettings implements store.Billing.
+//
+// GetBillingSettings 实现 store.Billing。
+func (s *Store) GetBillingSettings(_ context.Context) (model.BillingSettings, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.billing.settings == nil {
+		return model.BillingSettings{}, store.ErrNotFound
+	}
+	return *s.billing.settings, nil
+}
+
+// PutBillingSettings implements store.Billing.
+//
+// PutBillingSettings 实现 store.Billing。
+func (s *Store) PutBillingSettings(_ context.Context, settings model.BillingSettings) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	settings.ID = model.SettingsRowID
+	s.billing.settings = &settings
+	return nil
+}
+
 // GetTenantBillings implements store.Billing.
 //
 // GetTenantBillings 实现 store.Billing。
@@ -93,6 +118,11 @@ func (s *Store) InitTenantBilling(_ context.Context, billing model.TenantBilling
 	if grant != nil {
 		billing.BalanceMicro = grant.AmountMicro
 		grant.BalanceAfterMicro = grant.AmountMicro
+		gift, err := store.CreditGift(model.TenantBilling{}, grant, grant.AmountMicro)
+		if err != nil {
+			return err
+		}
+		billing.GiftBalanceMicro = gift
 		grant.CreatedAt = store.NextLedgerTime(nil, grant.CreatedAt)
 		billing.LastLedgerAt = &grant.CreatedAt
 		s.billing.ledger = append(s.billing.ledger, *grant)
@@ -570,6 +600,10 @@ func (s *Store) applyCredit(entry *model.CreditLedgerEntry) (changed, duplicate 
 		(entry.AmountMicro < 0 && row.BalanceMicro < math.MinInt64-entry.AmountMicro) {
 		return false, false, errBalanceOverflow
 	}
+	gift, err := store.CreditGift(row, entry, row.BalanceMicro+entry.AmountMicro)
+	if err != nil {
+		return false, false, err
+	}
 	// The pending usage is sealed first, as gormstore's applyCredit does.
 	// 先为尚未封账的用量封账，与 gormstore 的 applyCredit 一致。
 	s.sealUsage(&row, entry.CreatedAt)
@@ -577,6 +611,7 @@ func (s *Store) applyCredit(entry *model.CreditLedgerEntry) (changed, duplicate 
 	row.LastLedgerAt = &entry.CreatedAt
 	before := row.Blocked()
 	row.BalanceMicro += entry.AmountMicro
+	row.GiftBalanceMicro = gift
 	row.UpdatedAt = entry.CreatedAt
 	s.billing.tenants[entry.TenantID] = row
 	entry.BalanceAfterMicro = row.BalanceMicro

@@ -42,6 +42,10 @@ func mergeNativeRequest(seed, override map[string]json.RawMessage) {
 			override["metadata"] = merged
 		}
 	}
+	// The CLI computes context edits for its own thinking mode before applying
+	// the caller's settings. Only the caller's context edits belong to this turn.
+	// CLI 在应用调用方设置之前按自己的思考模式计算上下文策略，本轮只使用调用方指定的策略。
+	delete(seed, "context_management")
 	for key, value := range override {
 		seed[key] = value
 	}
