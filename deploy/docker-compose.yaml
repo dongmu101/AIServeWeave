@@ -541,6 +541,14 @@ services:
         # 内置进镜像的 Agent 制品平台；冒烟时一个就够：AGENT_PLATFORMS="linux/amd64"。
         AGENT_PLATFORMS: ${AGENT_PLATFORMS:-linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64}
     restart: unless-stopped
+    # On SIGTERM the Gateway drains in-flight HTTP requests, then the Agent
+    # tunnels, each for up to drainGrace (30s, main.go). Docker's default 10s
+    # SIGKILLs it mid-drain and cuts Messages streams that often run 20-60s,
+    # so cover both phases. An idle Gateway still exits at once.
+    # 收到 SIGTERM 后 Gateway 先排空进行中的 HTTP 请求，再关闭 Agent 隧道，每段最多
+    # drainGrace（30 秒，见 main.go）。Docker 默认 10 秒就 SIGKILL，会切断常常持续
+    # 20–60 秒的 Messages 流，因此覆盖两段；空闲的 Gateway 仍会立即退出。
+    stop_grace_period: 75s
     logging: *logging
     # The largest Go cap: request bodies are deliberately unbounded (Claude
     # Code sends very large ones), so concurrent big requests need headroom.
