@@ -959,6 +959,7 @@ const tenant = {
   "tenant.billingPricesLoading": "Loading model prices…",
   "tenant.billingPricesEmpty": "No model prices yet",
   "tenant.billingPriceRate": "Rate {rate}",
+  "tenant.modelDetailsPricesNote": "Base-tier prices on your plan for API models with the same name (credits per million tokens).",
   "tenant.billingPriceBaseTier": "Base tier",
   "tenant.billingPriceTier": "Input above {tokens} tokens",
   "tenant.billingPriceVariant": "Service tier {variant}",

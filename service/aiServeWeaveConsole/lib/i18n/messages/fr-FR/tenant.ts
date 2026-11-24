@@ -959,6 +959,7 @@ const tenant = {
   "tenant.billingPricesLoading": "Chargement des prix des modèles…",
   "tenant.billingPricesEmpty": "Aucun prix de modèle pour l'instant",
   "tenant.billingPriceRate": "Coefficient {rate}",
+  "tenant.modelDetailsPricesNote": "Prix du palier de base de votre forfait pour les modèles d’API du même nom (crédits par million de jetons).",
   "tenant.billingPriceBaseTier": "Palier de base",
   "tenant.billingPriceTier": "Entrée au-delà de {tokens} jetons",
   "tenant.billingPriceVariant": "Niveau de service {variant}",

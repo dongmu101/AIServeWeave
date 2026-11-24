@@ -9,6 +9,7 @@ import type { Translator } from "@/lib/i18n/translate";
 
 import * as React from "react";
 import { createColumnHelper, tableFeatures, useTable } from "@tanstack/react-table";
+import { CliQuota } from "@/components/console/cli-quota";
 import { DataTable } from "@/components/console/data-table";
 import { EmptyState, ErrorState, LoadingState } from "@/components/console/states";
 import { useResource } from "@/components/console/use-resource";
@@ -17,9 +18,10 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { CliQuota } from "@/components/console/cli-quota";
+import { formatCredits } from "@/lib/console/billing";
 import { parseTenantModels, type ServiceScope, type TenantModelCatalog } from "@/lib/console/fleet";
 import { formatDateTime, matchesQuery } from "@/lib/console/format";
+import { basePrice, parseTenantPrices } from "@/lib/console/tenant-prices";
 
 type Service = TenantModelCatalog["services"][number];
 const PAGE_SIZE = 25;
@@ -140,19 +142,46 @@ function AgentServices({ agent, collectedAt, onSelect }: { agent: AgentGroup; co
 /** ServiceModels paginates one service's models in a separate detail window.
  * ServiceModels 在独立详情窗口中分页展示一个服务的模型。 */
 function ServiceModels({ service }: { service: Service }) {
-  const {t } = useI18n();
+  const { locale, t } = useI18n();
+  const prices = useResource({ method: "GET", path: "/admin/v1/billing/prices", parse: parseTenantPrices });
   const [query, setQuery] = React.useState("");
   const [page, setPage] = React.useState(0);
   const models = service.models.filter(model => matchesQuery([model.id], query));
   const currentPage = Math.min(page, Math.max(0, Math.ceil(models.length / PAGE_SIZE) - 1));
+  const pricesByModel = React.useMemo(() => {
+    const byModel = new Map<string, { input: number | null; output: number | null }>();
+    for (const price of prices.data ?? []) {
+      const input = basePrice(price, "input");
+      const output = basePrice(price, "output");
+      if (input !== null || output !== null) byModel.set(price.model, { input, output });
+    }
+    return byModel;
+  }, [prices.data]);
+  const hasPrices = service.models.some(model => pricesByModel.has(model.id));
   return <DialogContent className="sm:max-w-2xl">
     <DialogHeader><DialogTitle><Message id="tenant.modelDetails" /></DialogTitle><DialogDescription className="break-all">Agent {service.agentId} · {service.serviceId} · {service.kind}</DialogDescription></DialogHeader>
     {!service.nodeOnline ? <p className="text-xs text-muted-foreground"><Message id="tenant.thisAgentIsOfflineTheFollowingServiceAnd" /></p> : null}
     <Input aria-label={t("tenant.searchModelsInThisService")} placeholder={t("tenant.searchModelIds")} value={query} onChange={event => { setQuery(event.target.value); setPage(0); }} />
-    {models.length === 0 ? <p className="text-sm text-muted-foreground">{service.models.length === 0 ? t("tenant.noModelsDiscoveredYet") : t("tenant.noModelsMatchYourSearch")}</p> : <ul className="grid gap-2">{models.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE).map(model => <li key={model.id} className="min-w-0 rounded-md bg-muted/40 p-3">
-      <code className="break-all text-sm">{model.id}</code>
-      <div className="mt-2 flex flex-wrap gap-1">{Object.entries(model.capabilities).map(([capability, support]) => <Badge key={capability} variant="outline" className="h-auto max-w-full whitespace-normal break-all text-xs">{capability} · {SUPPORT(t)[support] ?? support}</Badge>)}</div>
-    </li>)}</ul>}
+    {prices.errorKind === "not_found" ? null
+      : prices.error ? <ErrorState message={prices.error} onRetry={prices.reload} />
+      : prices.loading ? <p role="status" className="text-xs text-muted-foreground"><Message id="tenant.billingPricesLoading" /></p>
+      : service.models.length > 0 ? <p className="text-xs text-muted-foreground"><Message id={hasPrices ? "tenant.modelDetailsPricesNote" : "tenant.billingPricesEmpty"} /></p>
+      : null}
+    {models.length === 0 ? <p className="text-sm text-muted-foreground">{service.models.length === 0 ? t("tenant.noModelsDiscoveredYet") : t("tenant.noModelsMatchYourSearch")}</p> : <ul className="grid gap-2">
+      {models.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE).map(model => {
+        const price = pricesByModel.get(model.id);
+        return <li key={model.id} className="min-w-0 rounded-md bg-muted/40 p-3">
+          <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+            <code className="break-all text-sm">{model.id}</code>
+            {price ? <dl className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
+              <div className="flex items-baseline gap-1.5"><dt className="text-muted-foreground"><Message id="tenant.meterInput" /></dt><dd className="font-mono">{price.input === null ? "—" : formatCredits(price.input, locale)}</dd></div>
+              <div className="flex items-baseline gap-1.5"><dt className="text-muted-foreground"><Message id="tenant.meterOutput" /></dt><dd className="font-mono">{price.output === null ? "—" : formatCredits(price.output, locale)}</dd></div>
+            </dl> : null}
+          </div>
+          <div className="mt-2 flex flex-wrap gap-1">{Object.entries(model.capabilities).map(([capability, support]) => <Badge key={capability} variant="outline" className="h-auto max-w-full whitespace-normal break-all text-xs">{capability} · {SUPPORT(t)[support] ?? support}</Badge>)}</div>
+        </li>;
+      })}
+    </ul>}
     <ListPager page={currentPage} count={models.length} onChange={setPage} label={t("tenant.modelPagination")} />
   </DialogContent>;
 }

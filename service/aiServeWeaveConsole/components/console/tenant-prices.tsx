@@ -21,7 +21,7 @@ import { formatRate } from "@/lib/console/usage-records";
  *
  * COLUMNS 是每个模型基础档直接显示的计量项；其余（1 小时缓存写入、推理、长上下文档位、
  * 服务等级）放在「查看全部档位」里。 */
-const COLUMNS = ["input", "input.cache_read", "input.cache_write", "output"] as const;
+const COLUMNS = ["input", "output", "input.cache_read", "input.cache_write"] as const;
 
 /**
  * TenantPrices lists the sale prices of every model this tenant may use, on

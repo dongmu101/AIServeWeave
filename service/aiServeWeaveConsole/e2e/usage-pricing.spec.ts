@@ -113,8 +113,13 @@ test("model prices list base-tier sale prices and expand to every tier", async (
   }] } }));
   await page.goto("/console/billing?tab=prices");
   await expect(page.getByRole("tab", { name: "模型价格", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("columnheader").filter({ hasText: /^(输入|输出|缓存读取|缓存写入（5 分钟）)$/ })).toHaveText([
+    "输入", "输出", "缓存读取", "缓存写入（5 分钟）",
+  ]);
   await expect(page.getByText("倍率 0.8×", { exact: true })).toBeVisible();
-  await expect(page.getByRole("cell", { name: "2.4", exact: true })).toBeVisible();
+  const modelRow = page.getByRole("row").filter({ hasText: "claude-x" });
+  await expect(modelRow.getByRole("cell").nth(1)).toHaveText("2.4");
+  await expect(modelRow.getByRole("cell").nth(2)).toHaveText("12");
   await page.getByRole("button", { name: "查看全部档位" }).click();
   await expect(page.getByText("输入超过 200,000 token", { exact: true })).toBeVisible();
   await expect(page.getByText("4.8", { exact: true })).toBeVisible();

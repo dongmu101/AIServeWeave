@@ -947,6 +947,7 @@ const tenant = {
   "tenant.billingPricesLoading": "モデル価格を読み込み中…",
   "tenant.billingPricesEmpty": "利用可能なモデルの価格はまだありません",
   "tenant.billingPriceRate": "倍率 {rate}",
+  "tenant.modelDetailsPricesNote": "同名の API モデルに適用されるご利用プランの基本料金（クレジット / 100 万トークン）。",
   "tenant.billingPriceBaseTier": "基本料金",
   "tenant.billingPriceTier": "入力 {tokens} トークン超",
   "tenant.billingPriceVariant": "サービスレベル {variant}",

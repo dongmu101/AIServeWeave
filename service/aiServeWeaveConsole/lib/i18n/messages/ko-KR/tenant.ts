@@ -947,6 +947,7 @@ const tenant = {
   "tenant.billingPricesLoading": "모델 가격을 불러오는 중…",
   "tenant.billingPricesEmpty": "아직 사용 가능한 모델 가격이 없습니다",
   "tenant.billingPriceRate": "배율 {rate}",
+  "tenant.modelDetailsPricesNote": "이름이 같은 API 모델에 적용되는 현재 요금제의 기본 구간 가격(100만 토큰당 크레딧)입니다.",
   "tenant.billingPriceBaseTier": "기본 구간",
   "tenant.billingPriceTier": "입력 {tokens} 토큰 초과",
   "tenant.billingPriceVariant": "서비스 등급 {variant}",

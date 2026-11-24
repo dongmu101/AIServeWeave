@@ -947,6 +947,7 @@ const tenant = {
   "tenant.billingPricesLoading": "正在载入模型价格…",
   "tenant.billingPricesEmpty": "目前没有可用模型的价格",
   "tenant.billingPriceRate": "倍率 {rate}",
+  "tenant.modelDetailsPricesNote": "同名 API 模型在当前方案下的基础档售价（点 / 百万 token）。",
   "tenant.billingPriceBaseTier": "基础档",
   "tenant.billingPriceTier": "输入超过 {tokens} token",
   "tenant.billingPriceVariant": "服务等级 {variant}",

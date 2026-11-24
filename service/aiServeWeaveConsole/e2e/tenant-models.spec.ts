@@ -17,6 +17,20 @@ for (const width of [1440, 390, 320]) {
     await page.context().clearCookies();
     await page.context().addCookies(cookies.filter(cookie => cookie.name !== OPERATOR_COOKIE));
     await page.route("**/api/admin/admin/v1/models", route => route.fulfill({ json: catalog }));
+    await page.route("**/api/admin/admin/v1/billing/prices", route => route.fulfill({ json: { items: [
+      { model: "tenant-agent-model", source: "catalog", rate_ppm: 800_000, items: [
+        { meter: "input", base_micro_per_m: 3_000_000, sale_micro_per_m: 2_400_000 },
+        { meter: "output", base_micro_per_m: 15_000_000, sale_micro_per_m: 12_000_000 },
+        { meter: "input", above_input_tokens: 200_000, base_micro_per_m: 6_000_000, sale_micro_per_m: 4_800_000 },
+      ] },
+      { model: "second-model-preview", source: "catalog", rate_ppm: 1_000_000, items: [
+        { meter: "input", base_micro_per_m: 2_000_000, sale_micro_per_m: 2_000_000 },
+      ] },
+      { model: "third-model", source: "plan_fixed", rate_ppm: 1_000_000, items: [
+        { meter: "input", base_micro_per_m: 0, sale_micro_per_m: 0 },
+        { meter: "output", base_micro_per_m: 0, sale_micro_per_m: 0 },
+      ] },
+    ] } }));
     await page.goto("/console");
     const navigation = page.getByRole("navigation", { name: "控制台导航" });
     const collapsed = navigation.getByRole("button", { name: "打开控制台导航" });
@@ -37,8 +51,17 @@ for (const width of [1440, 390, 320]) {
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width + 1);
     await page.screenshot({ path: test.info().outputPath(`tenant-models-${width}.png`), fullPage: true });
     await page.getByRole("button", { name: "查看模型", exact: true }).click();
-    await expect(page.getByRole("dialog")).toBeVisible();
-    await expect(page.getByRole("dialog").getByText("chat · 支持", { exact: true })).toHaveCount(4);
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByText("chat · 支持", { exact: true })).toHaveCount(4);
+    await expect(dialog.getByText("同名 API 模型在当前方案下的基础档售价（点 / 百万 token）。")).toBeVisible();
+    const items = dialog.getByRole("listitem");
+    const priced = items.filter({ has: page.getByText("tenant-agent-model", { exact: true }) });
+    await expect(priced.locator("dt")).toHaveText(["输入", "输出"]);
+    await expect(priced.locator("dd")).toHaveText(["2.4", "12"]);
+    await expect(items.filter({ has: page.getByText("second-model", { exact: true }) }).locator("dd")).toHaveCount(0);
+    await expect(items.filter({ has: page.getByText("third-model", { exact: true }) }).locator("dd")).toHaveText(["0", "0"]);
+    expect(await dialog.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
     await page.keyboard.press("Escape");
     await page.getByRole("textbox", { name: "搜索 AI 服务或模型" }).fill("missing-model");
     await expect(page.getByText("没有符合搜索条件的服务或模型", { exact: true })).toBeVisible();
@@ -63,11 +86,15 @@ test("offline Agent reports remain distinguishable from live services", async ({
   await page.route("**/api/admin/admin/v1/models", route => route.fulfill({ json: {
     ...catalog, services: [{ ...catalog.services[0], node_online: false }],
   } }));
+  await page.route("**/api/admin/admin/v1/billing/prices", route => route.fulfill({ status: 404 }));
   await page.goto("/console/models");
   await expect(page.getByText("Agent 离线", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "查看模型", exact: true }).click();
   await expect(page.getByText("Agent 已离线，以下为最近一次上报的服务与模型信息。", { exact: true })).toBeVisible();
-  await expect(page.getByRole("dialog").getByText("tenant-agent-model", { exact: true })).toBeVisible();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByText("tenant-agent-model", { exact: true })).toBeVisible();
+  await expect(dialog.getByText("正在载入模型价格…")).toHaveCount(0);
+  await expect(dialog.getByRole("alert")).toHaveCount(0);
 });
 
 test("many Agents use bounded service and model pages with full-snapshot search", async ({ page }) => {

@@ -947,6 +947,7 @@ const tenant = {
   "tenant.billingPricesLoading": "Cargando precios de modelos…",
   "tenant.billingPricesEmpty": "Todavía no hay precios de modelos",
   "tenant.billingPriceRate": "Multiplicador {rate}",
+  "tenant.modelDetailsPricesNote": "Precios del tramo base de tu plan para los modelos de API con el mismo nombre (créditos por millón de tokens).",
   "tenant.billingPriceBaseTier": "Tramo base",
   "tenant.billingPriceTier": "Entrada de más de {tokens} tokens",
   "tenant.billingPriceVariant": "Nivel de servicio {variant}",
