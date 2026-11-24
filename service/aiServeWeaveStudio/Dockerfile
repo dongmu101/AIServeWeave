@@ -1,35 +1,22 @@
+# The Studio is built on the host with scripts/build-web.sh (pnpm build); this
+# image only copies that standalone output, so nothing is compiled in Docker.
+# The output is plain JavaScript, so the same files serve amd64 and arm64.
 # Build with the Studio directory as context; no deployment secrets enter it.
+#
+# Studio 先在宿主机用 scripts/build-web.sh（pnpm build）构建；本镜像只拷贝其 standalone
+# 产物，Docker 里不编译任何东西。产物是纯 JavaScript，同一份文件适用于 amd64 与 arm64。
 # 以 Studio 目录为构建上下文，不将部署密钥放入其中。
-FROM node:26-bookworm-slim AS base
+FROM node:26-bookworm-slim
 WORKDIR /app
-ENV NEXT_TELEMETRY_DISABLED=1
-
-FROM base AS dependencies
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-# Use the package manager version declared by the project and its lockfile.
-# 使用项目声明的包管理器版本与锁文件。
-# Cache mounts keep the npm cache and pnpm store across builds; they never enter the image.
-# 缓存挂载让 npm 缓存与 pnpm store 跨构建保留，不进入镜像。
-RUN --mount=type=cache,target=/root/.npm \
-    --mount=type=cache,target=/pnpm/store \
-    npm install --global "$(node -p 'require("./package.json").packageManager')" && \
-    pnpm install --frozen-lockfile --store-dir /pnpm/store
-
-FROM dependencies AS build
-COPY . .
-# Reuse the Next.js compilation cache across builds.
-# 跨构建复用 Next.js 编译缓存。
-RUN --mount=type=cache,target=/app/.next/cache pnpm build
-
-FROM base AS runtime
 ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1 \
     HOSTNAME=0.0.0.0 \
     PORT=3100
 # Standalone excludes static assets, so copy both asset directories explicitly.
 # standalone 不包含静态资源，因此显式复制两个资源目录。
-COPY --from=build --chown=node:node /app/.next/standalone ./
-COPY --from=build --chown=node:node /app/.next/static ./.next/static
-COPY --from=build --chown=node:node /app/public ./public
+COPY --chown=node:node .next/standalone ./
+COPY --chown=node:node .next/static ./.next/static
+COPY --chown=node:node public ./public
 USER node
 EXPOSE 3100
 CMD ["node", "server.js"]

@@ -119,7 +119,7 @@ help: ## 列出可用目标与变量
 check-docker-mem:
 	@mem="$$(docker info --format '{{.MemTotal}}' 2>/dev/null)" || { echo "无法连接 Docker：先启动 Docker Desktop" >&2; exit 1; }; \
 	  if (( mem < $(MIN_DOCKER_MEM_GIB) * 1024 * 1024 * 1024 )); then \
-	    echo "警告: Docker 只有 $$((mem / 1024 / 1024)) MiB 内存，Go / Next.js 构建可能被 OOM 杀掉（signal: killed）。" >&2; \
+	    echo "警告: Docker 只有 $$((mem / 1024 / 1024)) MiB 内存，Go 构建可能被 OOM 杀掉（signal: killed）。" >&2; \
 	    echo "      在 Docker Desktop → Settings → Resources → Memory 调到 6 GB 以上，Apply & restart 后重试" >&2; \
 	  fi
 
@@ -129,14 +129,25 @@ images: check-docker-mem $(addprefix image-,$(SERVICES)) ## 为 PLATFORM 构建�
 local: ## 为本机平台构建，供本地 docker compose up 试跑
 	@$(MAKE) --no-print-directory images PLATFORM=$(NATIVE_PLATFORM)
 
-# The Console and Studio have their own contexts and Dockerfiles and take no build args.
-# Console 与 Studio 有各自的构建上下文与 Dockerfile，不接受构建参数。
-image-console:
+# The Console and Studio are compiled here with pnpm (scripts/build-web.sh); their
+# Dockerfiles only copy the standalone output, which is plain JavaScript, so one
+# build serves every platform. They have their own contexts and take no build args.
+# Console 与 Studio 在本机用 pnpm 编译（scripts/build-web.sh）；它们的 Dockerfile 只拷贝
+# standalone 产物，产物是纯 JavaScript，一次构建适用于所有平台。二者有各自的构建上下文，
+# 不接受构建参数。
+WEB_DIR_console := service/aiServeWeaveConsole
+WEB_DIR_studio  := service/aiServeWeaveStudio
+
+web-%:
+	@test -n "$(WEB_DIR_$*)" || { echo "未知前端: $*（可选: console studio）" >&2; exit 1; }
+	scripts/build-web.sh $(WEB_DIR_$*)
+
+image-console: web-console
 	@echo "==> 构建 console（$(PLATFORM)）"
 	docker buildx build --platform $(PLATFORM) --load \
 	  -t $(REPO)/aiserveweave-console:$(TAG) service/aiServeWeaveConsole
 
-image-studio:
+image-studio: web-studio
 	@echo "==> 构建 studio（$(PLATFORM)）"
 	docker buildx build --platform $(PLATFORM) --load \
 	  -t $(REPO)/aiserveweave-studio:$(TAG) service/aiServeWeaveStudio
@@ -328,14 +339,14 @@ builder-reset: ## 删除并重建多平台 builder（改了 BUILD_PARALLELISM �
 # running one alone (make publish-console) warns the same way publish does.
 # 每个单服务目标也检查内存并准备 builder，单独运行（如 make publish-console）时与
 # publish 一样给出警告。
-publish-console: check-docker-mem builder
+publish-console: check-docker-mem builder web-console
 	@echo "==> 构建并推送 console（$(PUBLISH_PLATFORMS)）"
 	docker buildx build --builder $(BUILDER) --platform $(PUBLISH_PLATFORMS) --push \
 	  $(LABEL_ARGS) $(call hub_tags,console) service/aiServeWeaveConsole
 
-# Studio, like the Console, has its own context and Dockerfile.
-# Studio 与 Console 一样有自己的构建上下文与 Dockerfile。
-publish-studio: check-docker-mem builder
+# Studio, like the Console, is compiled here and has its own context and Dockerfile.
+# Studio 与 Console 一样在本机编译，有自己的构建上下文与 Dockerfile。
+publish-studio: check-docker-mem builder web-studio
 	@echo "==> 构建并推送 studio（$(PUBLISH_PLATFORMS)）"
 	docker buildx build --builder $(BUILDER) --platform $(PUBLISH_PLATFORMS) --push \
 	  $(LABEL_ARGS) $(call hub_tags,studio) service/aiServeWeaveStudio

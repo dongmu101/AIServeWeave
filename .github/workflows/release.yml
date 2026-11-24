@@ -124,12 +124,35 @@ jobs:
           - image: console
             context: service/aiServeWeaveConsole
             build_args: ""
+            web: true
           - image: studio
             context: service/aiServeWeaveStudio
             build_args: ""
+            web: true
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # The Console and Studio Dockerfiles only copy the standalone output; it is
+      # compiled here, outside Docker.
+      # Console 与 Studio 的 Dockerfile 只拷贝 standalone 产物；产物在这里、Docker 之外编译。
+      - name: Set up pnpm
+        if: matrix.web
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: ${{ matrix.context }}/package.json
+
+      - name: Set up Node.js
+        if: matrix.web
+        uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: pnpm
+          cache-dependency-path: ${{ matrix.context }}/pnpm-lock.yaml
+
+      - name: Build frontend（pnpm build）
+        if: matrix.web
+        run: scripts/build-web.sh ${{ matrix.context }}
 
       - name: Set up QEMU（跨架构模拟，供 buildx 构建 linux/arm64）
         uses: docker/setup-qemu-action@v3

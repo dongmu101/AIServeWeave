@@ -282,10 +282,12 @@ volume_exists() { docker volume inspect "$(project_name)_$1" >/dev/null 2>&1; }
 
 # build_images builds the named services, or BUILD_ORDER, one at a time.
 # GOPROXY is forwarded only when set, so the Dockerfile default applies
-# otherwise.
+# otherwise. The Console and Studio are compiled on the host with pnpm first
+# (scripts/build-web.sh): their Dockerfiles only copy that output.
 #
 # build_images 逐个构建指定服务（未指定时为 BUILD_ORDER）。只在设置了 GOPROXY 时才转发，
-# 否则沿用 Dockerfile 的默认值。
+# 否则沿用 Dockerfile 的默认值。Console 与 Studio 先在本机用 pnpm 编译
+# （scripts/build-web.sh）：它们的 Dockerfile 只拷贝该产物。
 build_images() {
   local version="$1"
   shift
@@ -294,6 +296,10 @@ build_images() {
   [[ -z "${GOPROXY_ARG:-}" ]] || args+=(--build-arg "GOPROXY=$GOPROXY_ARG")
   for service in "${services[@]}"; do
     log "构建 ${service}（镜像 latest，版本 ${version}）"
+    case "$service" in
+      console) "$ROOT_DIR/scripts/build-web.sh" "$ROOT_DIR/service/aiServeWeaveConsole" || die "console 前端编译失败" ;;
+      studio) "$ROOT_DIR/scripts/build-web.sh" "$ROOT_DIR/service/aiServeWeaveStudio" || die "studio 前端编译失败" ;;
+    esac
     compose build "${args[@]}" "$service" || die "$service 构建失败"
   done
 }

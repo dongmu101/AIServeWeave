@@ -1,15 +1,12 @@
-# Keep local dependencies, build output and credentials out of the context.
-# 本地依赖、构建产物与凭据不进入构建上下文。
-node_modules
-.next
-out
-build
-coverage
-.env*
-*.pem
-*.key
-*.tsbuildinfo
-next-env.d.ts
-*.log
-.git
-.DS_Store
+# The image only copies the output of scripts/build-web.sh, built on the host;
+# nothing is compiled in Docker. Send just that output, minus env files.
+# 镜像只拷贝在宿主机由 scripts/build-web.sh 构建的产物，Docker 里不编译任何东西。
+# 构建上下文只发送这些产物，并排除环境配置文件。
+*
+!.next/standalone
+!.next/static
+!public
+**/.env*
+**/*.pem
+**/*.key
+.next/standalone/.next/cache

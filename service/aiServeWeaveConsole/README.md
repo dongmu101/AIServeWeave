@@ -174,6 +174,8 @@ pnpm test
 pnpm build
 ```
 
+容器镜像不在 Docker 里编译：仓库根目录的 `scripts/build-web.sh` 在宿主机执行 `pnpm build`，[Dockerfile](Dockerfile) 只拷贝 `.next/standalone`、`.next/static` 与 `public`（`make images` / `make publish` 会自动先执行它）。为让同一份产物适用于所有镜像平台，[next.config.ts](next.config.ts) 关闭了图片优化并把 sharp 排除在 standalone 之外；使用 `next/image` 前须先解决这一点。
+
 `pnpm typecheck` 使用 TS 7；ESLint 与 Next.js 构建内部使用 TS 6。因此类型检查通过不等于构建通过，不能删掉其中一道门禁。双版本的原因和维护方式见 [AGENTS.md](AGENTS.md)。
 
 `pnpm test` 走 Node 26 内置的 `node:test`，不引入单元测试框架依赖，覆盖契约解析、会话密封、转发白名单、来源校验与请求层的重试与错误分类；不依赖真实控制面、网络或时钟。组件与页面另走下方 P10/Q03 浏览器验收。`pnpm typecheck` 依赖 `.next/types`，新增路由后先跑一次 `pnpm build`。

@@ -130,6 +130,8 @@ make release VERSION=v0.1.1 SERVER=root@host   # 另在服务器上 deploy/upgra
 
 它依次：校验 `VERSION` 为 `vX.Y.Z` 且 GitHub 上尚无同名 Release、工作区干净且已推送；在 HEAD 打 tag 并推送；用 `scripts/build-release.sh` 编译并以 `gh release create` 上传 `SHA256SUMS.txt` 列出的全部文件（有 CHANGELOG 小节时取其为 release notes，否则自动生成）；再从这批文件摆出 `dist/agent-dist/<VERSION>/`（Agent 裸二进制、四个安装脚本与它们的 `SHA256SUMS.txt`），`make publish AGENT_DIST=dist/agent-dist` 以 `--build-context agent-prebuilt=...` 交给 Gateway 镜像，校验后直接拷贝、不再编译，平台与 Release 提供的 Agent 字节一致；最后把同版本镜像推到 Docker Hub 的 `:VERSION` 与 `:latest`。不传 `AGENT_DIST` 时 Gateway 镜像照旧自己编译 Agent。两边版本一致后，平台 manifest 才会给出 GitHub 下载地址，`install.sh --source github` 才可用。推 tag 同样触发 `release.yml`；它发现 Release 已存在时跳过创建。服务器 `.env` 的 `AISW_IMAGE_REPO` 须指向 `HUB_REPO`（默认 `docker.io/dongmu101`）。
 
+Console 与 Studio 不在 Docker 里编译：`make images`、`make publish` 与 `make release` 先在本机用 `scripts/build-web.sh`（`pnpm install --frozen-lockfile && pnpm build`）编译，镜像只拷贝 `.next/standalone`、`.next/static` 与 `public`。产物是纯 JavaScript，一次编译同时用于 amd64 与 arm64；脚本发现产物里有原生二进制（`*.node`，只适用于本机平台）时失败。因此构建机需要 Node.js 26 与 pnpm；`release.yml` 与服务器上的 `deploy/upgrade.sh --build` 同样先在 Docker 之外编译。
+
 ## 校验和验证 / Verifying checksums
 
 ```bash
