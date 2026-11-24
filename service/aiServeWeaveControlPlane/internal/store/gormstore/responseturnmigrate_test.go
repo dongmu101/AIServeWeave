@@ -34,10 +34,10 @@ func TestLoadResponseTurnsMigrationsParsesEmbeddedSQL(t *testing.T) {
 				t.Fatalf("loadMigrations(response_turns, %s) error = %v, want nil", dialect, err)
 			}
 			// 0001 creates the table; 0002 converts it to time partitions; 0003
-			// widens tenant_id to hold UUIDv7 ids.
-			// 0001 建表；0002 把它转换为按时间分区；0003 加宽 tenant_id 以容纳 UUIDv7 id。
-			if len(files) != 3 {
-				t.Fatalf("loadMigrations(response_turns, %s) returned %d files, want 3", dialect, len(files))
+			// widens tenant_id to hold UUIDv7 ids; 0004 adds schema comments.
+			// 0001 建表；0002 按时间分区；0003 加宽 tenant_id 以容纳 UUIDv7 id；0004 添加表和字段注释。
+			if len(files) != 4 {
+				t.Fatalf("loadMigrations(response_turns, %s) returned %d files, want 4", dialect, len(files))
 			}
 		})
 	}

@@ -1,0 +1,22 @@
+COMMENT ON TABLE api_docs IS '控制面 API 文档的内容、发布状态与版本';
+COMMENT ON COLUMN api_docs.slug IS '文档页面的路径标识';
+COMMENT ON COLUMN api_docs.category IS '文档分组名称';
+COMMENT ON COLUMN api_docs.category_order IS '分组展示排序值';
+COMMENT ON COLUMN api_docs.sort_order IS '分组内的页面排序值';
+COMMENT ON COLUMN api_docs.title IS '文档标题';
+COMMENT ON COLUMN api_docs.method IS 'HTTP 请求方法';
+COMMENT ON COLUMN api_docs.path IS 'API 路径';
+COMMENT ON COLUMN api_docs.summary IS '文档简介';
+COMMENT ON COLUMN api_docs.content_json IS '结构化文档正文 JSON';
+COMMENT ON COLUMN api_docs.status IS '文档发布状态';
+COMMENT ON COLUMN api_docs.source IS '文档来源，如内置或运维编辑';
+COMMENT ON COLUMN api_docs.seed_revision IS '内置文档的内容修订号';
+COMMENT ON COLUMN api_docs.version IS '文档修改版本号，用于并发控制';
+COMMENT ON COLUMN api_docs.updated_by IS '最后更新人标识';
+COMMENT ON COLUMN api_docs.updated_at IS '最后更新时间';
+
+COMMENT ON TABLE schema_migrations_api_docs IS 'API 文档迁移的版本账本';
+COMMENT ON COLUMN schema_migrations_api_docs.id IS '迁移 SQL 文件名';
+COMMENT ON COLUMN schema_migrations_api_docs.applied_at IS '迁移完成时间，未完成时记录本次尝试的开始时间';
+COMMENT ON COLUMN schema_migrations_api_docs.checksum IS '迁移 SQL 的 SHA-256 校验和';
+COMMENT ON COLUMN schema_migrations_api_docs.dirty IS '迁移是否仍未完成';

@@ -1,0 +1,25 @@
+COMMENT ON TABLE usage_records IS '请求级模型用量、计价与扣费明细';
+COMMENT ON COLUMN usage_records.id IS '用量记录标识，用于重复上报防重';
+COMMENT ON COLUMN usage_records.tenant_id IS '所属租户标识';
+COMMENT ON COLUMN usage_records.model IS '计价使用的模型别名';
+COMMENT ON COLUMN usage_records.endpoint IS '请求入口类别';
+COMMENT ON COLUMN usage_records.prompt_tokens IS '输入 Token 总数，包含缓存部分';
+COMMENT ON COLUMN usage_records.completion_tokens IS '输出 Token 总数';
+COMMENT ON COLUMN usage_records.total_tokens IS '输入和输出 Token 总数';
+COMMENT ON COLUMN usage_records.created_at IS '请求发生时间，用于分区和选择生效价格';
+COMMENT ON COLUMN usage_records.key_id IS '发起请求的 API Key 标识，未归属时为空';
+COMMENT ON COLUMN usage_records.user_id IS '用量归属的用户标识，未归属时为空';
+COMMENT ON COLUMN usage_records.cache_read_tokens IS '命中缓存读取的输入 Token 数';
+COMMENT ON COLUMN usage_records.cache_write_tokens IS '写入缓存的输入 Token 数';
+COMMENT ON COLUMN usage_records.cost_micro IS '本次请求的计费金额，单位为微点';
+COMMENT ON COLUMN usage_records.base_cost_micro IS '应用价格倍率前的基础费用，单位为微点';
+COMMENT ON COLUMN usage_records.rate_ppm IS '价格倍率，以百万分之一为单位';
+COMMENT ON COLUMN usage_records.price_source IS '本次请求采用的价格来源';
+COMMENT ON COLUMN usage_records.details IS '逐计量项的用量、单价和费用明细 JSON';
+COMMENT ON COLUMN usage_records.charged IS '是否实际扣点，未记录扣费结果时为 NULL';
+
+COMMENT ON TABLE schema_migrations_usage_records IS '用量记录迁移的版本账本';
+COMMENT ON COLUMN schema_migrations_usage_records.id IS '迁移 SQL 文件名';
+COMMENT ON COLUMN schema_migrations_usage_records.applied_at IS '迁移完成时间，未完成时记录本次尝试的开始时间';
+COMMENT ON COLUMN schema_migrations_usage_records.checksum IS '迁移 SQL 的 SHA-256 校验和';
+COMMENT ON COLUMN schema_migrations_usage_records.dirty IS '迁移是否仍未完成';

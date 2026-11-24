@@ -1,0 +1,20 @@
+ALTER TABLE route_revisions
+    MODIFY COLUMN revision BIGINT NOT NULL COMMENT '路由发布版本号',
+    MODIFY COLUMN digest VARCHAR(64) NOT NULL COMMENT '路由内容摘要',
+    MODIFY COLUMN routes_json MEDIUMTEXT NOT NULL COMMENT '完整路由规则快照 JSON',
+    MODIFY COLUMN actor_id VARCHAR(40) NOT NULL COMMENT '发布操作人标识',
+    MODIFY COLUMN created_at DATETIME(6) NOT NULL COMMENT '创建时间',
+    MODIFY COLUMN rollback_of BIGINT NOT NULL DEFAULT 0 COMMENT '回滚所引用的历史版本号，0 表示普通发布',
+    COMMENT = '模型路由规则的发布版本与回滚历史', ALGORITHM=INPLACE, LOCK=NONE;
+
+ALTER TABLE route_actives
+    MODIFY COLUMN id INTEGER NOT NULL COMMENT '单行记录标识，固定为 1',
+    MODIFY COLUMN revision BIGINT NOT NULL DEFAULT 0 COMMENT '当前生效的路由版本号，0 表示未发布',
+    COMMENT = '当前生效的模型路由版本指针', ALGORITHM=INPLACE, LOCK=NONE;
+
+ALTER TABLE schema_migrations_routes
+    MODIFY COLUMN id VARCHAR(255) NOT NULL COMMENT '迁移 SQL 文件名',
+    MODIFY COLUMN applied_at DATETIME(6) NOT NULL COMMENT '迁移完成时间，未完成时记录本次尝试的开始时间',
+    MODIFY COLUMN checksum VARCHAR(64) NOT NULL DEFAULT '' COMMENT '迁移 SQL 的 SHA-256 校验和',
+    MODIFY COLUMN dirty BOOLEAN NOT NULL DEFAULT FALSE COMMENT '迁移是否仍未完成',
+    COMMENT = '模型路由迁移的版本账本', ALGORITHM=INPLACE, LOCK=NONE;

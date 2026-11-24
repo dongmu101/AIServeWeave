@@ -1,0 +1,21 @@
+ALTER TABLE request_logs
+    MODIFY COLUMN id VARCHAR(64) NOT NULL COMMENT '请求日志标识',
+    MODIFY COLUMN tenant_id VARCHAR(40) NOT NULL COMMENT '所属租户标识',
+    MODIFY COLUMN key_display VARCHAR(64) NOT NULL COMMENT '发起请求的 API Key 脱敏显示值',
+    MODIFY COLUMN endpoint VARCHAR(16) NOT NULL COMMENT '请求入口类别',
+    MODIFY COLUMN status_code SMALLINT NOT NULL COMMENT '返回给调用方的 HTTP 状态码',
+    MODIFY COLUMN outcome VARCHAR(24) NOT NULL COMMENT '请求结果分类',
+    MODIFY COLUMN duration_ms BIGINT NOT NULL COMMENT '请求耗时，单位毫秒',
+    MODIFY COLUMN created_at DATETIME(6) NOT NULL COMMENT '请求日志记录时间',
+    MODIFY COLUMN model VARCHAR(128) NOT NULL DEFAULT '' COMMENT '请求使用的模型别名',
+    MODIFY COLUMN error_code VARCHAR(64) NOT NULL DEFAULT '' COMMENT '请求错误代码',
+    MODIFY COLUMN error_message VARCHAR(512) NOT NULL DEFAULT '' COMMENT '返回给调用方的错误消息',
+    MODIFY COLUMN error_detail VARCHAR(1024) NOT NULL DEFAULT '' COMMENT '供排查使用的错误详情',
+    COMMENT = 'Gateway 上报的租户 API 请求日志与错误信息', ALGORITHM=INPLACE, LOCK=NONE;
+
+ALTER TABLE schema_migrations_request_logs
+    MODIFY COLUMN id VARCHAR(255) NOT NULL COMMENT '迁移 SQL 文件名',
+    MODIFY COLUMN applied_at DATETIME(6) NOT NULL COMMENT '迁移完成时间，未完成时记录本次尝试的开始时间',
+    MODIFY COLUMN checksum VARCHAR(64) NOT NULL DEFAULT '' COMMENT '迁移 SQL 的 SHA-256 校验和',
+    MODIFY COLUMN dirty BOOLEAN NOT NULL DEFAULT FALSE COMMENT '迁移是否仍未完成',
+    COMMENT = '请求日志迁移的版本账本', ALGORITHM=INPLACE, LOCK=NONE;

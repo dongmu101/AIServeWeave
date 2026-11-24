@@ -2,6 +2,7 @@ package gormstore
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -26,7 +27,7 @@ func MigrateBeforePartitionsForTest(ctx context.Context, s *Store) error {
 				return err
 			}
 			for _, m := range all {
-				if isPartitionMigration(m) {
+				if isPartitionMigration(m) || strings.HasSuffix(m.id, "_table_and_column_comments.sql") {
 					break
 				}
 				if err := executeMigration(db, namespace, m); err != nil {

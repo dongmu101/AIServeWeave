@@ -1,0 +1,31 @@
+COMMENT ON TABLE studio_conversations IS 'Studio 用户创建的对话';
+COMMENT ON COLUMN studio_conversations.id IS 'Studio 对话标识';
+COMMENT ON COLUMN studio_conversations.tenant_id IS '所属租户标识';
+COMMENT ON COLUMN studio_conversations.user_id IS '所属用户标识';
+COMMENT ON COLUMN studio_conversations.title IS '对话标题';
+COMMENT ON COLUMN studio_conversations.model IS '对话选用的模型别名';
+COMMENT ON COLUMN studio_conversations.system_prompt IS '为对话配置的系统提示词';
+COMMENT ON COLUMN studio_conversations.created_at IS '创建时间';
+COMMENT ON COLUMN studio_conversations.updated_at IS '最后更新时间';
+
+COMMENT ON TABLE studio_messages IS 'Studio 对话中的消息与生成结果';
+COMMENT ON COLUMN studio_messages.id IS 'Studio 消息标识';
+COMMENT ON COLUMN studio_messages.conversation_id IS '所属 Studio 对话标识';
+COMMENT ON COLUMN studio_messages.tenant_id IS '所属租户标识';
+COMMENT ON COLUMN studio_messages.user_id IS '所属用户标识';
+COMMENT ON COLUMN studio_messages.seq IS '消息在对话中的顺序号';
+COMMENT ON COLUMN studio_messages.role IS '消息发送方角色';
+COMMENT ON COLUMN studio_messages.content IS '消息正文';
+COMMENT ON COLUMN studio_messages.reasoning IS '模型返回的思考内容';
+COMMENT ON COLUMN studio_messages.status IS '消息生成状态';
+COMMENT ON COLUMN studio_messages.model IS '生成消息时使用的模型别名';
+COMMENT ON COLUMN studio_messages.prompt_tokens IS '生成本条回复的输入 Token 数';
+COMMENT ON COLUMN studio_messages.completion_tokens IS '生成本条回复的输出 Token 数';
+COMMENT ON COLUMN studio_messages.error_code IS '生成失败时的错误代码';
+COMMENT ON COLUMN studio_messages.created_at IS '创建时间';
+
+COMMENT ON TABLE schema_migrations_studio IS 'Studio 对话迁移的版本账本';
+COMMENT ON COLUMN schema_migrations_studio.id IS '迁移 SQL 文件名';
+COMMENT ON COLUMN schema_migrations_studio.applied_at IS '迁移完成时间，未完成时记录本次尝试的开始时间';
+COMMENT ON COLUMN schema_migrations_studio.checksum IS '迁移 SQL 的 SHA-256 校验和';
+COMMENT ON COLUMN schema_migrations_studio.dirty IS '迁移是否仍未完成';

@@ -1,0 +1,33 @@
+ALTER TABLE alert_rules
+    MODIFY COLUMN id VARCHAR(64) NOT NULL COMMENT '告警规则标识',
+    MODIFY COLUMN name VARCHAR(128) NOT NULL COMMENT '告警规则名称',
+    MODIFY COLUMN metric VARCHAR(32) NOT NULL COMMENT '监控指标名称',
+    MODIFY COLUMN operator VARCHAR(8) NOT NULL COMMENT '阈值比较运算符',
+    MODIFY COLUMN threshold DOUBLE NOT NULL COMMENT '告警触发阈值',
+    MODIFY COLUMN consecutive_buckets INT NOT NULL COMMENT '触发告警所需的连续达标时间桶数量',
+    MODIFY COLUMN webhook_url VARCHAR(512) NOT NULL DEFAULT '' COMMENT '告警通知的 Webhook 地址',
+    MODIFY COLUMN enabled BOOLEAN NOT NULL DEFAULT TRUE COMMENT '是否启用此规则',
+    MODIFY COLUMN created_at DATETIME(6) NOT NULL COMMENT '创建时间',
+    MODIFY COLUMN updated_at DATETIME(6) NOT NULL COMMENT '最后更新时间',
+    COMMENT = '监控告警触发与通知规则', ALGORITHM=INPLACE, LOCK=NONE;
+
+ALTER TABLE alert_instances
+    MODIFY COLUMN id VARCHAR(64) NOT NULL COMMENT '告警实例标识',
+    MODIFY COLUMN rule_id VARCHAR(64) NOT NULL COMMENT '触发告警的规则标识',
+    MODIFY COLUMN status VARCHAR(16) NOT NULL COMMENT '告警实例状态',
+    MODIFY COLUMN value_at_fire DOUBLE NOT NULL COMMENT '触发告警时的指标值',
+    MODIFY COLUMN created_at DATETIME(6) NOT NULL COMMENT '告警触发时间',
+    MODIFY COLUMN last_evaluated_at DATETIME(6) NOT NULL COMMENT '最近一次评估时间',
+    MODIFY COLUMN resolved_at DATETIME(6) NULL COMMENT '告警恢复时间',
+    MODIFY COLUMN acknowledged_by VARCHAR(40) NOT NULL DEFAULT '' COMMENT '确认告警的操作人标识',
+    MODIFY COLUMN acknowledged_at DATETIME(6) NULL COMMENT '告警确认时间',
+    MODIFY COLUMN notify_status VARCHAR(16) NOT NULL COMMENT '告警通知投递状态',
+    MODIFY COLUMN notify_attempts INT NOT NULL DEFAULT 0 COMMENT '告警通知投递尝试次数',
+    COMMENT = '告警触发、确认、恢复与通知记录', ALGORITHM=INPLACE, LOCK=NONE;
+
+ALTER TABLE schema_migrations_alerting
+    MODIFY COLUMN id VARCHAR(255) NOT NULL COMMENT '迁移 SQL 文件名',
+    MODIFY COLUMN applied_at DATETIME(6) NOT NULL COMMENT '迁移完成时间，未完成时记录本次尝试的开始时间',
+    MODIFY COLUMN checksum VARCHAR(64) NOT NULL DEFAULT '' COMMENT '迁移 SQL 的 SHA-256 校验和',
+    MODIFY COLUMN dirty BOOLEAN NOT NULL DEFAULT FALSE COMMENT '迁移是否仍未完成',
+    COMMENT = '告警迁移的版本账本', ALGORITHM=INPLACE, LOCK=NONE;

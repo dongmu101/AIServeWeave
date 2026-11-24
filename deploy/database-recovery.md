@@ -21,6 +21,12 @@ P07 会接管既有 AutoMigrate 基础表，补齐缺失的配额和 `last_login
 
 `Database.AutoMigrate` 保留配置兼容，默认 false；true 现在也只执行固定版本 SQL。Compose 的本地起步配置仍为 true。生产使用独立迁移命令，使运行账号无需 DDL 权限。
 
+## 表和字段的中文注释
+
+各迁移分组的 `*_table_and_column_comments.sql` 为业务表、字段和迁移账本补上数据库原生中文注释。已有库按上面的流程执行 `-migrate up`，新建库也会应用这些迁移。PostgreSQL 的现有时间分区会同步父表注释，之后新建的分区由定时维护同步。
+
+MySQL 使用 `ALGORITHM=INPLACE, LOCK=NONE` 更新注释，执行时仍需取得元数据锁。PostgreSQL 的 `COMMENT` 会持有与并发 DDL 互斥的锁。以后新增表或字段时，在同一条迁移里填写对应注释。
+
 ## 列表分页索引迁移（base 0016 / jobs 0005）
 
 本次升级新增四个复合索引，不改表结构、不改数据，没有应用层兼容问题：

@@ -1,0 +1,14 @@
+ALTER TABLE metrics_history_points
+    MODIFY COLUMN id BIGINT AUTO_INCREMENT NOT NULL COMMENT '指标采样点的自增标识',
+    MODIFY COLUMN metric VARCHAR(128) NOT NULL COMMENT '指标名称',
+    MODIFY COLUMN labels VARCHAR(512) NOT NULL COMMENT '用于区分指标序列的标签集合',
+    MODIFY COLUMN bucket_at DATETIME(6) NOT NULL COMMENT '采样时间桶的起始时间',
+    MODIFY COLUMN value DOUBLE NOT NULL COMMENT '指标采样值',
+    COMMENT = '按时间桶保存的监控指标历史采样点', ALGORITHM=INPLACE, LOCK=NONE;
+
+ALTER TABLE schema_migrations_metrics_history
+    MODIFY COLUMN id VARCHAR(255) NOT NULL COMMENT '迁移 SQL 文件名',
+    MODIFY COLUMN applied_at DATETIME(6) NOT NULL COMMENT '迁移完成时间，未完成时记录本次尝试的开始时间',
+    MODIFY COLUMN checksum VARCHAR(64) NOT NULL DEFAULT '' COMMENT '迁移 SQL 的 SHA-256 校验和',
+    MODIFY COLUMN dirty BOOLEAN NOT NULL DEFAULT FALSE COMMENT '迁移是否仍未完成',
+    COMMENT = '指标历史迁移的版本账本', ALGORITHM=INPLACE, LOCK=NONE;

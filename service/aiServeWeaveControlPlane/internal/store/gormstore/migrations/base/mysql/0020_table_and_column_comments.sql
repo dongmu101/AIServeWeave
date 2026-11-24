@@ -1,0 +1,136 @@
+ALTER TABLE tenants
+    MODIFY COLUMN id VARCHAR(40) NOT NULL COMMENT '租户标识',
+    MODIFY COLUMN name VARCHAR(128) NOT NULL COMMENT '租户名称',
+    MODIFY COLUMN status VARCHAR(16) NOT NULL COMMENT '租户状态',
+    MODIFY COLUMN created_at DATETIME(3) COMMENT '创建时间',
+    MODIFY COLUMN updated_at DATETIME(3) COMMENT '最后更新时间',
+    MODIFY COLUMN requests_per_minute BIGINT NOT NULL DEFAULT 0 COMMENT '每分钟请求数上限，0 表示不限',
+    MODIFY COLUMN tokens_per_minute BIGINT NOT NULL DEFAULT 0 COMMENT '每分钟 Token 数上限，0 表示不限',
+    MODIFY COLUMN max_concurrent BIGINT NOT NULL DEFAULT 0 COMMENT '并发请求数上限，0 表示不限',
+    COMMENT = '商户租户与请求配额', ALGORITHM=INPLACE, LOCK=NONE;
+
+ALTER TABLE users
+    MODIFY COLUMN id VARCHAR(40) NOT NULL COMMENT '租户成员标识',
+    MODIFY COLUMN tenant_id VARCHAR(40) NOT NULL COMMENT '所属租户标识',
+    MODIFY COLUMN email VARCHAR(255) NOT NULL COMMENT '登录邮箱',
+    MODIFY COLUMN password_hash VARCHAR(120) NOT NULL COMMENT '登录密码摘要',
+    MODIFY COLUMN name VARCHAR(128) COMMENT '成员显示名称',
+    MODIFY COLUMN role VARCHAR(16) NOT NULL COMMENT '成员在租户内的角色',
+    MODIFY COLUMN status VARCHAR(16) NOT NULL COMMENT '成员账户状态',
+    MODIFY COLUMN created_at DATETIME(3) COMMENT '创建时间',
+    MODIFY COLUMN updated_at DATETIME(3) COMMENT '最后更新时间',
+    MODIFY COLUMN last_login_at DATETIME(3) COMMENT '最近成功登录时间',
+    COMMENT = '商户租户成员账户', ALGORITHM=INPLACE, LOCK=NONE;
+
+ALTER TABLE platform_operators
+    MODIFY COLUMN id VARCHAR(40) NOT NULL COMMENT '运维账户标识',
+    MODIFY COLUMN email VARCHAR(255) NOT NULL COMMENT '登录邮箱',
+    MODIFY COLUMN password_hash VARCHAR(120) NOT NULL COMMENT '登录密码摘要',
+    MODIFY COLUMN name VARCHAR(128) COMMENT '运维人员显示名称',
+    MODIFY COLUMN status VARCHAR(16) NOT NULL COMMENT '运维账户状态',
+    MODIFY COLUMN created_at DATETIME(3) COMMENT '创建时间',
+    MODIFY COLUMN updated_at DATETIME(3) COMMENT '最后更新时间',
+    MODIFY COLUMN last_login_at DATETIME(3) COMMENT '最近成功登录时间',
+    COMMENT = '平台运维账户', ALGORITHM=INPLACE, LOCK=NONE;
+
+ALTER TABLE api_keys
+    MODIFY COLUMN id VARCHAR(40) NOT NULL COMMENT 'API Key 标识',
+    MODIFY COLUMN tenant_id VARCHAR(40) NOT NULL COMMENT '所属租户标识',
+    MODIFY COLUMN created_by VARCHAR(40) NOT NULL COMMENT '创建人标识',
+    MODIFY COLUMN name VARCHAR(128) NOT NULL COMMENT '密钥名称',
+    MODIFY COLUMN hash VARCHAR(64) NOT NULL COMMENT '密钥的 SHA-256 摘要',
+    MODIFY COLUMN display VARCHAR(32) NOT NULL COMMENT '用于展示的脱敏密钥',
+    MODIFY COLUMN status VARCHAR(16) NOT NULL COMMENT '密钥状态',
+    MODIFY COLUMN expires_at DATETIME(3) COMMENT '到期时间',
+    MODIFY COLUMN last_used_at DATETIME(3) COMMENT '最近一次记录的密钥使用时间',
+    MODIFY COLUMN revoked_at DATETIME(3) COMMENT '密钥吊销时间',
+    MODIFY COLUMN created_at DATETIME(3) COMMENT '创建时间',
+    MODIFY COLUMN updated_at DATETIME(3) COMMENT '最后更新时间',
+    COMMENT = '用于调用平台 API 的租户密钥', ALGORITHM=INPLACE, LOCK=NONE;
+
+ALTER TABLE audit_logs
+    MODIFY COLUMN id VARCHAR(40) NOT NULL COMMENT '审计记录标识',
+    MODIFY COLUMN tenant_id VARCHAR(40) NOT NULL COMMENT '审计事件所属租户，平台操作使用平台作用域',
+    MODIFY COLUMN actor_id VARCHAR(40) NULL COMMENT '操作人标识',
+    MODIFY COLUMN action VARCHAR(64) NOT NULL COMMENT '审计动作代码',
+    MODIFY COLUMN target VARCHAR(64) COMMENT '操作对象标识',
+    MODIFY COLUMN detail VARCHAR(512) COMMENT '审计详情',
+    MODIFY COLUMN ip VARCHAR(64) COMMENT '操作来源 IP 地址',
+    MODIFY COLUMN created_at DATETIME(3) NOT NULL COMMENT '审计事件发生时间',
+    COMMENT = '租户和平台运维的管理操作审计日志', ALGORITHM=INPLACE, LOCK=NONE;
+
+ALTER TABLE key_revocation_outbox
+    MODIFY COLUMN id BIGINT NOT NULL COMMENT '单行记录标识，固定为 1',
+    MODIFY COLUMN generation BIGINT NOT NULL COMMENT '待同步的最新吊销代次',
+    MODIFY COLUMN delivered_generation BIGINT NOT NULL COMMENT '已同步到缓存的吊销代次',
+    COMMENT = 'API Key 吊销后的缓存失效通知进度', ALGORITHM=INPLACE, LOCK=NONE;
+
+ALTER TABLE model_access
+    MODIFY COLUMN scope VARCHAR(64) NOT NULL COMMENT '规则作用域，平台或具体租户',
+    MODIFY COLUMN models_json MEDIUMTEXT NOT NULL COMMENT '允许访问的模型别名列表 JSON',
+    MODIFY COLUMN updated_by VARCHAR(40) NOT NULL COMMENT '最后更新人标识',
+    MODIFY COLUMN updated_at DATETIME(6) NOT NULL COMMENT '最后更新时间',
+    COMMENT = '平台或租户的模型访问规则', ALGORITHM=INPLACE, LOCK=NONE;
+
+ALTER TABLE node_access
+    MODIFY COLUMN node_id VARCHAR(128) NOT NULL COMMENT '节点标识',
+    MODIFY COLUMN tenants_json MEDIUMTEXT NOT NULL COMMENT '获准使用节点的租户标识列表 JSON',
+    MODIFY COLUMN updated_by VARCHAR(40) NOT NULL COMMENT '最后更新人标识',
+    MODIFY COLUMN updated_at DATETIME(6) NOT NULL COMMENT '最后更新时间',
+    MODIFY COLUMN mode VARCHAR(16) NOT NULL DEFAULT 'dedicated' COMMENT '节点访问模式，如专享或共享',
+    COMMENT = '平台节点的租户访问与共享规则', ALGORITHM=INPLACE, LOCK=NONE;
+
+ALTER TABLE tenant_nodes
+    MODIFY COLUMN node_id VARCHAR(128) NOT NULL COMMENT '节点标识',
+    MODIFY COLUMN tenant_id VARCHAR(40) NOT NULL COMMENT '所属租户标识',
+    MODIFY COLUMN created_by VARCHAR(40) NOT NULL COMMENT '创建人标识',
+    MODIFY COLUMN created_at DATETIME(6) NOT NULL COMMENT '创建时间',
+    MODIFY COLUMN enroll_by DATETIME(6) NOT NULL COMMENT '节点完成注册的截止时间',
+    MODIFY COLUMN revoked_at DATETIME(6) NULL COMMENT '节点吊销时间',
+    MODIFY COLUMN revoked_by VARCHAR(40) NOT NULL DEFAULT '' COMMENT '吊销节点的操作人标识',
+    COMMENT = '租户专属节点的归属、入驻和吊销信息', ALGORITHM=INPLACE, LOCK=NONE;
+
+ALTER TABLE agent_install_codes
+    MODIFY COLUMN code_hash VARCHAR(64) NOT NULL COMMENT '安装码的 SHA-256 摘要',
+    MODIFY COLUMN node_id VARCHAR(128) NOT NULL COMMENT '节点标识',
+    MODIFY COLUMN tenant_id VARCHAR(40) NOT NULL COMMENT '所属租户标识',
+    MODIFY COLUMN registry_addr VARCHAR(255) NOT NULL COMMENT 'Agent 注册时连接的 Registry 地址',
+    MODIFY COLUMN gateway_addr VARCHAR(255) NOT NULL COMMENT 'Agent 建立隧道时连接的 Gateway 地址',
+    MODIFY COLUMN created_by VARCHAR(40) NOT NULL COMMENT '创建人标识',
+    MODIFY COLUMN created_at DATETIME(6) NOT NULL COMMENT '创建时间',
+    MODIFY COLUMN expires_at DATETIME(6) NOT NULL COMMENT '到期时间',
+    MODIFY COLUMN redeemed_at DATETIME(6) NULL COMMENT '安装码兑换时间',
+    COMMENT = 'Agent 安装与注册使用的一次性安装码', ALGORITHM=INPLACE, LOCK=NONE;
+
+ALTER TABLE node_providers
+    MODIFY COLUMN node_id VARCHAR(128) NOT NULL COMMENT '节点标识',
+    MODIFY COLUMN runtime_id VARCHAR(64) NOT NULL COMMENT '节点上的运行时标识',
+    MODIFY COLUMN scope VARCHAR(32) NOT NULL COMMENT '供应商配置的作用域',
+    MODIFY COLUMN kind VARCHAR(32) NOT NULL COMMENT '供应商运行时类型',
+    MODIFY COLUMN base_url VARCHAR(2048) NOT NULL COMMENT '供应商接口基础地址',
+    MODIFY COLUMN models_json MEDIUMTEXT NOT NULL COMMENT '供应商可用模型列表 JSON',
+    MODIFY COLUMN key_ciphertext TEXT NOT NULL COMMENT '加密后的供应商 API Key',
+    MODIFY COLUMN key_last4 VARCHAR(8) NOT NULL COMMENT '用于辨识的供应商 API Key 尾四位',
+    MODIFY COLUMN updated_by VARCHAR(40) NOT NULL COMMENT '最后更新人标识',
+    MODIFY COLUMN created_at DATETIME(6) NOT NULL COMMENT '创建时间',
+    MODIFY COLUMN updated_at DATETIME(6) NOT NULL COMMENT '最后更新时间',
+    COMMENT = '节点运行时使用的模型供应商连接配置', ALGORITHM=INPLACE, LOCK=NONE;
+
+ALTER TABLE node_provider_versions
+    MODIFY COLUMN node_id VARCHAR(128) NOT NULL COMMENT '节点标识',
+    MODIFY COLUMN version BIGINT NOT NULL COMMENT '供应商配置版本号',
+    MODIFY COLUMN updated_at DATETIME(6) NOT NULL COMMENT '最后更新时间',
+    COMMENT = '节点供应商配置的变更版本', ALGORITHM=INPLACE, LOCK=NONE;
+
+ALTER TABLE node_billing
+    MODIFY COLUMN node_id VARCHAR(128) NOT NULL COMMENT '设为免扣点的平台节点标识',
+    MODIFY COLUMN updated_by VARCHAR(40) NOT NULL COMMENT '最后更新人标识',
+    MODIFY COLUMN updated_at DATETIME(6) NOT NULL COMMENT '最后更新时间',
+    COMMENT = '免扣点的平台节点名单', ALGORITHM=INPLACE, LOCK=NONE;
+
+ALTER TABLE schema_migrations_base
+    MODIFY COLUMN id VARCHAR(255) NOT NULL COMMENT '迁移 SQL 文件名',
+    MODIFY COLUMN applied_at DATETIME(6) NOT NULL COMMENT '迁移完成时间，未完成时记录本次尝试的开始时间',
+    MODIFY COLUMN checksum VARCHAR(64) NOT NULL DEFAULT '' COMMENT '迁移 SQL 的 SHA-256 校验和',
+    MODIFY COLUMN dirty BOOLEAN NOT NULL DEFAULT FALSE COMMENT '迁移是否仍未完成',
+    COMMENT = '基础数据迁移的版本账本', ALGORITHM=INPLACE, LOCK=NONE;

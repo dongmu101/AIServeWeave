@@ -182,6 +182,9 @@ func maintainTablePartitions(db *gorm.DB, table partitionedTable, now time.Time,
 				return fmt.Errorf("re-attaching the default partition failed: %w", err)
 			}
 		}
+		if err := copyPostgresPartitionComments(tx, table.name); err != nil {
+			return fmt.Errorf("copying comments to partitions failed: %w", err)
+		}
 		created = len(missing)
 		return nil
 	})

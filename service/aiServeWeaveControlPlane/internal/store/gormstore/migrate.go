@@ -182,12 +182,16 @@ func (s *Store) withSessionLockOn(ctx context.Context, pool *gorm.DB, run func(*
 	})
 }
 
-func ensureMigrationTable(db *gorm.DB, table string) error {
+func createMigrationTableSQL(dialect, table string) string {
 	stamp, suffix := "TIMESTAMPTZ", ""
-	if db.Name() == "mysql" {
+	if dialect == "mysql" {
 		stamp, suffix = "DATETIME(6)", " ENGINE=InnoDB"
 	}
-	if err := db.Exec("CREATE TABLE IF NOT EXISTS " + table + " (id VARCHAR(255) PRIMARY KEY, applied_at " + stamp + " NOT NULL, checksum VARCHAR(64) NOT NULL DEFAULT '', dirty BOOLEAN NOT NULL DEFAULT FALSE)" + suffix).Error; err != nil {
+	return "CREATE TABLE IF NOT EXISTS " + table + " (id VARCHAR(255) PRIMARY KEY, applied_at " + stamp + " NOT NULL, checksum VARCHAR(64) NOT NULL DEFAULT '', dirty BOOLEAN NOT NULL DEFAULT FALSE)" + suffix
+}
+
+func ensureMigrationTable(db *gorm.DB, table string) error {
+	if err := db.Exec(createMigrationTableSQL(db.Name(), table)).Error; err != nil {
 		return errors.New("creating migration history failed")
 	}
 	// Old namespaces had only id/applied_at. These additive metadata steps are replayable.
@@ -326,6 +330,7 @@ func executeMigration(db *gorm.DB, namespace string, m migrationFile) error {
 			}
 		}
 	}
+	commentedPartitions := make(map[string]struct{})
 	for _, statement := range strings.Split(m.sql, ";") {
 		statement = strings.TrimSpace(statement)
 		if statement == "" {
@@ -354,6 +359,18 @@ func executeMigration(db *gorm.DB, namespace string, m migrationFile) error {
 		}
 		if err := db.Exec(statement).Error; err != nil {
 			return errors.New("schema statement failed; inspect database schema and server diagnostics")
+		}
+		if db.Name() == "postgres" && len(words) >= 5 && words[0] == "COMMENT" && words[1] == "ON" &&
+			(words[2] == "TABLE" || words[2] == "COLUMN") {
+			table, _, _ := strings.Cut(words[3], ".")
+			if _, ok := lookupPartitionedTable(table); ok {
+				commentedPartitions[table] = struct{}{}
+			}
+		}
+	}
+	for table := range commentedPartitions {
+		if err := copyPostgresPartitionComments(db, table); err != nil {
+			return fmt.Errorf("copying comments for partitions of %s: %w", table, err)
 		}
 	}
 	return nil

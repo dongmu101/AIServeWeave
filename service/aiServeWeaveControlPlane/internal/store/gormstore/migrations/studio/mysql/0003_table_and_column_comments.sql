@@ -1,0 +1,34 @@
+ALTER TABLE studio_conversations
+    MODIFY COLUMN id VARCHAR(40) NOT NULL COMMENT 'Studio 对话标识',
+    MODIFY COLUMN tenant_id VARCHAR(40) NOT NULL COMMENT '所属租户标识',
+    MODIFY COLUMN user_id VARCHAR(40) NOT NULL COMMENT '所属用户标识',
+    MODIFY COLUMN title VARCHAR(200) NOT NULL COMMENT '对话标题',
+    MODIFY COLUMN model VARCHAR(128) NOT NULL COMMENT '对话选用的模型别名',
+    MODIFY COLUMN system_prompt TEXT NOT NULL COMMENT '为对话配置的系统提示词',
+    MODIFY COLUMN created_at DATETIME(6) NOT NULL COMMENT '创建时间',
+    MODIFY COLUMN updated_at DATETIME(6) NOT NULL COMMENT '最后更新时间',
+    COMMENT = 'Studio 用户创建的对话', ALGORITHM=INPLACE, LOCK=NONE;
+
+ALTER TABLE studio_messages
+    MODIFY COLUMN id VARCHAR(40) NOT NULL COMMENT 'Studio 消息标识',
+    MODIFY COLUMN conversation_id VARCHAR(40) NOT NULL COMMENT '所属 Studio 对话标识',
+    MODIFY COLUMN tenant_id VARCHAR(40) NOT NULL COMMENT '所属租户标识',
+    MODIFY COLUMN user_id VARCHAR(40) NOT NULL COMMENT '所属用户标识',
+    MODIFY COLUMN seq BIGINT NOT NULL COMMENT '消息在对话中的顺序号',
+    MODIFY COLUMN role VARCHAR(16) NOT NULL COMMENT '消息发送方角色',
+    MODIFY COLUMN content MEDIUMTEXT NOT NULL COMMENT '消息正文',
+    MODIFY COLUMN reasoning MEDIUMTEXT NOT NULL COMMENT '模型返回的思考内容',
+    MODIFY COLUMN status VARCHAR(16) NOT NULL COMMENT '消息生成状态',
+    MODIFY COLUMN model VARCHAR(128) NOT NULL COMMENT '生成消息时使用的模型别名',
+    MODIFY COLUMN prompt_tokens BIGINT NOT NULL DEFAULT 0 COMMENT '生成本条回复的输入 Token 数',
+    MODIFY COLUMN completion_tokens BIGINT NOT NULL DEFAULT 0 COMMENT '生成本条回复的输出 Token 数',
+    MODIFY COLUMN error_code VARCHAR(64) NOT NULL DEFAULT '' COMMENT '生成失败时的错误代码',
+    MODIFY COLUMN created_at DATETIME(6) NOT NULL COMMENT '创建时间',
+    COMMENT = 'Studio 对话中的消息与生成结果', ALGORITHM=INPLACE, LOCK=NONE;
+
+ALTER TABLE schema_migrations_studio
+    MODIFY COLUMN id VARCHAR(255) NOT NULL COMMENT '迁移 SQL 文件名',
+    MODIFY COLUMN applied_at DATETIME(6) NOT NULL COMMENT '迁移完成时间，未完成时记录本次尝试的开始时间',
+    MODIFY COLUMN checksum VARCHAR(64) NOT NULL DEFAULT '' COMMENT '迁移 SQL 的 SHA-256 校验和',
+    MODIFY COLUMN dirty BOOLEAN NOT NULL DEFAULT FALSE COMMENT '迁移是否仍未完成',
+    COMMENT = 'Studio 对话迁移的版本账本', ALGORITHM=INPLACE, LOCK=NONE;

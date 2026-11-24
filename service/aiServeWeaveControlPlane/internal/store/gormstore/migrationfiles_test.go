@@ -110,12 +110,10 @@ func TestPaginationIndexMigrationsKeepDialectsAligned(t *testing.T) {
 // initSQLPath 相对本包目录定位 sql/init.sql。
 const initSQLPath = "../../../../../sql/init.sql"
 
-// renderInitSQL concatenates the embedded MySQL migrations in migrationNamespaces
-// order under the hand-written header already at the top of sql/init.sql (every
-// line before the first "-- ====" banner).
+// renderInitSQL writes the empty migration ledgers and embedded MySQL migrations
+// in namespace order beneath the hand-written header in sql/init.sql.
 //
-// renderInitSQL 按 migrationNamespaces 的顺序，把内嵌的 MySQL 迁移拼接在 sql/init.sql
-// 顶部已有的手写文件头（第一个 "-- ====" 横幅之前的全部行）之下。
+// renderInitSQL 按迁移分组顺序，把空账本的表定义和 MySQL 迁移拼接在 sql/init.sql 的文件头之下。
 func renderInitSQL(t *testing.T, current string) string {
 	t.Helper()
 	const banner = "-- ============================================================\n"
@@ -130,6 +128,7 @@ func renderInitSQL(t *testing.T, current string) string {
 			out.WriteString("\n")
 		}
 		out.WriteString(banner + "-- " + namespace + "\n" + banner)
+		out.WriteString("\n" + createMigrationTableSQL("mysql", "schema_migrations_"+namespace) + ";\n")
 		all, err := loadMigrations(namespace, "mysql")
 		if err != nil {
 			t.Fatal(err)
@@ -154,12 +153,12 @@ func renderInitSQL(t *testing.T, current string) string {
 	return out.String()
 }
 
-// TestInitSQLMatchesMigrations asserts sql/init.sql is exactly the concatenation
-// of the embedded MySQL migrations. After adding a migration, regenerate it with
+// TestInitSQLMatchesMigrations checks that sql/init.sql matches the MySQL
+// migrations and empty ledgers. After adding a migration, regenerate it with
 //
 //	UPDATE_INIT_SQL=1 go test ./service/aiServeWeaveControlPlane/internal/store/gormstore -run TestInitSQLMatchesMigrations
 //
-// TestInitSQLMatchesMigrations 断言 sql/init.sql 恰好是内嵌 MySQL 迁移的拼接结果。新增迁移后，
+// TestInitSQLMatchesMigrations 断言 sql/init.sql 与 MySQL 迁移和空账本一致。新增迁移后，
 // 用上面的 UPDATE_INIT_SQL=1 命令重新生成。
 func TestInitSQLMatchesMigrations(t *testing.T) {
 	raw, err := os.ReadFile(initSQLPath)

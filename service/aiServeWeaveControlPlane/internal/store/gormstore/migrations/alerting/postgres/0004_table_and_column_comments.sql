@@ -1,0 +1,30 @@
+COMMENT ON TABLE alert_rules IS '监控告警触发与通知规则';
+COMMENT ON COLUMN alert_rules.id IS '告警规则标识';
+COMMENT ON COLUMN alert_rules.name IS '告警规则名称';
+COMMENT ON COLUMN alert_rules.metric IS '监控指标名称';
+COMMENT ON COLUMN alert_rules.operator IS '阈值比较运算符';
+COMMENT ON COLUMN alert_rules.threshold IS '告警触发阈值';
+COMMENT ON COLUMN alert_rules.consecutive_buckets IS '触发告警所需的连续达标时间桶数量';
+COMMENT ON COLUMN alert_rules.webhook_url IS '告警通知的 Webhook 地址';
+COMMENT ON COLUMN alert_rules.enabled IS '是否启用此规则';
+COMMENT ON COLUMN alert_rules.created_at IS '创建时间';
+COMMENT ON COLUMN alert_rules.updated_at IS '最后更新时间';
+
+COMMENT ON TABLE alert_instances IS '告警触发、确认、恢复与通知记录';
+COMMENT ON COLUMN alert_instances.id IS '告警实例标识';
+COMMENT ON COLUMN alert_instances.rule_id IS '触发告警的规则标识';
+COMMENT ON COLUMN alert_instances.status IS '告警实例状态';
+COMMENT ON COLUMN alert_instances.value_at_fire IS '触发告警时的指标值';
+COMMENT ON COLUMN alert_instances.created_at IS '告警触发时间';
+COMMENT ON COLUMN alert_instances.last_evaluated_at IS '最近一次评估时间';
+COMMENT ON COLUMN alert_instances.resolved_at IS '告警恢复时间';
+COMMENT ON COLUMN alert_instances.acknowledged_by IS '确认告警的操作人标识';
+COMMENT ON COLUMN alert_instances.acknowledged_at IS '告警确认时间';
+COMMENT ON COLUMN alert_instances.notify_status IS '告警通知投递状态';
+COMMENT ON COLUMN alert_instances.notify_attempts IS '告警通知投递尝试次数';
+
+COMMENT ON TABLE schema_migrations_alerting IS '告警迁移的版本账本';
+COMMENT ON COLUMN schema_migrations_alerting.id IS '迁移 SQL 文件名';
+COMMENT ON COLUMN schema_migrations_alerting.applied_at IS '迁移完成时间，未完成时记录本次尝试的开始时间';
+COMMENT ON COLUMN schema_migrations_alerting.checksum IS '迁移 SQL 的 SHA-256 校验和';
+COMMENT ON COLUMN schema_migrations_alerting.dirty IS '迁移是否仍未完成';
