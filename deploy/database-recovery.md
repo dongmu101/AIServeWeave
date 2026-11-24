@@ -37,6 +37,10 @@ P07 会接管既有 AutoMigrate 基础表，补齐缺失的配额和 `last_login
 
 `Database.AutoMigrate` 保留配置兼容，默认 false；true 现在也只执行固定版本 SQL。Compose 的本地起步配置仍为 true。生产使用独立迁移命令，使运行账号无需 DDL 权限。
 
+### v3.1.9 控制面反复重启
+
+若启动报错 `schema column billing_settings.id is missing or incompatible`，检查 `billing/0016_gift_balance_and_settings.sql` 是否已应用，以及 `billing_settings.id` 是否为迁移创建的整数主键。v3.1.9 会误判该列。使用修正了校验的控制面镜像即可继续使用现有表。保留已发布的 SQL 和迁移账本。
+
 ## 表和字段的中文注释
 
 各迁移分组的 `*_table_and_column_comments.sql` 为业务表、字段和迁移账本补上数据库原生中文注释。已有库按上面的流程执行 `-migrate up`，新建库也会应用这些迁移。PostgreSQL 的现有时间分区会同步父表注释，之后新建的分区由定时维护同步。

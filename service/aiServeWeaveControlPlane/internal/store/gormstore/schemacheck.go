@@ -107,10 +107,7 @@ func checkModelSchema(db *gorm.DB, value any) error {
 					compatible = false
 				}
 			case schema.Int, schema.Uint:
-				compatible = kind == "bigint" || kind == "int8"
-				if table == "route_actives" && field.DBName == "id" {
-					compatible = strings.Contains(kind, "int")
-				}
+				compatible = compatibleIntegerColumn(table, field.DBName, kind)
 			case schema.Time:
 				compatible = strings.Contains(kind, "timestamp") || kind == "timestamptz" || kind == "datetime"
 			}
@@ -176,6 +173,25 @@ func checkModelSchema(db *gorm.DB, value any) error {
 		}
 	}
 	return nil
+}
+
+func compatibleIntegerColumn(table, column, kind string) bool {
+	if kind == "bigint" || kind == "int8" {
+		return true
+	}
+	if column != "id" {
+		return false
+	}
+	switch table {
+	case "route_actives":
+		return strings.Contains(kind, "int")
+	case "billing_settings":
+		// Billing migration 0016 uses a 32-bit key for the singleton row.
+		// 计费迁移 0016 用 32 位整数作为单行设置的主键。
+		return kind == "int" || kind == "integer" || kind == "int4"
+	default:
+		return false
+	}
 }
 
 // checkPartitionLayouts verifies each time-partitioned table is RANGE
