@@ -19,8 +19,6 @@ import {
   BookOpenIcon,
   BoxesIcon,
   ChartColumnIcon,
-  CheckIcon,
-  ChevronDownIcon,
   CreditCardIcon,
   GaugeIcon,
   HistoryIcon,
@@ -29,7 +27,6 @@ import {
   LayoutTemplateIcon,
   ListChecksIcon,
   LogOutIcon,
-  MenuIcon,
   ScrollTextIcon,
   ServerIcon,
   SettingsIcon,
@@ -37,11 +34,11 @@ import {
   SparklesIcon,
   UserRoundIcon,
   UsersIcon,
-  type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import { BrandMark } from "@/components/console/brand-mark";
+import { TopNav, type NavEntry } from "@/components/console/top-nav";
 import { SupportLink } from "@/components/site/support-link";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -55,9 +52,6 @@ import {
 import { signOut } from "@/lib/console/api-client";
 import { type Role } from "@/lib/console/contract";
 import type { SessionUser } from "@/lib/console/session-payload";
-
-type NavLeaf = { href: string; label: string; icon: LucideIcon };
-type NavEntry = NavLeaf | { label: string; children: readonly NavLeaf[] };
 
 /**
  * NAV_ITEMS is the tenant navigation: the views every signed-in role reaches,
@@ -90,21 +84,6 @@ function navigationItems(t: Translator): readonly NavEntry[] { return [
   { href: "/console/docs", label: t("tenant.apiDocumentation"), icon: BookOpenIcon },
 ]; }
 
-/** navItemClass styles one top-bar entry. The current page is marked by a bar
- * resting on the header's bottom edge, so the row reads as a set of tabs.
- *
- * navItemClass 为顶栏的一个条目设定样式。当前页面由贴在页首底边上的一条色带标出，
- * 使这一行读起来像一组标签页。 */
-function navItemClass(active: boolean): string {
-  return buttonVariants({
-    variant: "ghost",
-    size: "sm",
-    className: active
-      ? "relative px-2.5 text-foreground after:absolute after:inset-x-2.5 after:-bottom-3.5 after:h-0.5 after:rounded-full after:bg-brand"
-      : "relative px-2.5 text-muted-foreground",
-  });
-}
-
 /**
  * ConsoleShell is the frame every console page renders in: navigation, who is
  * signed in, and the way out.
@@ -135,13 +114,9 @@ export function ConsoleShell({
 }) {
   const { t } = useI18n();
   const NAV_ITEMS = navigationItems(t);
-  const LEAVES = NAV_ITEMS.flatMap((entry) => ("children" in entry ? entry.children : [entry]));
   const router = useRouter();
   const pathname = usePathname();
   const [leaving, setLeaving] = React.useState(false);
-  const activeItem = LEAVES.findLast(
-    (item) => pathname === item.href || pathname.startsWith(`${item.href}/`)
-  );
   const displayName = user.name || user.email;
   const initial = Array.from(displayName.trim())[0]?.toUpperCase() || "U";
 
@@ -174,75 +149,13 @@ export function ConsoleShell({
               AIServeWeave <span className="font-normal text-muted-foreground"><Message id="tenant.console" /></span>
             </span>
           </Link>
-          <nav aria-label={t("tenant.consoleNavigation")} className="flex min-w-0 flex-1 items-center justify-end sm:justify-start">
-            <div className="hidden min-w-0 items-center gap-0.5 overflow-x-auto [scrollbar-width:none] xl:flex">
-              {NAV_ITEMS.map((item) => {
-                if ("children" in item) {
-                  const groupActive = item.children.some((child) => child.href === activeItem?.href);
-                  return (
-                    <DropdownMenu key={item.label}>
-                      <DropdownMenuTrigger className={navItemClass(groupActive)}>
-                        {item.label}
-                        <ChevronDownIcon className="size-3 text-muted-foreground" />
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent className="w-44" aria-label={item.label}>
-                        {item.children.map((child) => (
-                          <DropdownMenuItem
-                            key={child.href}
-                            render={<Link href={child.href} />}
-                            aria-current={child.href === activeItem?.href ? "page" : undefined}
-                            className="min-h-9"
-                          >
-                            <child.icon className="text-muted-foreground" />
-                            {child.label}
-                            {child.href === activeItem?.href ? <CheckIcon className="ml-auto" /> : null}
-                          </DropdownMenuItem>
-                        ))}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  );
-                }
-                const active = item.href === activeItem?.href;
-                return (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    className={navItemClass(active)}
-                    aria-current={active ? "page" : undefined}
-                  >
-                    {item.label}
-                  </Link>
-                );
-              })}
-            </div>
-            <DropdownMenu>
-              <DropdownMenuTrigger
-                aria-label={t("tenant.openConsoleNavigation")}
-                render={<Button variant="ghost" className="min-w-0 shrink xl:hidden" />}
-              >
-                <MenuIcon />
-                <span className="truncate">{activeItem?.label ?? t("tenant.navigation")}</span>
-                <ChevronDownIcon className="size-3 text-muted-foreground" />
-              </DropdownMenuTrigger>
-              <DropdownMenuContent className="w-56" aria-label={t("tenant.consoleNavigation")}>
-                {NAV_ITEMS.map((entry) => {
-                  const nested = "children" in entry;
-                  return (nested ? entry.children : [entry]).map((item) => (
-                    <DropdownMenuItem
-                      key={item.href}
-                      render={<Link href={item.href} />}
-                      aria-current={item.href === activeItem?.href ? "page" : undefined}
-                      className={nested ? "min-h-9 pl-6" : "min-h-9"}
-                    >
-                      <item.icon className="text-muted-foreground" />
-                      {nested ? `${entry.label} / ${item.label}` : item.label}
-                      {item.href === activeItem?.href ? <CheckIcon className="ml-auto" /> : null}
-                    </DropdownMenuItem>
-                  ));
-                })}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </nav>
+          <TopNav
+            entries={NAV_ITEMS}
+            pathname={pathname}
+            label={t("tenant.consoleNavigation")}
+            menuLabel={t("tenant.openConsoleNavigation")}
+            fallbackLabel={t("tenant.navigation")}
+          />
           {studio ? (
             <a
               href={studio.url}
