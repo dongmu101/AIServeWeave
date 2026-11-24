@@ -15,6 +15,7 @@ import { Message } from "@/components/i18n/message";
 import { useI18n } from "@/components/i18n/provider";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { parseFleetSnapshot } from "@/lib/console/fleet";
 import {
   FLEET_STATUS_FILTERS,
@@ -47,6 +48,8 @@ const TILE_DOTS: Record<FleetStatusFilter, string | null> = {
   maintenance: STATUS_TONES.maintenance.dot,
   disabled: STATUS_TONES.critical.dot,
 };
+
+type FleetScope = "all" | "cloud" | "dedicated";
 
 /**
  * useSettled keeps a resource's last good value while it reloads, so a refresh
@@ -81,6 +84,7 @@ export function NodeOperationsView() {
   const freeNodes = useSettled(billing);
 
   const [query, setQuery] = React.useState("");
+  const [scope, setScope] = React.useState<FleetScope>("all");
   const [status, setStatus] = React.useState<FleetStatusFilter>("all");
   const [shareOnApprove, setShareOnApprove] = React.useState(false);
   const [approving, setApproving] = React.useState(false);
@@ -91,8 +95,17 @@ export function NodeOperationsView() {
   const selectionOpen = selected !== null || sharingTarget !== null || billingTarget !== null;
 
   const board = React.useMemo(() => mergeFleetBoard(desired, snapshot?.nodes ?? null, access), [desired, snapshot, access]);
-  const counts = React.useMemo(() => countByStatus(board), [board]);
-  const shown = board.filter((node) => matchesStatus(node, status) && matchesFleetQuery(node, query));
+  const scopedNodes = React.useMemo(() => {
+    if (scope === "all") return board;
+    return board.filter((node) => {
+      const owner = tenantNodeOwner(node.nodeId);
+      if (owner !== null) return scope === "dedicated" && owner !== "";
+      return node.access === (scope === "cloud" ? "shared" : "dedicated");
+    });
+  }, [board, scope]);
+  const counts = React.useMemo(() => countByStatus(scopedNodes), [scopedNodes]);
+  const shown = scopedNodes.filter((node) => matchesStatus(node, status) && matchesFleetQuery(node, query));
+  const scopeReady = scope === "all" || access !== null;
   const refreshing = registry.loading || sharing.loading || fleet.loading || billing.loading;
   const settled = (desired !== null || registry.error !== null) && (snapshot !== null || fleet.error !== null);
   const labels = nodeActionLabels(locale);
@@ -115,7 +128,9 @@ export function NodeOperationsView() {
   }
 
   return (
-    <div className="grid gap-6">
+    <Tabs value={scope} onValueChange={(value) => {
+      if (value === "all" || value === "cloud" || value === "dedicated") setScope(value);
+    }} className="gap-6">
       <header className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
         <div className="grid min-w-0 flex-1 basis-80 gap-1">
           <h1 className="font-heading text-xl font-semibold tracking-tight"><Message id="operator.nodeManagement" /></h1>
@@ -134,13 +149,19 @@ export function NodeOperationsView() {
         </div>
       </header>
 
+      <TabsList aria-label={t("operator.nodeManagement")} className="h-auto! w-full flex-wrap justify-start sm:w-fit">
+        <TabsTrigger value="all" className="flex-none px-3"><Message id="tenant.modelScopeAll" /></TabsTrigger>
+        <TabsTrigger value="cloud" className="flex-none px-3"><Message id="tenant.modelScopeCloud" /></TabsTrigger>
+        <TabsTrigger value="dedicated" className="flex-none px-3"><Message id="tenant.modelScopeDedicated" /></TabsTrigger>
+      </TabsList>
+
       {!settled ? (
-        <LoadingState label={t("operator.loadingRegistryState")} rows={4} />
+        <TabsContent value={scope}><LoadingState label={t("operator.loadingRegistryState")} rows={4} /></TabsContent>
       ) : (
-        <>
+        <TabsContent value={scope} className="grid gap-6">
           <div role="group" aria-label={t("tenant.filterByStatus")} className="grid grid-cols-3 gap-2 sm:grid-cols-6">
             {FLEET_STATUS_FILTERS.map((filter) => {
-              const unknown = snapshot === null && (filter === "online" || filter === "offline");
+              const unknown = !scopeReady || (snapshot === null && (filter === "online" || filter === "offline"));
               const active = status === filter;
               const dot = TILE_DOTS[filter];
               return (
@@ -176,9 +197,9 @@ export function NodeOperationsView() {
                   aria-label={t("tenant.filterByNodeIdLabelOrRuntime")}
                 />
               </div>
-              <span className="text-xs text-muted-foreground tabular-nums">
-                <Message id="operator.fleetShownCount" values={{ count: shown.length, total: board.length }} />
-              </span>
+              {scopeReady ? <span className="text-xs text-muted-foreground tabular-nums">
+                <Message id="operator.fleetShownCount" values={{ count: shown.length, total: scopedNodes.length }} />
+              </span> : null}
             </div>
             {snapshot ? <FleetFreshness collectedAt={snapshot.collectedAt} replicas={snapshot.replicas} partial={snapshot.partial} note={false} /> : null}
             <details className="group text-xs text-muted-foreground">
@@ -224,7 +245,7 @@ export function NodeOperationsView() {
                 </li>
               ))}
             </ul>
-          ) : board.length > 0 ? (
+          ) : !scopeReady ? null : board.length > 0 ? (
             <EmptyState title={t("tenant.noNodesMatchTheFilters")} />
           ) : desired !== null && snapshot !== null ? (
             <EmptyState
@@ -233,7 +254,7 @@ export function NodeOperationsView() {
               action={<Link className={buttonVariants({ size: "sm", variant: "outline" })} href="/operator/agent-enrollment"><PlusIcon /><Message id="operator.agentEnrollment" /></Link>}
             />
           ) : null}
-        </>
+        </TabsContent>
       )}
 
       <ConfirmDialog
@@ -319,7 +340,7 @@ export function NodeOperationsView() {
           }
         }}
       />
-    </div>
+    </Tabs>
   );
 }
 

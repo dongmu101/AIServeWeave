@@ -144,6 +144,50 @@ test("node access preserves tenant selections and confirms before discarding the
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(320);
 });
 
+test("fleet tabs filter nodes, status counts and search together", async ({ page }) => {
+  const ownedId = `tnode.tenant.${"a".repeat(32)}`;
+  const nodeIds = ["agent-shared", "agent-dedicated", "agent-private", ownedId];
+  await page.route("**/api/operator/operator/v1/nodes/states", route => route.fulfill({ json: {
+    items: nodeIds.map(node_id => ({ node_id, pending_approval: false, disabled: false, maintenance: false, first_seen_at: at, last_seen_at: at })),
+  } }));
+  await page.route("**/api/operator/operator/v1/nodes", route => route.fulfill({ json: {
+    collected_at: at, replicas: [], partial: false,
+    nodes: nodeIds.map(node_id => ({ node_id, live: node_id !== "agent-dedicated", maintenance: false, observed_at: at })),
+  } }));
+  await page.route("**/api/operator/operator/v1/node-access", route => route.fulfill({ json: { items: [
+    { node_id: "agent-shared", mode: "shared", tenants: [] },
+    { node_id: "agent-dedicated", mode: "dedicated", tenants: ["tenant"] },
+  ] } }));
+
+  await page.goto("/operator/fleet");
+  const all = page.getByRole("tab", { name: "全部", exact: true });
+  const cloud = page.getByRole("tab", { name: "云AI", exact: true });
+  const dedicated = page.getByRole("tab", { name: "独享AI", exact: true });
+  const panel = page.getByRole("tabpanel");
+  const headings = panel.getByRole("heading", { level: 2 });
+  await expect(all).toHaveAttribute("aria-selected", "true");
+  await expect(headings).toHaveCount(4);
+
+  await cloud.click();
+  await expect(panel).toHaveAccessibleName("云AI");
+  await expect(headings).toHaveText(["agent-shared"]);
+  await panel.getByRole("button", { name: "在线 1", exact: true }).click();
+
+  await dedicated.click();
+  await expect(panel).toHaveAccessibleName("独享AI");
+  await expect(headings).toHaveText([ownedId]);
+  await expect(panel.getByText("显示 1 / 2 个节点")).toBeVisible();
+  await panel.getByRole("button", { name: "全部 2", exact: true }).click();
+  await expect(headings).toHaveText([ownedId, "agent-dedicated"]);
+
+  const search = panel.getByRole("textbox", { name: "筛选节点 ID、标签或运行时" });
+  await search.fill("agent-private");
+  await expect(panel.getByText("没有符合筛选条件的节点")).toBeVisible();
+  await all.click();
+  await expect(search).toHaveValue("agent-private");
+  await expect(headings).toHaveText(["agent-private"]);
+});
+
 test("fleet node buttons enable and stop sharing after confirmation", async ({ page }) => {
   let mode = "private";
   const writes: unknown[] = [];
