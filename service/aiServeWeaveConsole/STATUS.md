@@ -48,7 +48,7 @@ Console 通过服务端调用控制面的 Admin/Operator API；Job 取消与产�
 | UI 基础 | 已就位 | `components/ui/` 已有按钮、输入、表格、对话框、标签页、骨架屏等组件；`lib/utils.ts` 使用 `cn` 包 |
 | 表格与图表依赖 | 表格已接入，图表待数据源 | TanStack Table 用于列表、TanStack Virtual 用于审计虚拟滚动；ECharts 与 `echarts-for-react` 尚未接入指标业务 |
 | TypeScript 与门禁 | 已配置 | TS 6 / 7 并存；已有 `lint`、`typecheck`、`build` 脚本，不代表本次已运行通过 |
-| 页面 | M1 已就位 | 登录页 `app/login/`、受保护布局与概览页 `app/console/`；根布局已改为中文站点元数据 |
+| 页面 | M1 已就位 | 登录页 `app/login/`、受保护布局与概览页 `app/console/`；概览页顶部经 `GET /admin/v1/billing` 显示剩余点数与「购买」入口（计费未开启或读取失败时不显示）；根布局已改为中文站点元数据 |
 | 登录、会话与 API 客户端 | 已落地 | `/api/session` 与 `/api/admin/*` 服务端入口、AES-256-GCM 密封 Cookie、Redis 服务端撤销、`lib/console/api-client.ts` |
 | 业务测试 | 已建设 | Console `pnpm test` 走 Node 内置 `node:test`，覆盖契约、权限、分页与 Gateway 凭据等纯逻辑，无新增测试框架依赖；控制面新增分页、筛选、租户读取、机群与工作流聚合的 Go 测试及 e2e 隔离断言，Gateway 新增运维端点测试 |
 | 使用文档 | 已重写 | README 记录调用链路、环境变量、门禁与部署前置条件 |

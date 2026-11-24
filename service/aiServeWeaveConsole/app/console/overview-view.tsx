@@ -1,9 +1,13 @@
 "use client";
 
+import Link from "next/link";
+import { useResource } from "@/components/console/use-resource";
 import { useI18n } from "@/components/i18n/provider";
 import { Message } from "@/components/i18n/message";
 import { LocalDateTime } from "@/components/i18n/local-date-time";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { buttonVariants } from "@/components/ui/button";
+import { formatCredits, parseBillingOverview, type BillingOverview } from "@/lib/console/billing";
 import { roleLabels, type Role } from "@/lib/console/contract";
 import type { SessionUser } from "@/lib/console/session-payload";
 
@@ -32,6 +36,8 @@ export function OverviewView({ user, expiresAt }: { user: SessionUser; expiresAt
           <Message id="tenant.currentSessionInformationUsersApiKeysAdministrativeAudits" /></p>
       </div>
 
+      <BalanceCard />
+
       <Card>
         <CardHeader>
           <CardTitle><Message id="tenant.currentSession" /></CardTitle>
@@ -48,5 +54,33 @@ export function OverviewView({ user, expiresAt }: { user: SessionUser; expiresAt
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+/** BalanceCard shows the tenant's remaining credits. It renders nothing while
+ * loading, when billing is off (404) or when the read fails: the overview
+ * should not be blocked by billing.
+ *
+ * BalanceCard 展示租户剩余点数。加载中、计费未开启（404）或读取失败时不渲染：
+ * 概览页不应被计费阻塞。 */
+function BalanceCard() {
+  const { t, locale } = useI18n();
+  const overview = useResource<BillingOverview>({ method: "GET", path: "/admin/v1/billing", parse: parseBillingOverview });
+  const data = overview.data;
+  if (!data) return null;
+  const exempt = data.mode === "exempt";
+  return (
+    <Card>
+      <CardContent className="grid gap-3">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <dl className="grid min-w-0 gap-1">
+            <dt className="text-xs text-muted-foreground"><Message id="tenant.billingBalance" /></dt>
+            <dd className="font-heading text-2xl font-semibold break-all">{t("tenant.billingCreditsValue", { credits: formatCredits(data.balanceMicro, locale) })}</dd>
+          </dl>
+          <Link href="/console/billing" className={buttonVariants({ variant: "outline" })}><Message id="tenant.billing" /></Link>
+        </div>
+        {!exempt && data.blocked ? <p role="alert" className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm font-medium text-destructive"><Message id="tenant.billingBlocked" /></p> : null}
+      </CardContent>
+    </Card>
   );
 }
