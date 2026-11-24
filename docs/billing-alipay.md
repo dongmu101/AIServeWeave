@@ -33,6 +33,8 @@ node node_modules/opcpay/index.mjs product
 
 ## 使用
 
+开启一人付后，直接打开 `/console/billing` 默认显示「支付宝」。
+
 计费页「支付宝」分区只用点数说话，不向租户展示支付宝额度（次数/积分）：
 
 - 套餐按可入账的点数展示（套餐额度 × `CreditsPerUnitMicro`），价格以支付宝为准，点「用支付宝购买」跳转到支付宝购买入口。

@@ -2,6 +2,11 @@ import { test, expect, BILLING_OVERVIEW, PRICING_CONFIG } from "./fixtures.ts";
 import { deriveSessionKey, seal, SESSION_COOKIE } from "../lib/console/session-payload.ts";
 
 const CHECKOUT_URL = "https://checkout.example.invalid/session/p10";
+const ALIPAY_OVERVIEW = {
+  capability_status: "ENABLED", product_name: "点数包", billing_mode: "QUANTITY", quota_unit: "POINT", supported: true, can_purchase: true, can_redeem: true,
+  plans: [{ sku_id: "sku_100", name: "100 积分", price: "9.90", currency: "CNY", quota_unit: "POINT", quota_amount: 100 }],
+  access: { total: 100, used: 40, remaining: 60 }, credits_per_unit_micro: 2_000_000, max_amount: 99_999_999, pending: null,
+};
 
 test("deleting an order requires confirmation, keeps failures open, and persists after reload", async ({ page }) => {
   let deletes = 0;
@@ -254,6 +259,24 @@ test("billing sections open by mode, follow the query, and survive a reload", as
   await expect(page.getByRole("tab", { name: "账号现货", exact: true })).toHaveAttribute("aria-selected", "true");
 });
 
+test("billing defaults to Alipay with other purchase tabs available", async ({ page }) => {
+  const presale = { id: "pre_claude", kind: "claude", name: "Claude Code 预售", price_minor: 1500, currency: "USD", active: true, available: true };
+  await page.route("**/api/admin/admin/v1/billing", route => route.fulfill({ json: { ...BILLING_OVERVIEW, mode: "account_monthly", payment_methods: { dodo: true, alipay: true } } }));
+  await page.route("**/api/admin/admin/v1/billing/presales", route => route.fulfill({ json: { items: [presale] } }));
+  await page.route("**/api/admin/admin/v1/billing/alipay", route => route.fulfill({ json: ALIPAY_OVERVIEW }));
+  await page.route(/\/api\/admin\/admin\/v1\/billing\/alipay\/redemptions(\?|$)/, route => route.fulfill({ json: { items: [] } }));
+
+  await page.goto("/console/billing");
+  await expect(page.getByRole("tab", { name: "账号购买", exact: true })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "支付宝", exact: true })).toHaveAttribute("aria-selected", "true");
+
+  await page.goto("/console/billing?tab=presales");
+  await expect(page.getByRole("tab", { name: "账号购买", exact: true })).toHaveAttribute("aria-selected", "true");
+
+  await page.goto("/console/billing?status=succeeded&payment_id=pay_p10");
+  await expect(page.getByRole("tab", { name: "订单", exact: true })).toHaveAttribute("aria-selected", "true");
+});
+
 test("billing that the control plane has not enabled renders as an empty state", async ({ page }) => {
   await page.route("**/api/admin/admin/v1/billing", route => route.fulfill({ status: 404, json: { error: "not_found" } }));
   await page.goto("/console/billing");
@@ -458,11 +481,7 @@ test("operators create a presale and assign an awaiting order an account of the 
 
 test("Alipay shows credits only, books unclaimed quota with one action id across a lost answer, and opens the purchase entry", async ({ page }) => {
   const at = "2026-11-11T08:00:00Z";
-  const overview = {
-    capability_status: "ENABLED", product_name: "点数包", billing_mode: "QUANTITY", quota_unit: "POINT", supported: true, can_purchase: true, can_redeem: true,
-    plans: [{ sku_id: "sku_100", name: "100 积分", price: "9.90", currency: "CNY", quota_unit: "POINT", quota_amount: 100 }],
-    access: { total: 100, used: 40, remaining: 60 }, credits_per_unit_micro: 2_000_000, max_amount: 99_999_999, pending: null,
-  };
+  const overview = { ...ALIPAY_OVERVIEW };
   const entry = "https://openapi.alipay.example.invalid/entry";
   const redeems: { action_id: string; amount: number }[] = [];
   const purchases: unknown[] = [];
