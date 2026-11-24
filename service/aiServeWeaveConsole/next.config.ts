@@ -4,6 +4,10 @@ const nextConfig: NextConfig = {
   // Emit the minimal Node.js server used by the container image.
   // 输出容器镜像使用的最小 Node.js 服务端。
   output: "standalone",
+  // Compression belongs to the reverse proxy (deploy/nginx.example.conf gzips
+  // this site), so the Node process spends no CPU on it.
+  // 压缩交给反向代理（deploy/nginx.example.conf 为本站点开启 gzip），Node 进程不再为此耗 CPU。
+  compress: false,
   // The image copies the standalone output built on the host (scripts/build-web.sh),
   // so it must hold no native binaries: sharp's would be the host's platform, not
   // the image's. No page uses next/image, so image optimization is off and sharp

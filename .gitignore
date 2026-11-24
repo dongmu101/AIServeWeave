@@ -3,6 +3,8 @@
 
 # scripts/build-release.sh output
 dist/
+# scripts/build-go.sh output, copied by the root Dockerfile
+/.image-build/
 
 # local git worktrees for isolated implementation work
 .worktrees/

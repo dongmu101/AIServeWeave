@@ -59,6 +59,14 @@ before upgrading; do not assume a `0.x` bump is safe by default.
 
 ### Changed
 
+- Go 服务镜像不再在 Docker 里编译。新增 `scripts/build-go.sh`，在宿主机交叉编译 Registry、ControlPlane、Gateway 及 Gateway 内置的 Agent，产物放进 `.image-build/`。根目录 Dockerfile 只拷贝目标平台的二进制，构建上下文也只剩这个目录，不再下载模块，也不需要 Go 工具链。`make release` 与 `release.yml` 用 `PREBUILT=dist`，对照 `SHA256SUMS.txt` 校验后直接取 `build-release.sh` 的产物，镜像和 GitHub Release 是同一批字节。**行为变化**：
+  - `make publish` 的 `AGENT_DIST` 改为 `PREBUILT`。
+  - 删除 `make release-agent-dist`、`check-docker-mem`、`BUILD_PARALLELISM`。
+  - Dockerfile 不再接受 `VERSION`、`GOPROXY`、`AGENT_PLATFORMS` 构建参数，改由 `build-go.sh` 的环境变量提供。
+  - `deploy/upgrade.sh --build` 与源码构建的 `install.sh` 需要宿主机装有 Go。
+  - 直接 `docker compose build` 前须先执行 `scripts/build-go.sh`。
+- Console 与 Studio 镜像的基础镜像由 `node:26-bookworm-slim` 改为 `node:26-alpine`，本地解压后约小 116 MB。compose 健康检查改用镜像自带的 busybox `wget --spider`，每次探测不再另起一个 node 进程，间隔从 60 秒恢复为 30 秒。产物是纯 JavaScript，`build-web.sh` 会拒绝原生模块，不受 musl 影响。
+- Console 与 Studio 设置 `compress: false`，压缩改由 Nginx 完成。`deploy/nginx.example.conf` 在这两个 server 块开启 gzip，Gateway API 不受影响。压缩类型包括 HTML、JS、CSS、JSON、RSC（`text/x-component`）、SVG，刻意不含 `text/event-stream`，Studio 的流式回答仍逐段到达。**部署须知**：服务器上的 Nginx 配置要同步加上这段 gzip。否则源站到 Cloudflare 这一段不再压缩，Cloudflare 发给访客时仍会压缩。
 - 所有标识符改为 UUIDv7（新增 `common/idgen`，基于 Go 1.27 标准库 `uuid` 包的 `uuid.NewV7`，不引入第三方依赖）。新 ID 的前 48 位是毫秒时间戳，按铸造顺序排序，B-tree 主键的新行追加在索引右端，不再随机分裂页。涉及控制面实体 ID（`model.NewID`）、Gateway 的请求 ID（`X-Request-Id` 与 `request_logs.id`），以及在它前面加前缀的 Job、产物、response 与 item ID、隧道帧 request_id、节点 ID（`node_`、`tnode.`），还有排队票据、租约、工作流意图、ComfyUI client id、CLI 工具调用 ID 等临时句柄。请求 ID 与节点 ID 仍是 32 位十六进制，长度不变。API key、会话、令牌、安装码与 nonce 仍直接使用 `crypto/rand`。**数据库 schema 变更**：控制面实体 ID 由前缀加 28 位十六进制（32 字符）变为前缀加 32 位十六进制（36 字符），所有保存这类 ID 的列由 `VARCHAR(32)` 加宽到 `VARCHAR(40)`（`model.IDSize`）。迁移为 `base/0018`、`billing/0011`、`request_logs/0005`、`usage_records/0004`、`response_turns/0003`、`alerting/0003`、`routes/0003`、`workflowtemplates/0004`、`jobs/0006`，只加宽列、不改数据，旧 ID 继续有效；必须先执行 `-migrate up` 再启动新控制面。Gateway 与 Agent 不依赖 ID 的格式，可以按任意顺序升级。详见[数据库升级与恢复](deploy/database-recovery.md#id-列加宽base-0018--billing-0011--request_logs-0005--usage_records-0004--response_turns-0003--alerting-0003--routes-0003--workflowtemplates-0004--jobs-0006)。
 - **行为变化**：工作流提交（同步与队列）只在能确定后端没收到请求时才换节点重试：背压、限流、`runtime_closed`，或带新隧道哨兵原因 `ErrNotDelivered` 的连接失败（隧道请求在 `RequestEnd` 之前失败、Agent 到 ComfyUI 拨号未连通）。slot 在 Agent 收到请求后断开、ComfyUI 在 prompt 发出后断线，不再换节点重提，以免生成两次。Agent 未升级时，ComfyUI 拨号失败不带该标记，于是不再换节点。Gateway 的共享 Redis 客户端改为读写超时 1 秒、只重试 1 次。
 

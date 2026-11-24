@@ -46,9 +46,10 @@ Registry ◄── Agent 注册与证书续期、Gateway 副本名册
 
 ## 快速开始
 
-需要 Docker Compose v2；本机运行 Agent 需要 Go 1.27。
+需要 Docker Compose v2、Go 1.27、Node.js 26 与 pnpm。镜像里的程序先在本机编译，Docker 只负责拷贝。
 
 ```bash
+scripts/build-go.sh && scripts/build-web.sh service/aiServeWeaveConsole service/aiServeWeaveStudio
 cd deploy
 cp .env.example .env    # 填写密钥与首个账户，见 deploy/README.md
 docker compose up -d --build

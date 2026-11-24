@@ -10,7 +10,7 @@ deploy/install.sh \
 
 make release VERSION=v3.0.0
 
-make publish VERSION=v3.1.1 AGENT_DIST=dist/agent-dist PUBLISH_TAGS="v3.1.1 latest" FORCE=1
+make publish VERSION=v3.1.1 PREBUILT=dist PUBLISH_TAGS="v3.1.1 latest" FORCE=1   # dist/ 须是 v3.1.1 的 build-release.sh 产物；不传 PREBUILT 则在本机编译
 
 更新
 make  upgrade.sh

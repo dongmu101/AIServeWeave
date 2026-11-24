@@ -6,7 +6,14 @@
 # Console 先在宿主机用 scripts/build-web.sh（pnpm build）构建；本镜像只拷贝其 standalone
 # 产物，Docker 里不编译任何东西。产物是纯 JavaScript，同一份文件适用于 amd64 与 arm64。
 # 以 Console 目录为构建上下文，不将部署密钥放入其中。
-FROM node:26-bookworm-slim
+#
+# Alpine because its busybox wget lets the compose healthcheck probe without
+# starting a second node process each time. musl is no concern: the output is
+# plain JavaScript, and build-web.sh rejects native *.node modules.
+#
+# 用 Alpine，是因为它自带的 busybox wget 让 compose 健康检查不必每次另起一个 node 进程。
+# musl 不构成问题：产物是纯 JavaScript，build-web.sh 会拒绝原生 *.node 模块。
+FROM node:26-alpine
 WORKDIR /app
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \

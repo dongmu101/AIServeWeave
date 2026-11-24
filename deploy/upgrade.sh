@@ -45,8 +45,9 @@ usage() {
 
   服务...           源码构建时只重建这些服务（registry-init registry controlplane gateway console studio），默认全部
   --build           改为从当前代码在本机构建镜像（写入 .env：AISW_IMAGE_FOLLOW=false，清空
-                    AISW_IMAGE_TAG），需要约 6 GiB 内存加 swap；Console 与 Studio 在本机用
-                    pnpm 编译，还需 Node.js 26 与 pnpm；恢复拉取用 --follow
+                    AISW_IMAGE_TAG），需要约 6 GiB 内存加 swap；Docker 里不编译，Go 服务在
+                    本机编译，需 Go（1.21 以上会按 go.mod 自动下载所需版本），Console 与
+                    Studio 在本机用 pnpm 编译，需 Node.js 26 与 pnpm；恢复拉取用 --follow
   --no-pull         不拉取代码，直接用当前工作区重建
   --force           兼容旧用法，无作用（代码没有新提交时也会照常重建）
   --no-backup       跳过 MySQL 与 Registry 备份

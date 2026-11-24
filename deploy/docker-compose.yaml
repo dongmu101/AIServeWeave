@@ -36,7 +36,9 @@
 #
 # 镜像来源：AISW_IMAGE_TAG 留空时从源码构建，镜像标为 :latest；设为一个已发布的
 # vX.Y.Z 时，install.sh / upgrade.sh 改为从 GHCR 拉取 release 流水线推送的同版本
-# 镜像，主机上不再跑 Go 与 Next.js 构建。小内存主机（如 2 核 3G）应走后者。
+# 镜像，主机上不再跑 Go 与 Next.js 构建。小内存主机（如 2 核 3G）应走后者。源码构建在
+# 宿主机而不是 Docker 里编译（scripts/build-go.sh、scripts/build-web.sh）：直接
+# docker compose build 只拷贝它们的产物，须先执行这两个脚本。
 #
 # 资源：每个常驻服务都有内存上限，Go 服务带配套的 GOMEMLIMIT，Console 限制 V8 堆；
 # 默认值按 3 GiB 主机给出，可在 .env 中覆盖（见 .env.example 的「资源上限」）。
@@ -45,7 +47,9 @@
 # tagged :latest; set to a released vX.Y.Z, install.sh / upgrade.sh pull that
 # version's images from GHCR (pushed by the release workflow) and the host
 # runs no Go or Next.js build. Small hosts (e.g. 2 cores, 3 GiB) should do
-# the latter.
+# the latter. A source build compiles on the host, not in Docker
+# (scripts/build-go.sh, scripts/build-web.sh): a bare docker compose build
+# only copies their output, so run them first.
 #
 # Resources: every long-running service has a memory cap, the Go services a
 # matching GOMEMLIMIT, and Console a capped V8 heap; the defaults fit a 3 GiB
@@ -361,7 +365,7 @@ services:
   # 什么也不碰就退出 0——重建这个容器不是重置密码的办法，只有 `docker compose exec
   # controlplane ...` 或 Console 自己能做到。
   bootstrap:
-    image: curlimages/curl:8.11.1
+    image: curlimages/curl:8.23.0
     restart: "no"
     logging: *logging
     environment:
@@ -448,8 +452,8 @@ services:
     mem_limit: ${CONSOLE_MEM_LIMIT:-384m}
     environment:
       # Cap the V8 old-space heap below the container limit, leaving room for
-      # buffers, native memory and the healthcheck's short-lived node process.
-      # 把 V8 老生代堆限制在容器上限之下，给 buffer、原生内存与健康检查临时起的 node 进程留出空间。
+      # buffers and native memory.
+      # 把 V8 老生代堆限制在容器上限之下，给 buffer 与原生内存留出空间。
       NODE_OPTIONS: --max-old-space-size=${CONSOLE_NODE_HEAP_MB:-256}
       AISW_CONSOLE_CONTROL_PLANE_URL: http://controlplane:8090
       AISW_CONSOLE_SESSION_SECRET: ${AISW_CONSOLE_SESSION_SECRET:?set it in deploy/.env — openssl rand -base64 48}
@@ -481,12 +485,12 @@ services:
         condition: service_started
     healthcheck:
       # Check the UI without credentials; backend availability is independent.
-      # Every probe starts a fresh node process (tens of MB and a CPU spike),
-      # so it runs once a minute rather than every 30 s.
-      # 无凭据检查 UI，后端可用性独立判断。每次探测都新起一个 node 进程（数十 MB 内存与一次
-      # CPU 尖峰），因此每分钟一次而不是每 30 秒。
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/login', {signal: AbortSignal.timeout(4000)}).then(r => process.exit(r.status === 200 ? 0 : 1)).catch(() => process.exit(1))"]
-      interval: 60s
+      # The image's busybox wget probes it, so no second node process starts;
+      # wget fails on any 4xx/5xx or a timeout.
+      # 无凭据检查 UI，后端可用性独立判断。由镜像自带的 busybox wget 探测，不另起 node 进程；
+      # 遇到 4xx/5xx 或超时即失败。
+      test: ["CMD", "wget", "-q", "--spider", "-T", "4", "http://127.0.0.1:3000/login"]
+      interval: 30s
       timeout: 5s
       retries: 3
       start_period: 20s
@@ -524,8 +528,10 @@ services:
       gateway:
         condition: service_started
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3100/login', {signal: AbortSignal.timeout(4000)}).then(r => process.exit(r.status === 200 ? 0 : 1)).catch(() => process.exit(1))"]
-      interval: 60s
+      # Same probe as the Console: busybox wget, no second node process.
+      # 与 Console 相同的探测：busybox wget，不另起 node 进程。
+      test: ["CMD", "wget", "-q", "--spider", "-T", "4", "http://127.0.0.1:3100/login"]
+      interval: 30s
       timeout: 5s
       retries: 3
       start_period: 20s
@@ -536,10 +542,11 @@ services:
       context: ..
       args:
         SERVICE: aiServeWeaveGateway
-        # Platforms of the Agent artifacts baked into the image; one is enough
-        # for a smoke test: AGENT_PLATFORMS="linux/amd64".
-        # 内置进镜像的 Agent 制品平台；冒烟时一个就够：AGENT_PLATFORMS="linux/amd64"。
-        AGENT_PLATFORMS: ${AGENT_PLATFORMS:-linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64}
+        # The Agent artifacts baked into the image are compiled on the host by
+        # scripts/build-go.sh, which reads AGENT_PLATFORMS (deploy/lib.sh
+        # passes the .env value).
+        # 内置进镜像的 Agent 制品由 scripts/build-go.sh 在宿主机编译，平台取 AGENT_PLATFORMS
+        # （deploy/lib.sh 传入 .env 的值）。
     restart: unless-stopped
     # On SIGTERM the Gateway drains in-flight HTTP requests, then the Agent
     # tunnels, each for up to drainGrace (30s, main.go). Docker's default 10s

@@ -6,7 +6,11 @@
 # Studio 先在宿主机用 scripts/build-web.sh（pnpm build）构建；本镜像只拷贝其 standalone
 # 产物，Docker 里不编译任何东西。产物是纯 JavaScript，同一份文件适用于 amd64 与 arm64。
 # 以 Studio 目录为构建上下文，不将部署密钥放入其中。
-FROM node:26-bookworm-slim
+#
+# Alpine for the same reason as the Console: busybox wget serves the
+# healthcheck without a second node process; the output is plain JavaScript.
+# 与 Console 相同的理由用 Alpine：busybox wget 承担健康检查，不另起 node 进程；产物是纯 JavaScript。
+FROM node:26-alpine
 WORKDIR /app
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \

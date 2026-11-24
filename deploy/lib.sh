@@ -280,27 +280,49 @@ project_name() {
 
 volume_exists() { docker volume inspect "$(project_name)_$1" >/dev/null 2>&1; }
 
-# build_images builds the named services, or BUILD_ORDER, one at a time.
-# GOPROXY is forwarded only when set, so the Dockerfile default applies
-# otherwise. The Console and Studio are compiled on the host with pnpm first
-# (scripts/build-web.sh): their Dockerfiles only copy that output.
+# build_go compiles one Go service on the host for the Docker daemon's
+# platform (scripts/build-go.sh); the root Dockerfile only copies the result.
+# AGENT_PLATFORMS comes from the shell or .env, as compose itself would read
+# it; GOPROXY is passed only when --goproxy was given.
 #
-# build_images 逐个构建指定服务（未指定时为 BUILD_ORDER）。只在设置了 GOPROXY 时才转发，
-# 否则沿用 Dockerfile 的默认值。Console 与 Studio 先在本机用 pnpm 编译
-# （scripts/build-web.sh）：它们的 Dockerfile 只拷贝该产物。
+# build_go 在宿主机上为 Docker daemon 的平台编译一个 Go 服务（scripts/build-go.sh）；根目录
+# Dockerfile 只拷贝产物。AGENT_PLATFORMS 与 compose 一样取自 shell 或 .env；只在给了
+# --goproxy 时才传 GOPROXY。
+build_go() {
+  local version="$1" service="$2" platforms
+  platforms="${AGENT_PLATFORMS:-$(env_get AGENT_PLATFORMS)}"
+  platforms="${platforms#\"}" platforms="${platforms%\"}"
+  env VERSION="$version" AGENT_PLATFORMS="$platforms" ${GOPROXY_ARG:+"GOPROXY=$GOPROXY_ARG"} \
+    "$ROOT_DIR/scripts/build-go.sh" "$service"
+}
+
+# build_images builds the named services, or BUILD_ORDER, one at a time.
+# Nothing is compiled inside Docker: the Go services are compiled on the host
+# first (build_go), and the Console and Studio with pnpm
+# (scripts/build-web.sh); their Dockerfiles only copy that output.
+#
+# build_images 逐个构建指定服务（未指定时为 BUILD_ORDER）。Docker 里不编译任何东西：Go 服务
+# 先在本机编译（build_go），Console 与 Studio 先在本机用 pnpm 编译（scripts/build-web.sh），
+# 它们的 Dockerfile 只拷贝产物。
 build_images() {
   local version="$1"
   shift
-  local services=() args=(--build-arg "VERSION=$version") service
+  local services=() service compiled=" "
   if (( $# > 0 )); then services=("$@"); else read -r -a services <<<"$BUILD_ORDER"; fi
-  [[ -z "${GOPROXY_ARG:-}" ]] || args+=(--build-arg "GOPROXY=$GOPROXY_ARG")
   for service in "${services[@]}"; do
     log "构建 ${service}（镜像 latest，版本 ${version}）"
     case "$service" in
+      registry-init | registry)
+        # One image under two names; compile it once.
+        # 同一个镜像的两个名字，只编译一次。
+        [[ "$compiled" == *" registry "* ]] || build_go "$version" aiServeWeaveRegistry || die "registry 编译失败"
+        compiled+="registry " ;;
+      controlplane) build_go "$version" aiServeWeaveControlPlane || die "controlplane 编译失败" ;;
+      gateway) build_go "$version" aiServeWeaveGateway || die "gateway 编译失败" ;;
       console) "$ROOT_DIR/scripts/build-web.sh" "$ROOT_DIR/service/aiServeWeaveConsole" || die "console 前端编译失败" ;;
       studio) "$ROOT_DIR/scripts/build-web.sh" "$ROOT_DIR/service/aiServeWeaveStudio" || die "studio 前端编译失败" ;;
     esac
-    compose build "${args[@]}" "$service" || die "$service 构建失败"
+    compose build "$service" || die "$service 构建失败"
   done
 }
 

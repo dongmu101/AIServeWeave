@@ -101,26 +101,26 @@ jobs:
 
   images:
     name: 构建并推送容器镜像
-    needs: verify
+    # The Go images copy the binaries job's dist/ instead of compiling again,
+    # so they carry the very bytes of the Release.
+    # Go 镜像拷贝 binaries 作业的 dist/，不再重新编译，与 Release 是同一批字节。
+    needs: [verify, binaries]
     runs-on: ubuntu-latest
     strategy:
       matrix:
         include:
           - image: registry
             context: .
-            build_args: |
-              SERVICE=aiServeWeaveRegistry
-              VERSION=${{ github.ref_name }}
+            service: aiServeWeaveRegistry
+            build_args: SERVICE=aiServeWeaveRegistry
           - image: controlplane
             context: .
-            build_args: |
-              SERVICE=aiServeWeaveControlPlane
-              VERSION=${{ github.ref_name }}
+            service: aiServeWeaveControlPlane
+            build_args: SERVICE=aiServeWeaveControlPlane
           - image: gateway
             context: .
-            build_args: |
-              SERVICE=aiServeWeaveGateway
-              VERSION=${{ github.ref_name }}
+            service: aiServeWeaveGateway
+            build_args: SERVICE=aiServeWeaveGateway
           - image: console
             context: service/aiServeWeaveConsole
             build_args: ""
@@ -153,6 +153,25 @@ jobs:
       - name: Build frontend（pnpm build）
         if: matrix.web
         run: scripts/build-web.sh ${{ matrix.context }}
+
+      # The root Dockerfile only copies .image-build/; build-go.sh fills it
+      # from dist/ after checking SHA256SUMS.txt, without the Go toolchain.
+      # 根目录 Dockerfile 只拷贝 .image-build/；build-go.sh 校验 SHA256SUMS.txt 后从 dist/
+      # 填充它，不需要 Go 工具链。
+      - name: Download dist
+        if: matrix.service
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - name: 摆出镜像二进制（scripts/build-go.sh，取自 dist/）
+        if: matrix.service
+        env:
+          VERSION: ${{ github.ref_name }}
+          PREBUILT: dist
+          PLATFORMS: linux/amd64 linux/arm64
+        run: scripts/build-go.sh ${{ matrix.service }}
 
       - name: Set up QEMU（跨架构模拟，供 buildx 构建 linux/arm64）
         uses: docker/setup-qemu-action@v3

@@ -860,7 +860,7 @@ ComfyUI 适配器自身的队列深度指标（`comfyui_queue_running`/`comfyui_
 
 转发只转述四类结果：`200` 原样返回（至多 64 KiB）、`404 invalid_code`、`429`（带 `Retry-After`），其余包括控制面 `401/5xx` 与不可达一律不透明的 `503`。请求体、响应体、兑换码与令牌从不写日志；日志里的错误文本经 `runtime.Redact` 去掉令牌。单次转发超时 10 秒。
 
-- **制品与脚本**：Gateway 镜像的 `agent-dist` 构建阶段生成 `-agent-dist-dir` 所需的版本目录（Agent 二进制、`agent.sh`、`agent.ps1`、`install.sh`、`install.ps1`、`SHA256SUMS.txt`），引导脚本为 [install.sh](../../deploy/agent/install.sh) 与 [install.ps1](../../deploy/agent/install.ps1)。反代（Nginx）需把 `/agent/` 前缀转到本监听器，见 [部署说明「已有部署启用一行命令安装」](../../deploy/README.md#已有部署启用一行命令安装)。
+- **制品与脚本**：`scripts/build-go.sh` 在 Docker 之外生成 `-agent-dist-dir` 所需的版本目录，Gateway 镜像直接拷贝，内容为（Agent 二进制、`agent.sh`、`agent.ps1`、`install.sh`、`install.ps1`、`SHA256SUMS.txt`），引导脚本为 [install.sh](../../deploy/agent/install.sh) 与 [install.ps1](../../deploy/agent/install.ps1)。反代（Nginx）需把 `/agent/` 前缀转到本监听器，见 [部署说明「已有部署启用一行命令安装」](../../deploy/README.md#已有部署启用一行命令安装)。
 - **验证范围**：配置拒绝、manifest（正式版/提交号版本/目录缺失）、占位符替换、下载允许列表与路径穿越/跨版本拒绝、转发的状态映射/鉴权头/请求体上限/不可达、日志不含码与令牌、方法限制都有默认测试。没有对真实控制面与真实 Nginx 的端到端验收，真实环境验收见 [Agent 验收矩阵](../../deploy/agent/acceptance.md)。
 
 ## 下一步
