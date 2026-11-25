@@ -30,16 +30,19 @@ const COLUMNS = ["input", "output", "input.cache_read", "input.cache_write"] as 
  * TenantPrices lists the sale prices of every model this tenant may use, on
  * its price plan, in credits per million tokens. A model whose price list has
  * more than its base-tier columns can be expanded to every tier. With billing
- * off the endpoint is not mounted and the section says so.
+ * off the endpoint is not mounted and the section says so, unless the caller
+ * marks it optional (the overview), in which case it renders nothing.
  *
  * TenantPrices 列出本租户按其价格方案可用的每个模型的售价，单位为点 / 百万 token。单价
- * 表中不止基础档几列的模型可以展开查看全部档位。计费关闭时端点未挂载，分区会说明这一点。
+ * 表中不止基础档几列的模型可以展开查看全部档位。计费关闭时端点未挂载，分区会说明这一点；
+ * 调用方标记为 optional（概览页）时则不渲染。
  */
-export function TenantPrices() {
+export function TenantPrices({ optional = false }: { optional?: boolean }) {
   const { t } = useI18n();
   const prices = useResource<TenantPrice[]>({ method: "GET", path: "/admin/v1/billing/prices", parse: parseTenantPrices });
   const [open, setOpen] = React.useState<string | null>(null);
 
+  if (optional && prices.errorKind === "not_found") return null;
   return (
     <Card>
       <CardHeader>

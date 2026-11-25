@@ -43,6 +43,7 @@
 - **租户用量页**：消耗点数卡片；按模型 / 用户 / Key 三个标签页新增缓存读取、缓存写入与费用列；新增「明细」标签页（`/admin/v1/usage/records`，每页 50 条游标分页，可按模型与 Key 筛选，逐行展开各计量项；标记「升级前」「按旧单价回填」「自有节点不计费」「未定价」「未扣余额」）。用量页可从查询参数 `tab`、`since`、`until` 打开（经过校验）。实现在 `app/console/usage/usage-records.tsx`、`lib/console/usage-records.ts`。
 - **API Key 页与用户页**：Token 用量旁显示点数。
 - **租户计费页**：新增「模型价格」分区（`?tab=prices`）；账目最上面显示「进行中」一行；用量账目显示时间段与请求数，并链接到对应时间的明细（只在租户页）。账目表 `billing-tables.tsx` 是两边共用的，「进行中」与时间段在运维按单一租户查询账目时也会显示。
+- **租户概览页**（2026-11-25）：「当前会话」下方复用同一个「模型价格」卡片（`<TenantPrices optional />`）。计费未开启（404）时整张卡片不显示，与余额卡片一致；读取失败时卡片内可重试，不影响概览页其余部分。
 - 点数与费用列只在汇总或明细带费用时显示（即控制面开启计费时）。已移除对 `/operator/v1/billing/model-prices` 的全部调用；白名单同步。文案八种语言。
 
 验证：Console 409 项单元测试、TS7 类型检查、`tsc6`、lint（仅既有 alerts 页警告）与生产构建通过。Playwright 新增 `token-pricing.spec.ts`、`usage-pricing.spec.ts`（宽屏与 320px 无横向滚动），与计费、运维文案用例合跑 181 项通过、1 项失败：`billing.spec.ts:382`（「a full presale explains itself」）断言的文案「预售名额已满」在 HEAD 的文案里就不存在，与本次无关。分身在全套用例中另外看到的既有失败：`console-header.spec.ts` 两项、`console.spec.ts` 三项（已记录）、`docs-guide` 三项（文档示例数为 8，测试期望 7）。浏览器使用隔离回环服务与模拟 API，未接真实控制面。

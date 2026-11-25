@@ -11,6 +11,7 @@ import { formatCredits, parseBillingOverview, type BillingOverview } from "@/lib
 import { roleLabels, type Role } from "@/lib/console/contract";
 import type { SessionUser } from "@/lib/console/session-payload";
 import { canCreateApiKey } from "@/lib/console/permissions";
+import { TenantPrices } from "@/components/console/tenant-prices";
 
 /** OverviewView renders session facts using the current display language.
  * OverviewView 使用当前显示语言渲染会话事实。 */
@@ -68,6 +69,8 @@ export function OverviewView({ user, expiresAt }: { user: SessionUser; expiresAt
           </dl>
         </CardContent>
       </Card>
+
+      <TenantPrices optional />
     </div>
   );
 }
