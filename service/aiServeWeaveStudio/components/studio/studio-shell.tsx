@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { cn } from "cn";
 
 import { BrandMark } from "@/components/studio/brand";
+import { ConversationSearch, isSearchShortcut, useSearchShortcutLabel } from "@/components/studio/conversation-search";
 import { useStoredValue } from "@/components/studio/use-stored-value";
 import {
   DropdownMenu,
@@ -47,10 +48,27 @@ export function StudioShell({ user, conversations, children }: { user: ShellUser
   const [stored, store] = useStoredValue(COLLAPSED_KEY);
   const collapsed = stored === "1";
   const [drawerOpen, setDrawerOpen] = React.useState(false);
+  const [searchOpen, setSearchOpen] = React.useState(false);
 
   function toggleCollapsed() {
     store(collapsed ? "0" : "1");
   }
+
+  function openSearch() {
+    setDrawerOpen(false);
+    setSearchOpen(true);
+  }
+
+  React.useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (!isSearchShortcut(event)) return;
+      event.preventDefault();
+      setDrawerOpen(false);
+      setSearchOpen((open) => !open);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   return (
     <div className="flex h-svh shrink-0 overflow-hidden">
@@ -60,14 +78,14 @@ export function StudioShell({ user, conversations, children }: { user: ShellUser
           collapsed ? "w-14" : "w-64"
         )}
       >
-        <SidebarContent user={user} conversations={conversations} collapsed={collapsed} onToggle={toggleCollapsed} />
+        <SidebarContent user={user} conversations={conversations} collapsed={collapsed} onToggle={toggleCollapsed} onSearch={openSearch} />
       </aside>
 
       {drawerOpen ? (
         <div className="fixed inset-0 z-40 md:hidden">
           <button type="button" aria-label="关闭侧边栏" className="absolute inset-0 bg-black/40" onClick={() => setDrawerOpen(false)} />
           <aside className="absolute inset-y-0 left-0 flex w-72 flex-col border-r bg-sidebar text-sidebar-foreground shadow-xl">
-            <SidebarContent user={user} conversations={conversations} collapsed={false} onToggle={() => setDrawerOpen(false)} onNavigate={() => setDrawerOpen(false)} />
+            <SidebarContent user={user} conversations={conversations} collapsed={false} onToggle={() => setDrawerOpen(false)} onSearch={openSearch} onNavigate={() => setDrawerOpen(false)} />
           </aside>
         </div>
       ) : null}
@@ -81,6 +99,8 @@ export function StudioShell({ user, conversations, children }: { user: ShellUser
         </div>
         {children}
       </main>
+
+      <ConversationSearch open={searchOpen} onOpenChange={setSearchOpen} />
     </div>
   );
 }
@@ -90,14 +110,17 @@ function SidebarContent({
   conversations,
   collapsed,
   onToggle,
+  onSearch,
   onNavigate,
 }: {
   user: ShellUser;
   conversations: ShellConversations;
   collapsed: boolean;
   onToggle: () => void;
+  onSearch: () => void;
   onNavigate?: () => void;
 }) {
+  const shortcut = useSearchShortcutLabel();
   return (
     <>
       <div className={cn("flex h-14 items-center gap-2 px-3", collapsed && "justify-center px-0")}>
@@ -115,7 +138,7 @@ function SidebarContent({
 
       <nav className="grid gap-0.5 px-2" aria-label="主导航">
         <NavItem href="/" icon={<PlusIcon />} label="新建对话" collapsed={collapsed} onNavigate={onNavigate} prominent />
-        <NavItem icon={<SearchIcon />} label="搜索" collapsed={collapsed} soon />
+        <NavItem icon={<SearchIcon />} label="搜索" collapsed={collapsed} onClick={onSearch} hint={shortcut} />
         <NavItem icon={<WorkflowIcon />} label="编排" collapsed={collapsed} soon />
       </nav>
 
@@ -135,6 +158,8 @@ function NavItem({
   collapsed,
   soon,
   prominent,
+  hint,
+  onClick,
   onNavigate,
 }: {
   href?: string;
@@ -143,6 +168,8 @@ function NavItem({
   collapsed: boolean;
   soon?: boolean;
   prominent?: boolean;
+  hint?: string;
+  onClick?: () => void;
   onNavigate?: () => void;
 }) {
   const className = cn(
@@ -156,8 +183,16 @@ function NavItem({
       {icon}
       {collapsed ? null : <span className="flex-1 truncate">{label}</span>}
       {collapsed || !soon ? null : <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">即将上线</span>}
+      {collapsed || soon || !hint ? null : <span className="text-xs text-muted-foreground max-md:hidden">{hint}</span>}
     </>
   );
+  if (onClick && !soon) {
+    return (
+      <button type="button" onClick={onClick} title={collapsed ? label : undefined} aria-keyshortcuts="Meta+K Control+K" className={cn(className, "w-full text-left")}>
+        {content}
+      </button>
+    );
+  }
   if (soon || !href) {
     return (
       <span aria-disabled="true" title={collapsed ? `${label}（即将上线）` : undefined} className={className}>
