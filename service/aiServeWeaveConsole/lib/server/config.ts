@@ -25,6 +25,7 @@ const DEFAULT_CONTROL_PLANE_URL = "http://127.0.0.1:8090";
  *
  * DEFAULT_GATEWAY_URL 与 Gateway 的本地默认地址一致（`-addr`）。 */
 const DEFAULT_GATEWAY_URL = "http://127.0.0.1:8080";
+const DEFAULT_STUDIO_URL = "https://studio.open7x.com";
 
 /** DEFAULT_TIMEOUT_MS bounds one call to the control plane.
  *
@@ -211,17 +212,17 @@ export function publicGatewayUrl(): string {
 }
 
 /** studioUrl is the public address of Studio, the separate chat workspace the
- * console header links to. Studio is its own service with its own sign-in, so
- * this is only a link; unset or malformed, there is no entry to show and it
- * returns null. Like publicGatewayUrl it keeps a path prefix.
+ * console header always links to. AISW_CONSOLE_STUDIO_URL overrides the
+ * default; unset or malformed, the default is used. Like publicGatewayUrl it
+ * keeps a path prefix.
  *
- * studioUrl 是 Studio 的公开地址，控制台顶栏链接到这个独立的对话工作台。Studio 是
- * 单独的服务、有自己的登录，这里只是一个链接；未设置或格式不对时没有入口可显示，返回
- * null。与 publicGatewayUrl 一样保留路径前缀。 */
-export function studioUrl(): string | null {
+ * studioUrl 是 Studio 的公开地址，控制台顶栏始终链接到这个独立的对话工作台。
+ * AISW_CONSOLE_STUDIO_URL 可覆盖默认地址；未设置或格式不对时使用默认地址。与
+ * publicGatewayUrl 一样保留路径前缀。 */
+export function studioUrl(): string {
   const raw = process.env.AISW_CONSOLE_STUDIO_URL?.trim();
   if (!raw) {
-    return null;
+    return DEFAULT_STUDIO_URL;
   }
   try {
     const parsed = new URL(raw);
@@ -229,25 +230,24 @@ export function studioUrl(): string | null {
       return `${parsed.origin}${parsed.pathname.replace(/\/+$/, "")}`;
     }
   } catch {
-    // Fall through to no entry. / 退回为不显示入口。
+    // Fall through to the default. / 退回默认地址。
   }
-  console.warn("[console] AISW_CONSOLE_STUDIO_URL is not an absolute http(s) URL; the Studio entry is hidden.");
-  return null;
+  console.warn(`[console] AISW_CONSOLE_STUDIO_URL is not an absolute http(s) URL; the Studio entry uses ${DEFAULT_STUDIO_URL}.`);
+  return DEFAULT_STUDIO_URL;
 }
 
 /** studioHandoff is what signing into Studio from the Console needs: where
- * Studio receives the ticket and the key that seals it. Both
- * AISW_CONSOLE_STUDIO_URL and AISW_STUDIO_HANDOFF_SECRET (shared with Studio)
- * must be set; otherwise it is null and the entry is a plain link to Studio's
- * sign-in.
+ * Studio receives the ticket and the key that seals it. It needs
+ * AISW_STUDIO_HANDOFF_SECRET (shared with Studio); without it, it is null and
+ * the entry is a plain link to Studio's sign-in.
  *
  * studioHandoff 是从 Console 登录 Studio 所需的：Studio 接收票据的地址与密封票据的
- * 密钥。须同时设置 AISW_CONSOLE_STUDIO_URL 与 AISW_STUDIO_HANDOFF_SECRET（与 Studio
- * 共用）；否则为 null，入口只是指向 Studio 登录页的普通链接。 */
+ * 密钥。须设置 AISW_STUDIO_HANDOFF_SECRET（与 Studio 共用）；否则为 null，入口只是
+ * 指向 Studio 登录页的普通链接。 */
 export function studioHandoff(): { action: string; key: Buffer } | null {
   const base = studioUrl();
   const secret = process.env.AISW_STUDIO_HANDOFF_SECRET?.trim();
-  if (!base || !secret) {
+  if (!secret) {
     return null;
   }
   try {

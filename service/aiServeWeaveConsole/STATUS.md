@@ -29,7 +29,7 @@
 
 人机验证（2026-11-25）：租户 `/login` 与 `/signup` 可启用 ALTCHA（`altcha` 3.7.0，MIT，自托管工作量证明），开关 `AISW_CONSOLE_CAPTCHA_ENABLED` 默认关闭，Compose 与 `deploy/.env.example` 已同步。挑战由 `GET /api/captcha` 签发，`/api/session`、`/api/signup` 在请求控制面之前校验，失败返回 `428 captcha_failed`。防重放记录是进程级的，多副本时同一个解可在每个副本各用一次。运维登录与 Studio 不变。验证：lint、typecheck、生产构建、456 项单元测试通过；在本地生产构建上用真实浏览器走通了组件勾选与按钮解禁；用脚本验证了缺少、伪造、重放返回 428，有效解放行到上游；关闭开关时行为不变。未在接入真实控制面的线上环境验收。
 
-设置 `AISW_CONSOLE_STUDIO_URL`（Studio 的公开地址，可带路径前缀）后，控制台顶栏在客服链接左侧显示「Studio」，在新分页打开；未设置或不是绝对 http(s) URL 时不显示。Studio 有自己的登录，这里只是链接。实现在 `lib/server/config.ts` 的 `studioUrl`、`app/console/console-shell.tsx`；Compose 与 `deploy/.env.example` 已同步。
+控制台顶栏始终在客服链接左侧显示「Studio」，在新分页打开。地址默认 `https://studio.open7x.com`，可用 `AISW_CONSOLE_STUDIO_URL`（绝对 http(s) URL，可带路径前缀）覆盖；未设置或格式不对时用默认地址（2026-11-25 起不再因未设置而隐藏）。Studio 有自己的登录，这里只是链接。实现在 `lib/server/config.ts` 的 `studioUrl`、`app/console/console-shell.tsx`；Compose 与 `deploy/.env.example` 已同步。
 
 验证：lint、typecheck、409 项单元测试与生产构建通过。未在浏览器中查看，未接真实 Studio。
 

@@ -480,8 +480,9 @@ services:
       # Public Gateway address the API docs print as the base URL, e.g. https://api.open7x.com.
       # API 文档示例中显示的公开 Gateway 基地址，如 https://api.open7x.com；留空时退回内部地址。
       AISW_CONSOLE_PUBLIC_GATEWAY_URL: ${AISW_CONSOLE_PUBLIC_GATEWAY_URL:-}
-      # Public Studio address linked from the console header; empty hides the entry.
-      # 控制台顶栏 Studio 入口的公开地址；留空时不显示入口。
+      # Public Studio address linked from the console header (always shown);
+      # empty uses https://studio.open7x.com.
+      # 控制台顶栏 Studio 入口的公开地址（入口始终显示）；留空时使用 https://studio.open7x.com。
       AISW_CONSOLE_STUDIO_URL: ${AISW_CONSOLE_STUDIO_URL:-}
       # ALTCHA human check on tenant sign-in and sign-up; off unless set to true.
       # 租户登录与注册的 ALTCHA 人机验证；设为 true 才开启。

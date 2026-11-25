@@ -60,10 +60,9 @@ export default async function ConsoleLayout({
   );
 }
 
-/** studioEntry describes the header's Studio entry, or null to hide it.
+/** studioEntry describes the header's Studio entry, which is always shown.
  *
- * studioEntry 描述顶栏的 Studio 入口；为 null 时不显示。 */
-function studioEntry(): { url: string; handoff: boolean } | null {
-  const url = studioUrl();
-  return url ? { url, handoff: studioHandoff() !== null } : null;
+ * studioEntry 描述顶栏的 Studio 入口，入口始终显示。 */
+function studioEntry(): { url: string; handoff: boolean } {
+  return { url: studioUrl(), handoff: studioHandoff() !== null };
 }

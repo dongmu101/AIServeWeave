@@ -106,10 +106,10 @@ export function ConsoleShell({
 }: {
   user: SessionUser;
   /** studio is the Studio entry: its address and whether this Console can
-   * sign the user straight in; null hides the entry.
+   * sign the user straight in. The entry is always shown.
    *
-   * studio 是 Studio 入口：地址，以及本 Console 能否直接让用户登录；为 null 时不显示。 */
-  studio: { url: string; handoff: boolean } | null;
+   * studio 是 Studio 入口：地址，以及本 Console 能否直接让用户登录。入口始终显示。 */
+  studio: { url: string; handoff: boolean };
   children: React.ReactNode;
 }) {
   const { t } = useI18n();
@@ -156,20 +156,18 @@ export function ConsoleShell({
             menuLabel={t("tenant.openConsoleNavigation")}
             fallbackLabel={t("tenant.navigation")}
           />
-          {studio ? (
-            <a
-              href={studio.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={(event) => openStudio(event, studio)}
-              aria-label={t("tenant.studio")}
-              title={t("tenant.studio")}
-              className={buttonVariants({ variant: "ghost", size: "sm", className: "shrink-0" })}
-            >
-              <SparklesIcon aria-hidden="true" className="text-brand" />
-              <span className="hidden sm:inline">{t("tenant.studio")}</span>
-            </a>
-          ) : null}
+          <a
+            href={studio.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(event) => openStudio(event, studio)}
+            aria-label={t("tenant.studio")}
+            title={t("tenant.studio")}
+            className={buttonVariants({ variant: "ghost", size: "sm", className: "shrink-0" })}
+          >
+            <SparklesIcon aria-hidden="true" className="text-brand" />
+            <span className="hidden sm:inline">{t("tenant.studio")}</span>
+          </a>
           <SupportLink label={t("common.telegramSupport")} />
           <LanguageSwitcher />
           <DropdownMenu>
