@@ -953,6 +953,7 @@ const tenant = {
   "tenant.billingPriceVariant": "Nivel de servicio {variant}",
   "tenant.billingPriceShowTiers": "Mostrar todos los tramos",
   "tenant.billingPriceHideTiers": "Ocultar tramos",
+  "tenant.billingPriceOtherFamily": "Otros modelos",
   "tenant.billingPendingUsage": "En curso",
   "tenant.billingPendingNote": "Solicitudes: {count}. Ya descontadas del saldo, aún sin cerrar; cierre previsto a las {time}",
   "tenant.billingUsagePeriod": "{start} – {end} · {count} solicitudes",

@@ -965,6 +965,7 @@ const tenant = {
   "tenant.billingPriceVariant": "Niveau de service {variant}",
   "tenant.billingPriceShowTiers": "Afficher tous les paliers",
   "tenant.billingPriceHideTiers": "Masquer les paliers",
+  "tenant.billingPriceOtherFamily": "Autres modèles",
   "tenant.billingPendingUsage": "En cours",
   "tenant.billingPendingNote": "Requêtes : {count}. Déjà déduites du solde, pas encore clôturées ; clôture prévue à {time}",
   "tenant.billingUsagePeriod": "{start} – {end} · {count} requêtes",

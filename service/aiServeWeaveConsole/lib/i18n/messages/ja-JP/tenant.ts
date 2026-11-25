@@ -953,6 +953,7 @@ const tenant = {
   "tenant.billingPriceVariant": "サービスレベル {variant}",
   "tenant.billingPriceShowTiers": "すべての料金段階を表示",
   "tenant.billingPriceHideTiers": "料金段階を閉じる",
+  "tenant.billingPriceOtherFamily": "その他のモデル",
   "tenant.billingPendingUsage": "集計中",
   "tenant.billingPendingNote": "リクエスト {count} 件。残高から差し引き済みで未確定、{time} に確定予定",
   "tenant.billingUsagePeriod": "{start} – {end} · {count} 件",

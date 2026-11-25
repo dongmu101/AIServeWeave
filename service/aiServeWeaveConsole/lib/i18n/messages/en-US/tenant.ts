@@ -965,6 +965,7 @@ const tenant = {
   "tenant.billingPriceVariant": "Service tier {variant}",
   "tenant.billingPriceShowTiers": "Show all tiers",
   "tenant.billingPriceHideTiers": "Hide tiers",
+  "tenant.billingPriceOtherFamily": "Other models",
   "tenant.billingPendingUsage": "In progress",
   "tenant.billingPendingNote": "Requests: {count}. Already deducted from the balance, not yet sealed; expected to seal at {time}",
   "tenant.billingUsagePeriod": "{start} – {end} · {count} requests",

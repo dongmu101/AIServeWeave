@@ -6,12 +6,15 @@ import { Message } from "@/components/i18n/message";
 import { useI18n } from "@/components/i18n/provider";
 import { BillingDisabled } from "@/components/console/billing-tables";
 import { EmptyState, ErrorState, LoadingState } from "@/components/console/states";
+import { ModelFamilyIcon } from "@/components/console/model-family-icon";
 import { meterLabel } from "@/components/console/usage-labels";
 import { useResource } from "@/components/console/use-resource";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatCredits } from "@/lib/console/billing";
+import { groupByFamily } from "@/lib/console/model-family";
 import { basePrice, parseTenantPrices, priceTiers, type PriceTier, type TenantPrice } from "@/lib/console/tenant-prices";
 import { formatRate } from "@/lib/console/usage-records";
 
@@ -33,7 +36,7 @@ const COLUMNS = ["input", "output", "input.cache_read", "input.cache_write"] as 
  * 表中不止基础档几列的模型可以展开查看全部档位。计费关闭时端点未挂载，分区会说明这一点。
  */
 export function TenantPrices() {
-  const { t, locale } = useI18n();
+  const { t } = useI18n();
   const prices = useResource<TenantPrice[]>({ method: "GET", path: "/admin/v1/billing/prices", parse: parseTenantPrices });
   const [open, setOpen] = React.useState<string | null>(null);
 
@@ -49,55 +52,79 @@ export function TenantPrices() {
           : prices.loading || !prices.data ? <LoadingState label={t("tenant.billingPricesLoading")} rows={3} />
           : prices.data.length === 0 ? <EmptyState title={t("tenant.billingPricesEmpty")} />
           : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead><Message id="tenant.models_98fd0c" /></TableHead>
-                  {COLUMNS.map((meter) => <TableHead key={meter} className="text-right">{meterLabel(meter, t)}</TableHead>)}
-                  <TableHead><span className="sr-only"><Message id="tenant.billingPriceShowTiers" /></span></TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {prices.data.map((price) => {
-                  const tiers = priceTiers(price);
-                  const more = tiers.length > 1 || (tiers[0]?.items.some((item) => !(COLUMNS as readonly string[]).includes(item.meter)) ?? false);
-                  const expanded = open === price.model;
-                  return (
-                    <React.Fragment key={price.model}>
-                      <TableRow className="align-top">
-                        <TableCell>
-                          <code className="text-xs break-all">{price.model}</code>
-                          {price.ratePpm !== 1_000_000 ? <span className="block text-xs text-muted-foreground">{t("tenant.billingPriceRate", { rate: formatRate(price.ratePpm, locale) })}</span> : null}
-                        </TableCell>
-                        {COLUMNS.map((meter) => {
-                          const value = basePrice(price, meter);
-                          return <TableCell key={meter} className="text-right font-mono whitespace-nowrap">{value === null ? "—" : formatCredits(value, locale)}</TableCell>;
-                        })}
-                        <TableCell className="text-right">
-                          {more ? (
-                            <Button type="button" size="sm" variant="ghost" aria-expanded={expanded} onClick={() => setOpen(expanded ? null : price.model)}>
-                              <Message id={expanded ? "tenant.billingPriceHideTiers" : "tenant.billingPriceShowTiers"} />
-                            </Button>
-                          ) : null}
-                        </TableCell>
-                      </TableRow>
-                      {expanded ? (
-                        <TableRow>
-                          <TableCell colSpan={COLUMNS.length + 2} className="bg-muted/30">
-                            <div className="grid gap-3 py-1 sm:grid-cols-2">
-                              {tiers.map((tier) => <TierList key={`${tier.variant}|${tier.aboveInputTokens}`} tier={tier} />)}
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      ) : null}
-                    </React.Fragment>
-                  );
-                })}
-              </TableBody>
-            </Table>
+            <div className="overflow-hidden rounded-lg border">
+              <Table>
+                <TableHeader className="bg-muted/40">
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead className="pl-4"><Message id="tenant.models_98fd0c" /></TableHead>
+                    {COLUMNS.map((meter) => <TableHead key={meter} className="text-right">{meterLabel(meter, t)}</TableHead>)}
+                    <TableHead className="pr-4"><span className="sr-only"><Message id="tenant.billingPriceShowTiers" /></span></TableHead>
+                  </TableRow>
+                </TableHeader>
+                {groupByFamily(prices.data, (price) => price.model).map((group) => (
+                  <TableBody key={group.id} className="border-b last:border-b-0">
+                    <TableRow className="border-b bg-muted/20 hover:bg-muted/20">
+                      <TableHead scope="rowgroup" colSpan={COLUMNS.length + 2} className="h-auto px-4 py-2.5 text-foreground">
+                        <div className="flex items-center gap-2.5">
+                          <ModelFamilyIcon family={group.family} />
+                          <span className="text-sm font-semibold">{group.family?.name ?? t("tenant.billingPriceOtherFamily")}</span>
+                          {group.family && group.family.vendor !== group.family.name ? <span className="text-xs font-normal text-muted-foreground">{group.family.vendor}</span> : null}
+                          <Badge variant="secondary" className="ml-auto font-normal">{t("tenant.models_4678e8", { count: group.items.length })}</Badge>
+                        </div>
+                      </TableHead>
+                    </TableRow>
+                    {group.items.map((price) => <PriceRow key={price.model} price={price} expanded={open === price.model} onToggle={(next) => setOpen(next ? price.model : null)} />)}
+                  </TableBody>
+                ))}
+              </Table>
+            </div>
           )}
       </CardContent>
     </Card>
+  );
+}
+
+/** PriceRow is one model's base-tier prices, plus its other tiers when
+ * expanded. The model name is indented to line up with its family's name.
+ *
+ * PriceRow 是一个模型的基础档单价，展开时附上其余档位。模型名缩进到与系列名称对齐。 */
+function PriceRow({ price, expanded, onToggle }: { price: TenantPrice; expanded: boolean; onToggle: (expanded: boolean) => void }) {
+  const { t, locale } = useI18n();
+  const tiers = priceTiers(price);
+  const more = tiers.length > 1 || (tiers[0]?.items.some((item) => !(COLUMNS as readonly string[]).includes(item.meter)) ?? false);
+  return (
+    <>
+      <TableRow className="align-top">
+        <TableCell className="py-2.5 pl-4 whitespace-normal sm:pl-13.5">
+          <code className="font-mono text-[13px] break-all">{price.model}</code>
+          {price.ratePpm !== 1_000_000 ? <span className="mt-0.5 block text-xs text-muted-foreground">{t("tenant.billingPriceRate", { rate: formatRate(price.ratePpm, locale) })}</span> : null}
+        </TableCell>
+        {COLUMNS.map((meter) => {
+          const value = basePrice(price, meter);
+          return (
+            <TableCell key={meter} className="py-2.5 text-right font-mono tabular-nums">
+              {value === null ? <span className="text-muted-foreground/60">—</span> : formatCredits(value, locale)}
+            </TableCell>
+          );
+        })}
+        <TableCell className="py-1.5 pr-4 text-right">
+          {more ? (
+            <Button type="button" size="sm" variant="ghost" aria-expanded={expanded} onClick={() => onToggle(!expanded)}>
+              <Message id={expanded ? "tenant.billingPriceHideTiers" : "tenant.billingPriceShowTiers"} />
+            </Button>
+          ) : null}
+        </TableCell>
+      </TableRow>
+      {expanded ? (
+        <TableRow className="hover:bg-transparent">
+          <TableCell colSpan={COLUMNS.length + 2} className="bg-muted/30 px-4 sm:pl-13.5">
+            <div className="grid gap-3 py-1 sm:grid-cols-2">
+              {tiers.map((tier) => <TierList key={`${tier.variant}|${tier.aboveInputTokens}`} tier={tier} />)}
+            </div>
+          </TableCell>
+        </TableRow>
+      ) : null}
+    </>
   );
 }
 

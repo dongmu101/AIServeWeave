@@ -953,6 +953,7 @@ const tenant = {
   "tenant.billingPriceVariant": "서비스 등급 {variant}",
   "tenant.billingPriceShowTiers": "모든 구간 보기",
   "tenant.billingPriceHideTiers": "구간 접기",
+  "tenant.billingPriceOtherFamily": "기타 모델",
   "tenant.billingPendingUsage": "진행 중",
   "tenant.billingPendingNote": "요청 {count}건. 잔액에서 이미 차감됐으며 아직 마감 전, {time}에 마감 예정",
   "tenant.billingUsagePeriod": "{start} – {end} · 요청 {count}건",

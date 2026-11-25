@@ -965,6 +965,7 @@ const tenant = {
   "tenant.billingPriceVariant": "Servicestufe {variant}",
   "tenant.billingPriceShowTiers": "Alle Stufen anzeigen",
   "tenant.billingPriceHideTiers": "Stufen ausblenden",
+  "tenant.billingPriceOtherFamily": "Weitere Modelle",
   "tenant.billingPendingUsage": "Laufend",
   "tenant.billingPendingNote": "Anfragen: {count}. Bereits vom Guthaben abgezogen, noch nicht abgeschlossen; Abschluss voraussichtlich {time}",
   "tenant.billingUsagePeriod": "{start} – {end} · {count} Anfragen",

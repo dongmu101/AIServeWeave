@@ -953,6 +953,7 @@ const tenant = {
   "tenant.billingPriceVariant": "服務等級 {variant}",
   "tenant.billingPriceShowTiers": "查看全部檔位",
   "tenant.billingPriceHideTiers": "收起檔位",
+  "tenant.billingPriceOtherFamily": "其他模型",
   "tenant.billingPendingUsage": "進行中",
   "tenant.billingPendingNote": "{count} 次請求，已從餘額扣除，尚未封帳；預計 {time} 封帳",
   "tenant.billingUsagePeriod": "{start} – {end} · {count} 次請求",
