@@ -43,14 +43,18 @@ export interface SignupCredentials {
   tenantName: string;
   email: string;
   password: string;
+  /** captcha is the ALTCHA widget's payload, present when the human check is on.
+   * captcha 是 ALTCHA 组件的 payload，人机验证开启时携带。 */
+  captcha?: string;
 }
 
 /**
  * parseSignupBody validates the sign-up body's shape: three strings, none of
- * the identifying ones empty. Anything else is null.
+ * the identifying ones empty, and an optional string captcha. Anything else
+ * is null.
  *
- * parseSignupBody 校验注册请求体的形状：三个字符串，其中用于标识的两个不能为空。
- * 其余情况一律返回 null。
+ * parseSignupBody 校验注册请求体的形状：三个字符串，其中用于标识的两个不能为空，外加
+ * 一个可选的字符串 captcha。其余情况一律返回 null。
  */
 export function parseSignupBody(raw: string): SignupCredentials | null {
   let parsed: unknown;
@@ -62,7 +66,7 @@ export function parseSignupBody(raw: string): SignupCredentials | null {
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     return null;
   }
-  const { tenantName, email, password } = parsed as Record<string, unknown>;
+  const { tenantName, email, password, captcha } = parsed as Record<string, unknown>;
   if (
     typeof tenantName !== "string" ||
     typeof email !== "string" ||
@@ -70,10 +74,15 @@ export function parseSignupBody(raw: string): SignupCredentials | null {
   ) {
     return null;
   }
+  if (captcha !== undefined && typeof captcha !== "string") {
+    return null;
+  }
   if (tenantName.trim() === "" || email.trim() === "") {
     return null;
   }
-  return { tenantName, email, password };
+  return captcha === undefined
+    ? { tenantName, email, password }
+    : { tenantName, email, password, captcha };
 }
 
 /**

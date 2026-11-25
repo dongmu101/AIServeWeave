@@ -3,6 +3,7 @@ import {
   parseSignupBody,
   upstreamSignupDisposition,
 } from "@/lib/console/signup";
+import { verifyCaptcha } from "@/lib/server/captcha";
 import { serverConfig } from "@/lib/server/config";
 import { callControlPlane } from "@/lib/server/control-plane";
 import { errorResponse, readBoundedText } from "@/lib/server/responses";
@@ -17,7 +18,9 @@ import { exchangeCredentials } from "@/lib/server/sign-in";
  * forwarder.
  *
  * When the Console does not offer sign-up, the route answers 404 without
- * calling upstream, matching the page itself.
+ * calling upstream, matching the page itself. When the human check is on, a
+ * request without a verified ALTCHA solution gets 428 captcha_failed, also
+ * without calling upstream.
  *
  * If the tenant is created but the follow-up sign-in fails, the error from
  * that sign-in is returned. The account exists, and signing in by hand works
@@ -28,13 +31,15 @@ import { exchangeCredentials } from "@/lib/server/sign-in";
  * 让人直接进入控制台而不是停在登录表单上。与登录路由一样，它不属于转发白名单：它经手
  * 密码、以会话 cookie 收尾，两者都不该出现在通用转发器里。
  *
- * Console 不提供注册时，本路由不调用上游直接回答 404，与页面本身一致。
+ * Console 不提供注册时，本路由不调用上游直接回答 404，与页面本身一致。人机验证开启时，
+ * 没有校验通过的 ALTCHA 解的请求得到 428 captcha_failed，同样不调用上游。
  *
  * 如果租户已创建而随后的登录失败，返回的是那次登录的错误。账户已经存在，待失败的那一环
  * 恢复后手动登录即可；重试注册只会得到「邮箱已注册」。
  */
 export async function POST(request: Request): Promise<Response> {
-  if (!serverConfig().signupEnabled) {
+  const config = serverConfig();
+  if (!config.signupEnabled) {
     return errorResponse(404, "signup_disabled");
   }
   const trusted = isTrustedWrite({
@@ -54,6 +59,12 @@ export async function POST(request: Request): Promise<Response> {
   const credentials = parseSignupBody(raw);
   if (!credentials) {
     return errorResponse(400, "invalid_request");
+  }
+  // Checked before the control plane is called, so a failed check never
+  // counts against the deployment's hourly sign-up bound.
+  // 在调用控制面之前检查，失败的验证因此不会占用部署的每小时注册上限。
+  if (config.captchaEnabled && !(await verifyCaptcha(credentials.captcha, config.captchaSecrets))) {
+    return errorResponse(428, "captcha_failed");
   }
 
   const result = await callControlPlane({

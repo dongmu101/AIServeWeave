@@ -140,21 +140,24 @@ export async function request<T>(
 /**
  * signIn exchanges credentials for a session cookie and returns the signed-in
  * user. The password is in the body of one request and is never stored,
- * logged, or put into a URL.
+ * logged, or put into a URL. When the human check is on, `captcha` carries
+ * the ALTCHA widget's payload.
  *
  * signIn 用凭据换取一个会话 cookie，并返回已登录的用户。密码只出现在这一个请求的
- * 请求体里，绝不被存储、记录日志或放进 URL。
+ * 请求体里，绝不被存储、记录日志或放进 URL。人机验证开启时，`captcha` 携带 ALTCHA
+ * 组件的 payload。
  */
 export async function signIn(
   email: string,
   password: string,
-  deps: RequestDeps = {}
+  deps: RequestDeps & { captcha?: string } = {}
 ): Promise<SessionUserView> {
   const doFetch = deps.fetchImpl ?? globalThis.fetch;
+  const captcha = deps.captcha;
   const response = await send(
     doFetch,
     SESSION_ENDPOINT,
-    { method: "POST", body: { email, password } },
+    { method: "POST", body: captcha === undefined ? { email, password } : { email, password, captcha } },
     undefined
   );
   if (!response.ok) {

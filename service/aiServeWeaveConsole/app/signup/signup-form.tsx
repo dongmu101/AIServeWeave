@@ -8,6 +8,7 @@ import { Message } from "@/components/i18n/message";
 import * as React from "react";
 import { useRouter } from "next/navigation";
 
+import { CaptchaField, type CaptchaFieldHandle } from "@/components/console/captcha-field";
 import { FormError } from "@/components/console/states";
 import { SubmitButton } from "@/components/console/submit-button";
 import { Input } from "@/components/ui/input";
@@ -28,7 +29,7 @@ import {
  * 登录。与登录表单一样，密码只在一次提交期间存活于组件状态中，无论结果如何，尘埃落定即
  * 清除。
  */
-export function SignupForm({ next }: { next: string }) {
+export function SignupForm({ next, captchaEnabled }: { next: string; captchaEnabled: boolean }) {
   const router = useRouter();
   const [tenantName, setTenantName] = React.useState("");
   const [email, setEmail] = React.useState("");
@@ -36,10 +37,13 @@ export function SignupForm({ next }: { next: string }) {
   const [confirmPassword, setConfirmPassword] = React.useState("");
   const [pending, setPending] = React.useState(false);
   const [error, setError] = React.useState<React.ReactNode>(null);
+  const [captcha, setCaptcha] = React.useState<string | null>(null);
+  const captchaField = React.useRef<CaptchaFieldHandle>(null);
+  const awaitingCaptcha = captchaEnabled && captcha === null;
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (pending) {
+    if (pending || awaitingCaptcha) {
       return;
     }
     const problem = signupProblem({
@@ -59,14 +63,17 @@ export function SignupForm({ next }: { next: string }) {
         tenantName: tenantName.trim(),
         email: email.trim(),
         password,
+        ...(captcha === null ? {} : { captcha }),
       });
       setPassword("");
       setConfirmPassword("");
+      captchaField.current?.reset();
       router.replace(next);
       router.refresh();
     } catch (failure) {
       setPassword("");
       setConfirmPassword("");
+      captchaField.current?.reset();
       setError(<ErrorMessage error={failure} />);
       setPending(false);
     }
@@ -130,8 +137,9 @@ export function SignupForm({ next }: { next: string }) {
           disabled={pending}
         />
       </div>
+      {captchaEnabled ? <CaptchaField ref={captchaField} onChange={setCaptcha} /> : null}
       <FormError message={error} />
-      <SubmitButton pending={pending} size="lg">
+      <SubmitButton pending={pending} disabled={pending || awaitingCaptcha} size="lg">
         <Message id="auth.register" /></SubmitButton>
     </form>
   );

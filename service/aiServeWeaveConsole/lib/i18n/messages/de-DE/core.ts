@@ -32,6 +32,7 @@ const core = {
   "common.theServerReturnedAnUnrecognizedDataFormat": "Das Datenformat der Serverantwort wird nicht erkannt.",
   "common.thisEmailAddressIsAlreadyRegisteredSignIn": "Diese E-Mail-Adresse ist bereits registriert. Bitte direkt anmelden.",
   "common.tooManyRegistrationRequestsPleaseTryAgainLater": "Zu viele Registrierungsanfragen. Versuchen Sie es später erneut.",
+  "common.captchaFailed": "Die Prüfung, ob Sie ein Mensch sind, ist fehlgeschlagen oder abgelaufen. Bitte erneut bestätigen.",
   "common.selfRegistrationIsDisabledForThisDeploymentContact": "Die Selbstregistrierung ist in dieser Bereitstellung nicht aktiviert. Wenden Sie sich an den Bereitstellungsadministrator.",
   "common.noRecord": "Keine Einträge",
   "common.neverExpires": "Läuft nie ab",

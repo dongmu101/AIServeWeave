@@ -58,8 +58,8 @@ Next.js 服务端负责会话 Cookie 与受限的接口转发，控制面负责�
 
 | 功能 | 接口 | Console 页面 | 当前边界 |
 | --- | --- | --- | --- |
-| 登录与账户安全 | `POST /admin/v1/auth/login`、`DELETE /admin/v1/auth/session`、`POST /admin/v1/auth/{password,sessions/revoke}` | `/login`、`/console/account` | 退出会先撤销服务端会话；改密与撤销全部会话后重新登录 |
-| 租户自助注册 | `POST /admin/v1/auth/signup`，随后 `POST /admin/v1/auth/login` | `/signup` | 需同时开启控制面 `Signup.Enabled` 与 Console `AISW_CONSOLE_SIGNUP_ENABLED`；未开启时页面与 `/api/signup` 均为 404。经 Console 自己的 `/api/signup` 路由，不在转发白名单内；成功后自动以新 owner 登录 |
+| 登录与账户安全 | `POST /admin/v1/auth/login`、`DELETE /admin/v1/auth/session`、`POST /admin/v1/auth/{password,sessions/revoke}` | `/login`、`/console/account` | 退出会先撤销服务端会话；改密与撤销全部会话后重新登录。`AISW_CONSOLE_CAPTCHA_ENABLED=true` 时需先通过人机验证，见[人机验证](#人机验证) |
+| 租户自助注册 | `POST /admin/v1/auth/signup`，随后 `POST /admin/v1/auth/login` | `/signup` | 需同时开启控制面 `Signup.Enabled` 与 Console `AISW_CONSOLE_SIGNUP_ENABLED`；未开启时页面与 `/api/signup` 均为 404。经 Console 自己的 `/api/signup` 路由，不在转发白名单内；成功后自动以新 owner 登录；人机验证开启时同样需先通过 |
 | 用户 | `GET/POST /admin/v1/users`、`PUT/POST /admin/v1/users/:id/*` | `/console/users` | owner 可重置密码、改角色、禁用/启用和撤销会话；禁用永久吊销该用户创建的 Key |
 | 平台运维账户 | `/operator/v1/operators*`、`/operator/v1/auth/*` | `/operator/operators`、`/operator/account` | 平台会话独立；不能禁用自己或最后一名有效运维 |
 | API Key | `GET/POST /admin/v1/apikeys`、`DELETE /admin/v1/apikeys/:id` | `/console/keys` | 列表支持 `status`、`q` 筛选；owner/admin 可创建、吊销；member 只能吊销自己创建的 Key。吊销不幂等：重复吊销返回 `404` |
@@ -256,6 +256,17 @@ Playwright 结果、失败截图与 trace 位于 `test-results/`，指定窄屏�
 租户模型目录以 TanStack Table 列表展示，每个 Agent 只占一条主记录：Agent 列显示标识与连接状态，AI 服务列内使用子表列出该 Agent 的服务 ID、类型、健康、版本与模型数量；列表不展示模型 ID，需点“查看模型”在弹窗中查看。同一 Agent 的多个服务不会重复主记录。Agent 主表、服务子表和模型详情分别在当前已采集快照内每页显示 25 条，限制 DOM 行数。搜索覆盖当前快照的全部 Agent/服务/模型，不限于当前页，支持只看在线 Agent。完整模型 ID 与能力通过“查看模型”弹窗按需展示，详情打开时暂停自动刷新。计数与页数仅描述这次已采集快照，不是跨时间的机群总量。
 
 「查看模型」弹窗打开时读取本租户的模型价格（`GET /admin/v1/billing/prices`）。模型 ID 与有权使用的 API 模型别名完全一致时，显示当前价格方案下的基础档输入和输出售价，单位为点 / 百万 token。
+
+## 人机验证
+
+租户登录页 `/login` 与注册页 `/signup` 可启用 [ALTCHA](https://altcha.org)（MIT，npm `altcha`，版本锁定）人机验证：浏览器组件求解 Console 签发的工作量证明挑战，不调用任何第三方服务。默认关闭，设置 `AISW_CONSOLE_CAPTCHA_ENABLED=true` 开启（Compose 读取 `deploy/.env` 中的同名变量）。
+
+- `GET /api/captcha` 签发挑战（PBKDF2/SHA-256，5 分钟有效，`no-store`）；开关关闭时返回 404。签名密钥由 `AISW_CONSOLE_SESSION_SECRET` 按独立用途派生，无需另配。
+- `/api/session` 与 `/api/signup` 在请求控制面**之前**校验请求体中的 `captcha`。缺少或不通过时返回 `428 captcha_failed`，页面显示固定文案。注册的校验发生在控制面 `Signup.MaxPerHour` 计数之前，失败的尝试不占用配额。注册成功后的自动登录在服务端完成，不再校验。
+- 一个解只能用一次：校验通过的挑战签名记在进程内直到过期，重放返回 428。记录是**单实例**的，多副本部署时同一个解最多在每个副本各用一次。
+- 表单在验证通过前禁用提交，每次提交后（无论成败）重置组件。组件在挂载后动态加载，颜色跟随 Console 主题，语言随界面切换（八种语言）。
+- 平台运维登录 `/operator/login`、Studio 登录与控制面 API 不受影响。
+- 实现：`lib/server/captcha.ts`（签发、校验、防重放）、`app/api/captcha/route.ts`、`components/console/captcha-field.tsx`。
 
 ## 公开首页与法律条款
 

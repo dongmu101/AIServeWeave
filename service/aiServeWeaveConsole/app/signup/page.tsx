@@ -38,7 +38,7 @@ export default async function SignupPage({ searchParams }: { searchParams: Promi
           <p className="text-sm text-muted-foreground">
             <Message id="auth.createANewTenantAndBecomeItsOwner" /></p>
         </div>
-        <SignupForm next={target} />
+        <SignupForm next={target} captchaEnabled={serverConfig().captchaEnabled} />
         <p className="mt-4 text-xs text-muted-foreground"><Message id="site.signupConsent" values={{
           terms: <Link href={LEGAL_PATHS.terms} target="_blank" className="underline underline-offset-4"><Message id="site.terms" /></Link>,
           privacy: <Link href={LEGAL_PATHS.privacy} target="_blank" className="underline underline-offset-4"><Message id="site.privacy" /></Link>,

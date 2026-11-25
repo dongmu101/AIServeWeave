@@ -32,6 +32,7 @@ const core = {
   "common.theServerReturnedAnUnrecognizedDataFormat": "サーバーからのデータ形式を認識できません。",
   "common.thisEmailAddressIsAlreadyRegisteredSignIn": "このメールアドレスは登録済みです。そのままログインしてください。",
   "common.tooManyRegistrationRequestsPleaseTryAgainLater": "登録リクエストが多すぎます。しばらくしてから再試行してください。",
+  "common.captchaFailed": "ロボットでないことの確認に失敗したか、期限切れです。もう一度確認してください。",
   "common.selfRegistrationIsDisabledForThisDeploymentContact": "このデプロイではセルフサービス登録を利用できません。デプロイ管理者にお問い合わせください。",
   "common.noRecord": "記録なし",
   "common.neverExpires": "無期限",

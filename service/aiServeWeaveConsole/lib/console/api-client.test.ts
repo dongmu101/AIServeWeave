@@ -308,3 +308,19 @@ test("a request goes to the entry point its surface names", async () => {
     assert.equal(fake.calls[0]?.url, item.want, item.name);
   }
 });
+
+test("sign-in carries the captcha payload only when given, and reports a 428 as a failed check", async () => {
+  const identity = { user: { id: "u-1", tenantId: "t-1", email: "o@example.com", name: "O", role: "owner" }, expiresAt: "2026-09-06T12:00:00Z" };
+  const plain = recorder([json(200, identity)]);
+  await signIn("o@example.com", "pw", plain.deps);
+  assert.deepEqual(JSON.parse(plain.calls[0]!.body!), { email: "o@example.com", password: "pw" });
+
+  const checked = recorder([json(200, identity)]);
+  await signIn("o@example.com", "pw", { ...checked.deps, captcha: "cGF5bG9hZA==" });
+  assert.deepEqual(JSON.parse(checked.calls[0]!.body!), { email: "o@example.com", password: "pw", captcha: "cGF5bG9hZA==" });
+
+  const refused = recorder([json(428, { error: "captcha_failed" })]);
+  await assert.rejects(signIn("o@example.com", "pw", { ...refused.deps, captcha: "x" }), (error: unknown) =>
+    error instanceof ApiError && error.kind === "captcha_failed" && error.status === 428);
+  assert.equal(refused.calls.length, 1);
+});

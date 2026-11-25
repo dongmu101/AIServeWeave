@@ -31,7 +31,8 @@ export type ApiErrorKind =
   | "contract"
   | "email_taken"
   | "rate_limited"
-  | "signup_disabled";
+  | "signup_disabled"
+  | "captcha_failed";
 
 /**
  * MESSAGE_KEYS identifies the fixed copy shown for each kind. Upstream error text is never
@@ -64,6 +65,7 @@ const MESSAGE_KEYS: Record<ApiErrorKind, MessageKey> = {
   email_taken: "common.thisEmailAddressIsAlreadyRegisteredSignIn",
   rate_limited: "common.tooManyRegistrationRequestsPleaseTryAgainLater",
   signup_disabled: "common.selfRegistrationIsDisabledForThisDeploymentContact",
+  captcha_failed: "common.captchaFailed",
 };
 
 /**
@@ -113,6 +115,10 @@ export function kindForStatus(status: number): ApiErrorKind {
       return "not_found";
     case 409:
       return "conflict";
+    case 428:
+      // Only the sign-in and sign-up routes answer 428: the human check failed.
+      // 只有登录与注册路由会回答 428：人机验证未通过。
+      return "captcha_failed";
     default:
       return "server";
   }

@@ -32,6 +32,7 @@ const core = {
   "common.theServerReturnedAnUnrecognizedDataFormat": "The server returned an unrecognized data format.",
   "common.thisEmailAddressIsAlreadyRegisteredSignIn": "This email address is already registered. Sign in instead.",
   "common.tooManyRegistrationRequestsPleaseTryAgainLater": "Too many registration requests. Please try again later.",
+  "common.captchaFailed": "Human verification failed or expired. Please verify again.",
   "common.selfRegistrationIsDisabledForThisDeploymentContact": "Self-registration is disabled for this deployment. Contact your deployment administrator.",
   "common.noRecord": "No record",
   "common.neverExpires": "Never expires",

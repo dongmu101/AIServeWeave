@@ -41,7 +41,11 @@ export default async function LoginPage({
           <p className="text-sm text-muted-foreground">
             <Message id="auth.signInWithYourEmailAndPassword" /></p>
         </div>
-        <LoginForm next={target} signupEnabled={serverConfig().signupEnabled} />
+        <LoginForm
+          next={target}
+          signupEnabled={serverConfig().signupEnabled}
+          captchaEnabled={serverConfig().captchaEnabled}
+        />
       </div>
     </main>
     <SiteFooter />

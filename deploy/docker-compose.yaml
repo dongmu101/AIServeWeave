@@ -483,6 +483,9 @@ services:
       # Public Studio address linked from the console header; empty hides the entry.
       # 控制台顶栏 Studio 入口的公开地址；留空时不显示入口。
       AISW_CONSOLE_STUDIO_URL: ${AISW_CONSOLE_STUDIO_URL:-}
+      # ALTCHA human check on tenant sign-in and sign-up; off unless set to true.
+      # 租户登录与注册的 ALTCHA 人机验证；设为 true 才开启。
+      AISW_CONSOLE_CAPTCHA_ENABLED: ${AISW_CONSOLE_CAPTCHA_ENABLED:-false}
       # Shared with Studio: seals the ticket that signs a Console user into
       # Studio without a password. Empty makes the entry a plain link.
       # 与 Studio 共用：密封让 Console 用户免密码登录 Studio 的票据；为空时入口只是普通链接。

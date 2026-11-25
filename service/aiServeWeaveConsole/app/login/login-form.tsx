@@ -9,6 +9,7 @@ import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
+import { CaptchaField, type CaptchaFieldHandle } from "@/components/console/captcha-field";
 import { FormError } from "@/components/console/states";
 import { SubmitButton } from "@/components/console/submit-button";
 import { buttonVariants } from "@/components/ui/button";
@@ -31,26 +32,32 @@ import { cn } from "cn";
 export function LoginForm({
   next,
   signupEnabled,
+  captchaEnabled,
 }: {
   next: string;
   signupEnabled: boolean;
+  captchaEnabled: boolean;
 }) {
   const router = useRouter();
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
   const [pending, setPending] = React.useState(false);
   const [error, setError] = React.useState<React.ReactNode>(null);
+  const [captcha, setCaptcha] = React.useState<string | null>(null);
+  const captchaField = React.useRef<CaptchaFieldHandle>(null);
+  const awaitingCaptcha = captchaEnabled && captcha === null;
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (pending) {
+    if (pending || awaitingCaptcha) {
       return;
     }
     setPending(true);
     setError(null);
     try {
-      await signIn(email.trim(), password);
+      await signIn(email.trim(), password, captcha === null ? {} : { captcha });
       setPassword("");
+      captchaField.current?.reset();
       // replace, not push: a signed-in person pressing Back should not land on
       // a sign-in form that will only redirect them forward again.
       //
@@ -60,6 +67,7 @@ export function LoginForm({
       router.refresh();
     } catch (failure) {
       setPassword("");
+      captchaField.current?.reset();
       setError(<ErrorMessage error={failure} />);
       setPending(false);
     }
@@ -96,8 +104,9 @@ export function LoginForm({
           className="h-10 px-3"
         />
       </div>
+      {captchaEnabled ? <CaptchaField ref={captchaField} onChange={setCaptcha} /> : null}
       <FormError message={error} />
-      <SubmitButton pending={pending} size="lg" className="h-10 w-full text-sm">
+      <SubmitButton pending={pending} disabled={pending || awaitingCaptcha} size="lg" className="h-10 w-full text-sm">
         <Message id="auth.signIn" /></SubmitButton>
       {signupEnabled ? (
         <>

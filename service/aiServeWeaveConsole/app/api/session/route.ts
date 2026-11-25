@@ -1,5 +1,7 @@
 import { isTrustedWrite } from "@/lib/console/request-origin";
 import { logoutDisposition } from "@/lib/console/session-revocation";
+import { verifyCaptcha } from "@/lib/server/captcha";
+import { serverConfig } from "@/lib/server/config";
 import { callControlPlane } from "@/lib/server/control-plane";
 import {
   errorResponse,
@@ -23,9 +25,12 @@ import { exchangeCredentials } from "@/lib/server/sign-in";
  */
 
 /**
- * POST exchanges an email and password for a session cookie.
+ * POST exchanges an email and password for a session cookie. When the human
+ * check is on, a verified ALTCHA solution must come first; without one the
+ * control plane is never asked, and the answer is 428 captcha_failed.
  *
- * POST 用邮箱与密码换取一个会话 cookie。
+ * POST 用邮箱与密码换取一个会话 cookie。人机验证开启时须先有一个校验通过的 ALTCHA
+ * 解；没有时根本不询问控制面，回答 428 captcha_failed。
  */
 export async function POST(request: Request): Promise<Response> {
   if (!trusted(request)) {
@@ -40,7 +45,11 @@ export async function POST(request: Request): Promise<Response> {
   if (!credentials) {
     return errorResponse(400, "invalid_request");
   }
-  return exchangeCredentials(credentials);
+  const config = serverConfig();
+  if (config.captchaEnabled && !(await verifyCaptcha(credentials.captcha, config.captchaSecrets))) {
+    return errorResponse(428, "captcha_failed");
+  }
+  return exchangeCredentials({ email: credentials.email, password: credentials.password });
 }
 
 /**
@@ -86,7 +95,7 @@ function trusted(request: Request): boolean {
  */
 function credentialsFrom(
   raw: string
-): { email: string; password: string } | null {
+): { email: string; password: string; captcha?: string } | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -96,12 +105,15 @@ function credentialsFrom(
   if (typeof parsed !== "object" || parsed === null) {
     return null;
   }
-  const { email, password } = parsed as Record<string, unknown>;
+  const { email, password, captcha } = parsed as Record<string, unknown>;
   if (typeof email !== "string" || typeof password !== "string") {
+    return null;
+  }
+  if (captcha !== undefined && typeof captcha !== "string") {
     return null;
   }
   if (email === "") {
     return null;
   }
-  return { email, password };
+  return captcha === undefined ? { email, password } : { email, password, captcha };
 }

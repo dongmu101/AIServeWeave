@@ -27,6 +27,8 @@
 
 ## 顶栏 Studio 入口（2026-11-17）
 
+人机验证（2026-11-25）：租户 `/login` 与 `/signup` 可启用 ALTCHA（`altcha` 3.7.0，MIT，自托管工作量证明），开关 `AISW_CONSOLE_CAPTCHA_ENABLED` 默认关闭，Compose 与 `deploy/.env.example` 已同步。挑战由 `GET /api/captcha` 签发，`/api/session`、`/api/signup` 在请求控制面之前校验，失败返回 `428 captcha_failed`。防重放记录是进程级的，多副本时同一个解可在每个副本各用一次。运维登录与 Studio 不变。验证：lint、typecheck、生产构建、456 项单元测试通过；在本地生产构建上用真实浏览器走通了组件勾选与按钮解禁；用脚本验证了缺少、伪造、重放返回 428，有效解放行到上游；关闭开关时行为不变。未在接入真实控制面的线上环境验收。
+
 设置 `AISW_CONSOLE_STUDIO_URL`（Studio 的公开地址，可带路径前缀）后，控制台顶栏在客服链接左侧显示「Studio」，在新分页打开；未设置或不是绝对 http(s) URL 时不显示。Studio 有自己的登录，这里只是链接。实现在 `lib/server/config.ts` 的 `studioUrl`、`app/console/console-shell.tsx`；Compose 与 `deploy/.env.example` 已同步。
 
 验证：lint、typecheck、409 项单元测试与生产构建通过。未在浏览器中查看，未接真实 Studio。
@@ -93,13 +95,13 @@ Console 通过服务端调用控制面的 Admin/Operator API；Job 取消与产�
 
 | 能力 | 已有接口 | Console 接入边界 |
 | --- | --- | --- |
-| 登录 | `POST /admin/v1/auth/login`、`DELETE /admin/v1/auth/session`、`POST /admin/v1/auth/{password,sessions/revoke}` | Redis 可吊销会话；无 refresh 接口 |
+| 登录 | `POST /admin/v1/auth/login`、`DELETE /admin/v1/auth/session`、`POST /admin/v1/auth/{password,sessions/revoke}` | Redis 可吊销会话；无 refresh 接口；`AISW_CONSOLE_CAPTCHA_ENABLED` 开启时 `/api/session` 先校验 ALTCHA 人机验证（失败 `428`），控制面不感知 |
 | 用户 | `GET/POST /admin/v1/users`、`PUT/POST /admin/v1/users/:id/*` | 登录用户可读；owner 可创建、重置密码、改角色、禁用/启用与撤销会话 |
 | API Key | `GET/POST /admin/v1/apikeys`、`DELETE /admin/v1/apikeys/:id` | 登录用户可读本租户列表；owner/admin 可创建与吊销；member 仅可吊销自己创建的 Key |
 | 租户配额 | `GET /admin/v1/tenants/current`、`PUT /admin/v1/tenants/limits` | 全部登录角色可读；owner/admin 可整组写入，零表示不限制 |
 | 审计 | `GET /admin/v1/audit` | 全部登录角色可读本租户审计；支持 `limit`、`cursor`、`action`、`actor_id`、`since`、`until`，不提供总数 |
 | 租户引导 | `POST /admin/v1/tenants` | 需要 BootstrapToken；不接入常规 Console 会话 |
-| 租户自助注册 | `POST /admin/v1/auth/signup` | `/signup` 页面 + `/api/signup` 路由，双开关（控制面 `Signup.Enabled`、Console `AISW_CONSOLE_SIGNUP_ENABLED`）；成功后经与登录共用的 `lib/server/sign-in.ts` 建立会话 |
+| 租户自助注册 | `POST /admin/v1/auth/signup` | `/signup` 页面 + `/api/signup` 路由，双开关（控制面 `Signup.Enabled`、Console `AISW_CONSOLE_SIGNUP_ENABLED`）；成功后经与登录共用的 `lib/server/sign-in.ts` 建立会话；人机验证开启时在调用控制面之前校验 |
 | 预充值计费 | `GET /admin/v1/billing`、`POST /admin/v1/billing/{checkout,portal}`、`POST /admin/v1/billing/accounts/:id/checkout`、`GET /admin/v1/billing/{ledger,orders}`；运维 `/operator/v1/billing/*` | 支付端点仅在控制面 `Billing.Enabled` 时挂载，否则 `404`；余额、账号和账目也可由 `AccountSales.Enabled` 独立开启；全部登录角色可读，owner/admin 可结账与打开门户（member `403`）；`503` 表示控制面联系 Dodo 失败 |
 | Gateway 校验 | `POST /internal/v1/apikeys/verify` | 需要 InternalToken；Console 不调用、不持有该密钥 |
 

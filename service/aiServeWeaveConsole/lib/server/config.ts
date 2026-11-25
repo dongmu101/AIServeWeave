@@ -1,4 +1,7 @@
+import { createHmac } from "node:crypto";
+
 import { deriveSessionKey } from "@/lib/console/session-payload";
+import type { CaptchaSecrets } from "@/lib/server/captcha";
 import { handoffKey } from "@/lib/console/studio-handoff";
 
 /**
@@ -59,6 +62,19 @@ export interface ServerConfig {
    * Signup.Enabled 一致：本开关只决定 Console 展示什么，控制面未开启时注册仍会在
    * 那里以 404 失败。 */
   signupEnabled: boolean;
+  /** captchaEnabled puts ALTCHA's human check on the tenant sign-in and
+   * sign-up pages and makes their routes require a verified solution.
+   *
+   * captchaEnabled 在租户登录页与注册页启用 ALTCHA 人机验证，并要求对应路由校验通过
+   * 的解。 */
+  captchaEnabled: boolean;
+  /** captchaSecrets sign ALTCHA challenges. They are derived from the
+   * session secret under their own labels, so they need no configuration of
+   * their own and reveal nothing about the session key.
+   *
+   * captchaSecrets 用于签名 ALTCHA 挑战。它们以独立用途标签从会话密钥派生，因此无需
+   * 单独配置，也不泄露会话密钥的任何信息。 */
+  captchaSecrets: CaptchaSecrets;
 }
 
 /** cached holds the resolved configuration for the life of the process.
@@ -84,10 +100,11 @@ export function serverConfig(): ServerConfig {
   if (cached) {
     return cached;
   }
+  const sessionKey = deriveSessionKey(sessionSecret());
   cached = {
     controlPlaneUrl: controlPlaneUrl(),
     gatewayUrl: gatewayUrl(),
-    sessionKey: deriveSessionKey(sessionSecret()),
+    sessionKey,
     cookieSecure: flag(
       process.env.AISW_CONSOLE_COOKIE_SECURE,
       process.env.NODE_ENV === "production"
@@ -97,6 +114,11 @@ export function serverConfig(): ServerConfig {
       DEFAULT_TIMEOUT_MS
     ),
     signupEnabled: flag(process.env.AISW_CONSOLE_SIGNUP_ENABLED, false),
+    captchaEnabled: flag(process.env.AISW_CONSOLE_CAPTCHA_ENABLED, false),
+    captchaSecrets: {
+      signature: subkey(sessionKey, "aisw-console-captcha-signature-v1"),
+      keySignature: subkey(sessionKey, "aisw-console-captcha-key-signature-v1"),
+    },
   };
   return cached;
 }
@@ -268,6 +290,13 @@ function sessionSecret(): string {
     "[console] AISW_CONSOLE_SESSION_SECRET is unset; using an ephemeral development secret. Sessions end when this process restarts."
   );
   return crypto.randomUUID() + crypto.randomUUID();
+}
+
+/** subkey derives a purpose-bound hex key from the session key.
+ *
+ * subkey 从会话密钥派生一把绑定用途的十六进制密钥。 */
+function subkey(sessionKey: Buffer, label: string): string {
+  return createHmac("sha256", sessionKey).update(label).digest("hex");
 }
 
 /** flag reads a boolean environment variable.

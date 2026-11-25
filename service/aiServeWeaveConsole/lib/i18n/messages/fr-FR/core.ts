@@ -32,6 +32,7 @@ const core = {
   "common.theServerReturnedAnUnrecognizedDataFormat": "Le format des données renvoyées par le serveur n’est pas reconnu.",
   "common.thisEmailAddressIsAlreadyRegisteredSignIn": "Cette adresse e-mail est déjà inscrite. Connectez-vous directement.",
   "common.tooManyRegistrationRequestsPleaseTryAgainLater": "Demandes d’inscription trop fréquentes. Réessayez plus tard.",
+  "common.captchaFailed": "La vérification humaine a échoué ou a expiré. Veuillez recommencer.",
   "common.selfRegistrationIsDisabledForThisDeploymentContact": "L’inscription autonome n’est pas ouverte sur ce déploiement. Contactez son administrateur.",
   "common.noRecord": "Aucun enregistrement",
   "common.neverExpires": "N’expire jamais",

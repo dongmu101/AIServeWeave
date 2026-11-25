@@ -32,6 +32,7 @@ const core = {
   "common.theServerReturnedAnUnrecognizedDataFormat": "服务端返回的数据格式无法识别。",
   "common.thisEmailAddressIsAlreadyRegisteredSignIn": "该邮箱已注册，请直接登录。",
   "common.tooManyRegistrationRequestsPleaseTryAgainLater": "注册请求过于频繁，请稍后再试。",
+  "common.captchaFailed": "人机验证未通过或已过期，请重新验证。",
   "common.selfRegistrationIsDisabledForThisDeploymentContact": "当前部署未开放自助注册，请联系部署管理员。",
   "common.noRecord": "无记录",
   "common.neverExpires": "永不过期",

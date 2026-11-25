@@ -32,6 +32,7 @@ const core = {
   "common.theServerReturnedAnUnrecognizedDataFormat": "伺服器回傳的資料格式無法辨識。",
   "common.thisEmailAddressIsAlreadyRegisteredSignIn": "此電子郵件已註冊，請直接登入。",
   "common.tooManyRegistrationRequestsPleaseTryAgainLater": "註冊請求過於頻繁，請稍後再試。",
+  "common.captchaFailed": "人機驗證未通過或已過期，請重新驗證。",
   "common.selfRegistrationIsDisabledForThisDeploymentContact": "此部署未開放自助註冊，請聯絡部署管理員。",
   "common.noRecord": "無紀錄",
   "common.neverExpires": "永不過期",

@@ -32,6 +32,7 @@ const core = {
   "common.theServerReturnedAnUnrecognizedDataFormat": "서버가 반환한 데이터 형식을 인식할 수 없습니다.",
   "common.thisEmailAddressIsAlreadyRegisteredSignIn": "이 이메일은 이미 등록되어 있습니다. 바로 로그인하세요.",
   "common.tooManyRegistrationRequestsPleaseTryAgainLater": "등록 요청이 너무 많습니다. 잠시 후 다시 시도하세요.",
+  "common.captchaFailed": "사람 확인에 실패했거나 만료되었습니다. 다시 확인하세요.",
   "common.selfRegistrationIsDisabledForThisDeploymentContact": "현재 배포에서는 셀프 등록을 제공하지 않습니다. 배포 관리자에게 문의하세요.",
   "common.noRecord": "기록 없음",
   "common.neverExpires": "만료 없음",
