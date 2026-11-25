@@ -61,10 +61,18 @@ export function NodesView({ role }: { role: string }) {
     finally { inFlight.current = false; setPending(false); }
   }
 
+  // Keep the last loaded list while a reload is in flight or has failed. The install
+  // panel and the ZIP section hold a one-time credential in their own memory; letting
+  // a reload swap them for the loading state would unmount them and lose it.
+  // 重载进行中或失败时保留上一次读到的列表。安装面板与 ZIP 区在自身内存里保存一次性凭据；
+  // 让重载把它们换成加载态会卸载组件并丢掉凭据。
+  const [lastData, setLastData] = React.useState(nodes.data);
+  if (nodes.data !== null && nodes.data !== lastData) setLastData(nodes.data);
+
   if (nodes.errorKind === "not_found") {
     return <EmptyState title={t("tenant.nodesDisabled")} description={t("tenant.nodesDisabledDescription")} />;
   }
-  const data = nodes.data;
+  const data = nodes.data ?? lastData;
   // Deleted (revoked) nodes are not shown. / 已删除（吊销）的节点不显示。
   const visibleNodes = data ? data.items.filter((node) => node.revokedAt === null && node.status !== "revoked") : [];
   const full = data !== null && data !== undefined && activeNodeCount(data) >= data.maxPerTenant;
@@ -74,7 +82,7 @@ export function NodesView({ role }: { role: string }) {
       <h1 className="font-heading text-xl font-semibold tracking-tight"><Message id="tenant.myNodes" /></h1>
       <p className="mt-2 text-sm text-muted-foreground"><Message id="tenant.myNodesIntro" /></p>
     </div>
-    {nodes.error ? <ErrorState message={nodes.error} onRetry={nodes.reload} /> : !data ? <LoadingState rows={3} /> : <>
+    {!data ? (nodes.error ? <ErrorState message={nodes.error} onRetry={nodes.reload} /> : <LoadingState rows={3} />) : <>
       {canManage ? <>
         <p className="text-sm text-muted-foreground"><Message id="tenant.nodeLimits" values={{ active: activeNodeCount(data), max: data.maxPerTenant, daily: data.maxCreatesPerDay }} /></p>
         <AgentInstallPanel path="/admin/v1/nodes/install-codes" parse={parseTenantInstall} extraBody={full ? null : {}} onIssued={nodes.reload} />
@@ -97,7 +105,7 @@ export function NodesView({ role }: { role: string }) {
           </section> : null}
         </details>
       </> : <p className="text-sm text-muted-foreground"><Message id="tenant.nodesReadOnly" /></p>}
-      {visibleNodes.length === 0 ? <EmptyState title={t("tenant.noNodes")} description={t("tenant.noNodesDescription")} /> : <ul className="grid gap-3">
+      {nodes.error ? <ErrorState message={nodes.error} onRetry={nodes.reload} /> : visibleNodes.length === 0 ? <EmptyState title={t("tenant.noNodes")} description={t("tenant.noNodesDescription")} /> : <ul className="grid gap-3">
         {visibleNodes.map((node) => <li key={node.nodeId}><NodeCard node={node} canManage={canManage} onDeleted={nodes.reload} /></li>)}
       </ul>}
     </>}
