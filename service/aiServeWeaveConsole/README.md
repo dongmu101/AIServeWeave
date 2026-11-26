@@ -281,7 +281,7 @@ Playwright 结果、失败截图与 trace 位于 `test-results/`，指定窄屏�
 
 公开页头可进入 API 文档，首页也直达 `/pricing#models`。登录后概览提供创建 Key、配置客户端、复制首次请求示例和用量入口。从价格页购买会在注册或登录后回到对应计费标签。
 
-首页、价格、条款、登录与注册页底部都有统一页脚（价格与三份条款的链接、营运方名称与联系邮箱）；注册页注明「创建账号即表示同意服务条款与隐私政策」，Console 计费页注明购买须遵守服务条款与退款政策。这些页面允许搜索引擎索引，其余页面仍为 `noindex`。
+首页、价格、条款、登录与注册页底部都有统一页脚（价格与三份条款的链接、Folkbench 收录徽章、营运方名称与联系邮箱）；注册页注明「创建账号即表示同意服务条款与隐私政策」，Console 计费页注明购买须遵守服务条款与退款政策。这些页面允许搜索引擎索引，其余页面仍为 `noindex`。
 
 - **正文**写在 `lib/legal/content/`，有英文、简体中文、繁体中文三个版本，以英文为准；其他界面语言显示英文正文并附提示。修改正文时同步三个版本并更新 `lib/legal/types.ts` 的 `LEGAL_UPDATED`；`lib/legal/legal.test.ts` 会检查三个版本的章节结构一致。
 - **营运方资讯**从环境变量读取（见 [.env.example](.env.example)）：`AISW_CONSOLE_LEGAL_SERVICE_NAME`（默认 AIServeWeave）、`_COMPANY`、`_ADDRESS`、`_EMAIL`、`_JURISDICTION`、`_REFUND_WINDOW_DAYS`。未设置或格式不对时显示方括号占位符，服务端首次渲染时打印警告，**上线前必须填写**。

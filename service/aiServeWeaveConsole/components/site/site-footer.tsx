@@ -12,6 +12,14 @@ import { cn } from "@/lib/utils";
  * LEGAL_PATHS 是每个页脚都指向的公开页面。 */
 export const LEGAL_PATHS = { terms: "/terms", privacy: "/privacy", refund: "/refund", pricing: "/pricing" } as const;
 
+/** FOLKBENCH_BADGE is the third-party listing badge shown next to the legal links.
+ *
+ * FOLKBENCH_BADGE 是显示在法律链接旁的第三方收录徽章。 */
+const FOLKBENCH_BADGE = {
+  href: "https://folkbench.com/services/merchant-b03836a6-3ec?utm_source=badge&utm_medium=merchant&utm_campaign=merchant-b03836a6-3ec",
+  src: "https://folkbench.com/badge/merchant-b03836a6-3ec.svg",
+} as const;
+
 /**
  * SiteFooter is the footer of every public page: links to pricing and the
  * legal documents, the operator's name and how to reach them. Payment
@@ -36,6 +44,15 @@ export async function SiteFooter({ className }: { className?: string }) {
           <Link href={LEGAL_PATHS.terms} className={link}>{t("site.terms")}</Link>
           <Link href={LEGAL_PATHS.privacy} className={link}>{t("site.privacy")}</Link>
           <Link href={LEGAL_PATHS.refund} className={link}>{t("site.refund")}</Link>
+          <a
+            href={FOLKBENCH_BADGE.href}
+            target="_blank"
+            rel="noopener"
+            className="inline-flex items-center"
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element -- third-party SVG badge served by Folkbench, not a Next-optimized asset */}
+            <img src={FOLKBENCH_BADGE.src} alt="Folkbench 中转站检测" height={28} className="h-7 w-auto" />
+          </a>
         </nav>
         <div className="space-y-1 sm:max-w-md sm:text-right">
           <p>{t("site.copyright", { year: new Date().getUTCFullYear(), company: entity.company })}</p>
