@@ -48,6 +48,10 @@ var (
 // 该限额重置的时刻，事件没有说明时为零值。
 type quotaError struct {
 	resetsAt time.Time
+	// scope is the model the refusal covers, "" for the whole account (see
+	// quotaScope).
+	// scope 是该拒绝覆盖的模型，整个账户时为 ""（见 quotaScope）。
+	scope string
 }
 
 func (e *quotaError) Error() string { return errQuotaExhausted.Error() }

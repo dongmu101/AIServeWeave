@@ -232,14 +232,23 @@ func (r *Runtime) wrap(operation string, err error) error {
 		// 告诉它这个账户要搁置多久。
 		rtErr.Retryable = true
 		var quota *quotaError
-		if errors.As(err, &quota) && !quota.resetsAt.IsZero() {
-			rtErr.RetryAfter = max(quota.resetsAt.Sub(r.deps.Clock.Now()), 0)
+		switch {
+		case errors.As(err, &quota):
+			if !quota.resetsAt.IsZero() {
+				rtErr.RetryAfter = max(quota.resetsAt.Sub(r.deps.Clock.Now()), 0)
+			}
 			// Codex's limits are the account's (its general metering bucket
 			// covers every model), so the whole account is held until the
-			// reset rather than asked again (see quotaHeld).
+			// reset rather than asked again (see quotaHeld); without a
+			// readable reset the guard holds it for a backoff.
 			// Codex 的限额属于整个账户（其通用计量桶覆盖所有模型），因此整个账户被搁置到
-			// 重置，而不是再去询问（见 quotaHeld）。
+			// 重置，而不是再去询问（见 quotaHeld）；读不到重置时刻时，守卫按退避时长搁置。
 			r.deps.QuotaRefused(r.cfg.ID, "", quota.resetsAt)
+		case errors.Is(err, errRateLimited):
+			// The image allowance is spent and Codex gives no reset: only
+			// image turns are held, for the guard's backoff.
+			// 生图额度用完且 Codex 不给出重置时刻：只搁置生图回合，时长为守卫的退避时长。
+			r.deps.QuotaRefused(r.cfg.ID, ImageModelID, time.Time{})
 		}
 		// The refusal is news the reported quota snapshot should carry now,
 		// not at the next periodic pass.

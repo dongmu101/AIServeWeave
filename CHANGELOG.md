@@ -25,6 +25,7 @@ before upgrading; do not assume a `0.x` bump is safe by default.
   - Gateway 新增指标 `gateway_scheduler_quota_first_choice_total{tier}`、`gateway_scheduler_quota_rate_limited_total{tier}`、`gateway_scheduler_quota_cooldown_spread_total`。
   - Agent 额度监视在有窗口用到 80% 时每分钟刷新；Claude Code 的 `rate_limit_event`（`allowed_warning`/`rejected`）与 Codex 的额度失败触发立即刷新（受每分钟一批约束）。`runtime.Dependencies` 新增可选的 `Quota`（`runtime.QuotaGuard` 接口：`Notice`、`Refused`、`Hold`）。覆盖所有模型的窗口已用完的账户不按每分钟刷新。
   - Agent 已知账户用完时在本地作答：Claude Code 的 Messages、Codex 的对话与生图在回合开始前询问额度监视器，用量读数显示适用窗口到 100%（重置尚未到来），或 CLI 报告了带重置时间的拒绝时，直接答复可重试的 `rate_limited`（`retry_after` 到重置为止），不启动 CLI、不向服务商发出只会被拒绝的请求；拒绝后至少 2 分钟的读数显示未用完时提前解除，最多搁置 8 天。开启额外用量的 Claude 账户到 100% 后同样被搁置。
+  - Agent 对没有可用重置时间的额度拒绝（未给出或已过去；Codex 补读窗口失败、生图额度用完；Claude 无 `rejected` 事件的上游 429）也在本地按退避搁置：1 分钟起，1 小时内再被拒即翻倍，至多 1 小时，读数不提前解除。此前这类拒绝不搁置，后续回合仍会发往服务商。Claude 的这种 429 改报可重试的 `rate_limited`（此前为 `upstream`）。`runtime.QuotaGuard.Refused` 的约定随之改为「零或已过的 `resetsAt` 表示重置时间未知，由守卫按退避搁置」。
   - Gateway：CLI 订阅账户连续不带重置时间被拒时，限流冷却逐次翻倍（30s 起，至多 `-max-rate-limit-cooldown`），一次成功后复位；其他后端仍为固定时长。
   - 升级顺序不限，两侧各自生效。见 [Gateway STATUS「按订阅额度主动降级」](service/aiServeWeaveGateway/STATUS.md#按订阅额度主动降级)。
 

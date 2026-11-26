@@ -66,6 +66,10 @@ type Monitor struct {
 	// holds are the refusals Refused recorded (guard.go). Guarded by mu.
 	// holds 是 Refused 记录的拒绝（guard.go）。受 mu 保护。
 	holds []quotaHold
+	// backoffs remembers each scope's last guessed hold (guard.go). Guarded
+	// by mu.
+	// backoffs 记住每个范围最近一次推测搁置（guard.go）。受 mu 保护。
+	backoffs map[holdKey]quotaBackoff
 }
 
 // HotPercent is the used percentage at which Run refreshes every

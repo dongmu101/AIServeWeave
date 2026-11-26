@@ -562,10 +562,18 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 			if envelope.Error != "" && loginRefreshBusy(line) {
 				refreshBusy = true
 			}
+			// The upstream answered 429 after the CLI's own retries, with no
+			// rejected rate_limit_event to say which limit: still a refusal,
+			// held for the refused model, not a broken CLI.
+			// CLI 自己重试之后上游仍答复 429，且没有 rejected 的 rate_limit_event 说明是哪个
+			// 限额：这仍是一次拒绝，搁置被拒绝的模型，而不是 CLI 故障。
+			if envelope.Error == "rate_limit" && quota == nil {
+				quota = &quotaError{scope: s.request.Model}
+			}
 		case "user":
 		case "rate_limit_event":
 			if envelope.RateLimitInfo.Status == "rejected" {
-				quota = &quotaError{}
+				quota = &quotaError{scope: quotaScope(envelope.RateLimitInfo.RateLimitType, s.request.Model)}
 				if envelope.RateLimitInfo.ResetsAt > 0 {
 					quota.resetsAt = time.Unix(envelope.RateLimitInfo.ResetsAt, 0)
 				}
@@ -573,7 +581,7 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 		case "result":
 			if envelope.IsError || envelope.Subtype != "success" || len(final) == 0 || active {
 				if quota != nil {
-					return nil, quota
+					return nil, s.refusedWithoutReset(quota)
 				}
 				if refreshBusy || loginRefreshBusy(line) {
 					return nil, errLoginRefreshBusy
@@ -858,7 +866,7 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 	}
 	if !finished {
 		if quota != nil {
-			return nil, quota
+			return nil, s.refusedWithoutReset(quota)
 		}
 		if refreshBusy {
 			return nil, errLoginRefreshBusy
@@ -866,4 +874,19 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 		return nil, errMissingResult
 	}
 	return final, nil
+}
+
+// refusedWithoutReset records a refusal that failed the round without a
+// reset, so the guard holds its scope for a backoff (runtime.QuotaGuard
+// .Refused); one with a reset was already recorded when its rate_limit_event
+// arrived. It returns quota.
+//
+// refusedWithoutReset 记录一次让回合失败、却没有重置时刻的拒绝，使守卫按退避时长搁置其
+// 范围（runtime.QuotaGuard.Refused）；带重置时刻的拒绝在其 rate_limit_event 到达时已经
+// 记录。返回 quota。
+func (s *messagesSession) refusedWithoutReset(quota *quotaError) error {
+	if quota.resetsAt.IsZero() && s.quotaRefused != nil {
+		s.quotaRefused(quota.scope, time.Time{})
+	}
+	return quota
 }

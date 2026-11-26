@@ -46,11 +46,14 @@ type QuotaGuard interface {
 	// Refused records that runtimeID's account refused a request for model
 	// until resetsAt, as the upstream reported. An empty model means the
 	// refusing limit covers every model of the account. A zero or past
-	// resetsAt records nothing beyond Notice.
+	// resetsAt means the reset is unknown; the guard still holds the scope,
+	// for a backoff of its own choosing, so an account whose reset cannot be
+	// learned is not sent request after request it can only refuse.
 	//
 	// Refused 记录 runtimeID 的账户拒绝了 model 的请求，按上游的报告直到 resetsAt。model
-	// 为空表示拒绝它的限额覆盖该账户的所有模型。resetsAt 为零或已过时，除 Notice 之外
-	// 不记录任何东西。
+	// 为空表示拒绝它的限额覆盖该账户的所有模型。resetsAt 为零或已过时表示重置时刻未知；
+	// 守卫仍会按自己选择的退避时长搁置该范围，使读不到重置时刻的账户不会被一个接一个地
+	// 发送只能被拒绝的请求。
 	Refused(runtimeID, model string, resetsAt time.Time)
 	// Hold reports whether runtimeID's account is known to refuse model
 	// right now, and how long until its quota may be back.

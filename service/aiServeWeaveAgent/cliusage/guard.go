@@ -27,6 +27,9 @@ import (
 //     quotaHoldSettle after the refusal that no longer shows the refusing
 //     scope spent ends it early: the quota came back (a plan change, an early
 //     reset) and the usage query, which runs no inference, found out.
+//   - A refusal without a usable reset (none given, or one already past).
+//     It holds for a backoff that doubles with each repeat, from
+//     unknownResetHold up to maxUnknownResetHold, and only expiry ends it.
 //
 // The Gateway learns of a hold the same way it learns of a real refusal: a
 // rate_limited answer whose RetryAfter runs to the reset, so it sets the
@@ -46,6 +49,8 @@ import (
 //     之前的空档，以及完全读不到用量的账户。在拒绝之后至少 quotaHoldSettle 才获取、且
 //     不再显示拒绝范围用完的读数会提前结束它：额度已经恢复（套餐变化、提前重置），发现
 //     这一点的是不运行推理的用量查询。
+//   - 没有可用重置时刻的拒绝（没有给出，或给出的已经过去）。它搁置一段退避时长，每次重复
+//     加倍，从 unknownResetHold 到至多 maxUnknownResetHold，只有到期才会结束。
 //
 // Gateway 得知搁置的方式与得知真实拒绝相同：一个 RetryAfter 指向重置时刻的 rate_limited
 // 应答，于是它把该账户放到一边，不再询问。
@@ -69,6 +74,46 @@ const quotaHoldSettle = 2 * time.Minute
 // 更长：一次拒绝至多搁置这么久，重置时刻更远的读数不搁置任何东西。
 const maxQuotaHold = 8 * 24 * time.Hour
 
+// unknownResetHold is how long a refusal without a usable reset holds the
+// scope it refused the first time: the upstream gave no reset, or one already
+// past (the Agent's clock runs ahead, or the limiter lags its own reset).
+// Without it such a refusal held nothing, and every following turn went to an
+// upstream that could only refuse it. Each further such refusal within
+// unknownResetMemory of the previous hold's end doubles the hold, up to
+// maxUnknownResetHold, so an account whose reset cannot be learned is asked
+// at most about once an hour.
+//
+// unknownResetHold 是一次没有可用重置时刻的拒绝第一次搁置其范围的时长：上游没有给出重置
+// 时刻，或给出的已经过去（Agent 时钟偏快，或限额器晚于它自己的重置）。没有它时，这样的
+// 拒绝什么也不搁置，此后每个回合都会发给只能拒绝它的上游。在上一次搁置结束后
+// unknownResetMemory 之内再次这样拒绝时搁置加倍，至多 maxUnknownResetHold，因此读不到
+// 重置时刻的账户最多大约每小时被询问一次。
+const unknownResetHold = time.Minute
+
+// maxUnknownResetHold bounds the doubling of unknownResetHold.
+// maxUnknownResetHold 是 unknownResetHold 加倍的上限。
+const maxUnknownResetHold = time.Hour
+
+// unknownResetMemory is how long after a guessed hold ends a new refusal
+// still counts as the same streak and doubles the hold.
+// unknownResetMemory 是一次推测搁置结束后，新的拒绝仍算同一连串、使搁置加倍的时长。
+const unknownResetMemory = time.Hour
+
+// holdKey is the scope one refusal holds: a runtime's login and the refused
+// model ("" for every model).
+// holdKey 是一次拒绝搁置的范围：一个运行时的登录与被拒绝的模型（"" 表示所有模型）。
+type holdKey struct {
+	runtimeID, source, model string
+}
+
+// quotaBackoff remembers the last guessed hold of a scope, so the next
+// refusal without a reset knows whether to double it.
+// quotaBackoff 记住一个范围最近一次推测搁置，让下一次没有重置时刻的拒绝知道是否加倍。
+type quotaBackoff struct {
+	hold  time.Duration
+	until time.Time
+}
+
 // quotaHold is one refusal Refused recorded.
 //
 // quotaHold 是 Refused 记录的一次拒绝。
@@ -83,7 +128,17 @@ type quotaHold struct {
 	// model 是被拒绝的模型；拒绝它的限额覆盖账户所有模型时为 ""。
 	model        string
 	since, until time.Time
+	// guessed marks an until that is a backoff (unknownResetHold), not the
+	// upstream's reset. A usage reading never ends it early: a refusal comes
+	// without a reset mostly when the reading does not show the scope spent,
+	// so such a reading says nothing.
+	// guessed 表示 until 是退避时长（unknownResetHold）而不是上游的重置时刻。用量读数
+	// 从不提前结束它：拒绝不带重置时刻，多半正是因为读数没有显示该范围用完，这样的读数
+	// 说明不了什么。
+	guessed bool
 }
+
+func (h quotaHold) key() holdKey { return holdKey{h.runtimeID, h.source, h.model} }
 
 // Notice implements runtime.QuotaGuard: the CLI says the account is near or
 // at a limit, so the reading is refreshed as soon as the per-minute floor
@@ -93,33 +148,66 @@ type quotaHold struct {
 // 尽快刷新读数。
 func (m *Monitor) Notice(string) { m.Nudge() }
 
-// Refused implements runtime.QuotaGuard.
+// Refused implements runtime.QuotaGuard. A reset that is zero or not ahead
+// holds for a backoff instead (unknownResetHold).
 //
-// Refused 实现 runtime.QuotaGuard。
+// Refused 实现 runtime.QuotaGuard。重置时刻为零或不在将来时，改为搁置一段退避时长
+// （unknownResetHold）。
 func (m *Monitor) Refused(runtimeID, model string, resetsAt time.Time) {
 	m.Nudge()
 	now := m.clock.Now()
-	if !resetsAt.After(now) {
-		return
-	}
-	if limit := now.Add(maxQuotaHold); resetsAt.After(limit) {
-		resetsAt = limit
-	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	source := ""
 	if i := m.providerLocked(runtimeID); i >= 0 {
 		source = m.providers[i].Source
 	}
+	key := holdKey{runtimeID, source, model}
+	guessed := !resetsAt.After(now)
+	if guessed {
+		resetsAt = m.backoffLocked(key, now)
+	} else if limit := now.Add(maxQuotaHold); resetsAt.After(limit) {
+		resetsAt = limit
+	}
 	for i := range m.holds {
 		h := &m.holds[i]
-		if h.runtimeID == runtimeID && h.model == model && h.source == source {
+		if h.key() == key && h.guessed == guessed {
 			h.since = now
 			h.until = later(h.until, resetsAt)
 			return
 		}
 	}
-	m.holds = append(m.holds, quotaHold{runtimeID: runtimeID, source: source, model: model, since: now, until: resetsAt})
+	m.holds = append(m.holds, quotaHold{runtimeID: runtimeID, source: source, model: model, since: now, until: resetsAt, guessed: guessed})
+}
+
+// backoffLocked returns until when a refusal of key without a usable reset
+// holds it. A refusal while the previous guessed hold still runs came from a
+// turn started before it and changes nothing; one within unknownResetMemory
+// after it ended doubles it; any other starts again at unknownResetHold.
+// Callers hold m.mu.
+//
+// backoffLocked 返回 key 的一次没有可用重置时刻的拒绝把它搁置到何时。上一次推测搁置仍在
+// 进行时到来的拒绝来自搁置之前已开始的回合，不改变任何东西；在其结束后 unknownResetMemory
+// 之内到来的拒绝使其加倍；其余情况从 unknownResetHold 重新开始。调用方持有 m.mu。
+func (m *Monitor) backoffLocked(key holdKey, now time.Time) time.Time {
+	for k, b := range m.backoffs {
+		if !now.Before(b.until.Add(unknownResetMemory)) {
+			delete(m.backoffs, k)
+		}
+	}
+	hold := unknownResetHold
+	if previous, ok := m.backoffs[key]; ok {
+		if now.Before(previous.until) {
+			return previous.until
+		}
+		hold = min(2*previous.hold, maxUnknownResetHold)
+	}
+	if m.backoffs == nil {
+		m.backoffs = make(map[holdKey]quotaBackoff)
+	}
+	until := now.Add(hold)
+	m.backoffs[key] = quotaBackoff{hold: hold, until: until}
+	return until
 }
 
 // Hold implements runtime.QuotaGuard.
@@ -132,7 +220,7 @@ func (m *Monitor) Hold(runtimeID, model string) (time.Duration, bool) {
 	var until time.Time
 	kept := m.holds[:0]
 	for _, h := range m.holds {
-		if !now.Before(h.until) || m.releasedLocked(h, now) {
+		if !now.Before(h.until) || (!h.guessed && m.releasedLocked(h, now)) {
 			continue
 		}
 		kept = append(kept, h)
@@ -205,6 +293,11 @@ func (m *Monitor) pruneHoldsLocked() {
 	}
 	clear(m.holds[len(kept):])
 	m.holds = kept
+	for k := range m.backoffs {
+		if i := m.providerLocked(k.runtimeID); i < 0 || m.providers[i].Source != k.source {
+			delete(m.backoffs, k)
+		}
+	}
 }
 
 // spentUntil reports whether account shows a window that applies to model
