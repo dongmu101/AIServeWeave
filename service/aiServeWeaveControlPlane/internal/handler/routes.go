@@ -599,6 +599,20 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 			Path:    "/internal/v1/studio/conversations/:id/replies",
 			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/studio/conversations/:id/replies", requireSharedSecret(ctx.Config.InternalToken, appendStudioReply(ctx))),
 		},
+		// Studio flows and their runs, written by the Gateway the same way.
+		// Studio 编排及其运行，同样由 Gateway 写入。
+		studioRoute(ctx, http.MethodPost, "/internal/v1/studio/flows", createStudioFlow),
+		studioRoute(ctx, http.MethodGet, "/internal/v1/studio/flows", listStudioFlows),
+		studioRoute(ctx, http.MethodGet, "/internal/v1/studio/flows/:id", getStudioFlow),
+		studioRoute(ctx, http.MethodPatch, "/internal/v1/studio/flows/:id", updateStudioFlow),
+		studioRoute(ctx, http.MethodDelete, "/internal/v1/studio/flows/:id", deleteStudioFlow),
+		studioRoute(ctx, http.MethodGet, "/internal/v1/studio/flows/:id/versions/:version", getStudioFlowVersion),
+		studioRoute(ctx, http.MethodGet, "/internal/v1/studio/flows/:id/runs", listStudioRuns),
+		studioRoute(ctx, http.MethodPost, "/internal/v1/studio/runs", startStudioRun),
+		studioRoute(ctx, http.MethodGet, "/internal/v1/studio/runs/:id", getStudioRun),
+		studioRoute(ctx, http.MethodPost, "/internal/v1/studio/runs/:id/lease", renewStudioRun),
+		studioRoute(ctx, http.MethodPost, "/internal/v1/studio/runs/:id/steps", recordStudioRunStep),
+		studioRoute(ctx, http.MethodPost, "/internal/v1/studio/runs/:id/finish", finishStudioRun),
 	})
 	// Request-log push (STATUS.md's P09/C28) shares the same InternalToken as
 	// the Job endpoints above, for the same reason: a Gateway replica

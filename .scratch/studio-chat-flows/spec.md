@@ -167,7 +167,7 @@ Console 的定位是管理后台（用户、Key、配额、计费、机群）。
   - 对话：`GET/POST /studio/v1/conversations`、`GET/PATCH/DELETE /studio/v1/conversations/{id}`、`GET /studio/v1/conversations/{id}/messages`（游标分页）。
   - 发送消息：`POST /studio/v1/conversations/{id}/messages`，以 SSE 流式返回。帧类型包括 `message_start`、`thinking_delta`、`text_delta`、`usage`、`message_stop`、`error`。请求体可带 `regenerate` 或 `replace_from_message_id` 表达重新生成和编辑重发。
   - 停止：客户端断开 SSE 即视为停止。另提供 `POST /studio/v1/conversations/{id}/stop`，供多标签页场景使用。
-  - 编排：`GET/POST /studio/v1/flows`、`GET/PUT/DELETE /studio/v1/flows/{id}`、`GET /studio/v1/flows/{id}/versions/{version}`。
+  - 编排：`GET/POST /studio/v1/flows`、`GET/PATCH/DELETE /studio/v1/flows/{id}`、`GET /studio/v1/flows/{id}/versions/{version}`。（2026-11-26 实现时改为 `PATCH`：改名与保存新定义都是部分更新，可带 `base_version` 防止覆盖别处的保存。）
   - 运行：`POST /studio/v1/flows/{id}/runs`（202 + `run_id`，支持 multipart 上传文件输入）、`GET /studio/v1/runs/{id}`、`GET /studio/v1/runs/{id}/events`（SSE）、`POST /studio/v1/runs/{id}/cancel`、`GET /studio/v1/flows/{id}/runs`、`GET /studio/v1/runs/{id}/artifacts/{artifact_id}`。
   - 所有资源按 `(tenant_id, user_id)` 隔离。不属于调用者的 id 与不存在的 id 一样返回 404。
 
@@ -181,33 +181,55 @@ Console 的定位是管理后台（用户、Key、配额、计费、机群）。
 
 ### 编排（Flow）
 
-- **术语**：仓库里「工作流」已指 ComfyUI 模板运行。新概念统一称为 **编排（Flow）**，节点称为 **编排节点**，一次执行称为 **编排运行（Flow Run）**。需要由 `/domain-modeling` 写入 GLOSSARY。
-- **定义格式与校验放在 `common`**：新增 `common/flowdef`，定义编排 JSON 结构、节点类型、变量引用语法和 `Validate`。Gateway（运行前）与控制面（保存时）调用同一个 `Validate`，不允许各自判断。这与 `common/workflowtemplate.Validate` 的约定相同。
-- **定义形状（契约草图）**：
+- **术语**：仓库里「工作流」已指 ComfyUI 模板运行。新概念统一称为 **编排（Flow）**，节点称为 **编排节点**，一次执行称为 **编排运行（Flow Run）**。已写入 GLOSSARY（2026-11-25）。
+- **定义格式与校验放在 `common`**：`common/flowdef`（2026-11-25 已实现）定义编排 JSON 结构、节点类型、变量引用语法、`Decode` 和 `Validate`。Gateway（运行前）与控制面（保存时）调用同一个 `Validate`，不允许各自判断。这与 `common/workflowtemplate.Validate` 的约定相同。与后者不同，`Validate` 收集全部问题（最多 50 条），每条带所属节点 id、字段路径和稳定的错误码（如 `cycle`、`unknown_reference`、`reference_not_upstream`），供编辑器在画布上定位（用户故事 55）。错误文本只含标识符，不引用提示词、标签或取值。
+- **分期**：第一期节点类型为 input、llm、template、condition、output，输入类型为 text、number、boolean。image_generation、comfyui_template 节点与 image、file 输入放到第二期，等 Gateway 能运行时再加入 `flowdef`；在此之前，含这些类型的定义一律被拒绝，而不是存下无法运行的定义。
+- **定义形状（契约，以 `common/flowdef` 为准）**：
 
   ```text
-  Flow {
-    id, name, version
-    inputs:  [{name, type: text|number|boolean|image|file, required, default}]
-    nodes:   [{id, type, config, position}]
+  Definition {                       // id、name、version 由控制面管理，不在定义内
+    inputs:  [{name, label?, type: text|number|boolean, required, default?}]
+    nodes:   [{id, type, label?, config, position: {x, y}}]
     edges:   [{from: node_id, to: node_id, branch?: "true"|"false"}]
-    outputs: [{name, ref: "{{node_id.field}}"}]
+    outputs: [{name, ref: 模板，通常为 "{{node_id.field}}"}]
   }
-  节点类型 v1：input, llm, condition, template, image_generation, comfyui_template, output
-  变量引用：{{inputs.<name>}} / {{<node_id>.<field>}}，纯替换，无表达式求值、无代码执行
+  恰好一个 input 节点（起点，无入边）和一个 output 节点（终点，无出边），二者不带 config；
+    inputs 与 outputs 的声明在编辑器里分别显示在这两个节点上
+  其余节点都必须能从 input 节点到达；不能有环
+  条件节点的出边必须带 branch，其他边不能带
+  llm.config:       {model, system?, prompt, temperature? (0–2), max_tokens? (≥1), json_fields?: [{name, type, description?}]}
+                    model 是固定的模型名，不能是模板；输出字段 text，外加 json_fields 声明的字段
+  template.config:  {template}                 输出字段 text
+  condition.config: {left, op, right?}         输出字段 result
+                    op: equals | not_equals | contains | not_contains | gt | gte | lt | lte | empty | not_empty
   ```
 
-- **执行引擎是 Gateway 内的深模块 `flow`**：对外只暴露「给定定义 + 输入 + 派发器 → 事件流 + 最终结果」。派发器是一个窄接口，包含 Chat、ChatStream、GenerateImage、SubmitTemplateRun / AwaitJob 等方法，由 Gateway 用现有调度器和 Job 路径实现，测试时用假实现。引擎负责拓扑排序、并行分支、条件跳过、变量替换、节点超时、整体期限和取消传播。
-- **运行在接收请求的副本上执行**：运行记录写入控制面时带上副本 id 和租约，执行期间定期续租。另有一个后台扫描器（与 `jobSyncer` 同样的「三重有界 + 退避」写法）把租约过期的非终态运行标记为 `interrupted`，任何副本都可以执行这个扫描。不做断点续跑，不跨副本迁移。
+- **变量引用**：`{{inputs.<name>}}` / `{{<node_id>.<field>}}`，两侧可有空格，纯替换，无表达式求值、无代码执行。只能引用上游节点（输出声明引用输出节点的上游）。`{{` 后不是「标识符.标识符」形式的内容（如 `{{name}}`、JSON）按原文保留，方便提示词里引用模板语言；`{{a.b.c}}` 报错，不支持嵌套字段。标识符为 `[A-Za-z_][A-Za-z0-9_]*`，最长 64 字节；节点 id 不能是 `inputs`。
+
+- **执行引擎是 Gateway 内的深模块 `flow`**（2026-11-25 已实现，尚未接入 HTTP）：对外只暴露「给定定义 + 输入 + 派发器 → 事件流 + 最终结果」。引擎负责拓扑排序、并行分支、条件跳过、变量替换、节点超时、整体期限和取消传播。
+  - **接口**：`Engine.Plan(定义, 输入)` 同步校验定义并绑定输入，出错返回 `*flowdef.ValidationError`，HTTP 层据此回 400；`Plan.Run(ctx, emit)` 执行并返回 `Result`，事件按顺序、只从一个 goroutine 发出。
+  - **派发器**：第一期只有一个方法 `Chat(ctx, call, delta) (reply, error)`，同步返回整条回复，文字增量经回调送出，失败返回带稳定错误码的 `*flow.Error`。Gateway 侧沿用 Studio 发送消息的做法，进程内调用 `chatCompletions` 并用 tap 取增量。第二期再加入生图与 ComfyUI Job 的方法。
+  - **汇合与跳过**：指向某节点的边全部落定后判定该节点，只要有一条激活的入边就运行（「任一分支到达即运行」）。没有激活的入边就跳过，跳过沿分支向下传播。引用被跳过的节点时得到空字符串。输出节点被跳过时，运行仍算成功，只是没有输出。
+  - **并行**：互不依赖的节点并行执行，同一次运行最多同时进行 4 个模型调用（可配置）。
+  - **失败**：第一个节点失败就让整次运行失败，进行中的模型调用被取消（节点状态 `canceled`），之后不再启动新节点。节点状态有 `succeeded`、`failed`、`canceled`、`skipped`；运行状态有 `succeeded`、`failed`、`canceled`，`interrupted` 由租约扫描器标记。
+  - **错误码**：引擎自己的有 `node_timeout`、`run_timeout`、`invalid_json_output`、`not_a_number`、`value_too_large`；派发器的错误码（如 `model_unavailable`、`rate_limited`）原样透传，其他错误一律为 `upstream_error`。
+  - **结构化输出**：靠在系统提示词末尾追加字段说明来请求，不用 `response_format`，因为 Claude Code、Codex 账号等许多模型不支持后者。解析时取回复里最外层的 `{...}`，字段值写成字符串也接受（如 `"8"`、`"TRUE"`）。
+  - **条件比较**：两侧先去掉首尾空白；数值比较遇到不是数字的一侧，节点以 `not_a_number` 失败。
+  - **上限**：单个取值和每次模板渲染最多 1 MiB（可配置），与 Studio 对话的回复上限一致；超长回复截断，渲染超限则节点失败。
+- **运行在接收请求的副本上执行**：运行记录写入控制面时带上副本 id 和租约，执行期间定期续租。不做断点续跑，不跨副本迁移。
+  - **租约过期（2026-11-25 修订，替代原定的后台扫描器）**：控制面按自己的时钟计算租约到期时间。状态仍为 `running` 但租约已过的运行，读出来就是 `interrupted`，结束时间取租约到期时间，统计进行中运行数时也不计入。该副本之后的续租、步骤和终态写入一律回 409 `studio_run_finished`，Gateway 收到后取消本地执行。这样不需要扫描器，也不改写数据库里那一行。
+  - **重试**：运行 id 由 Gateway 铸造，登记运行可安全重试；步骤按 (运行, 节点) 幂等；重复写入同一终态视为成功。
 - **步骤结果持久化**：每个节点结束时，把状态、截断后的输出（上限可配置）、耗时和用量写入控制面。这条写入是旁路，不阻塞执行；写入失败时有界重试并计入指标。运行结束时的终态写入必须重试直到成功或租约过期。
 - **ComfyUI 模板节点**：通过现有工作流 Job 路径提交，Job 归属同一租户，并受模板 `VisibleTenantIDs` 约束。产物经现有产物 id 与下载路径暴露，运行记录只保存公开的 `artifact_id`。
 - **上限**：单个编排最多 50 个节点；单次运行有总期限（默认 30 分钟）和单节点期限（默认 5 分钟）；每个用户同时运行的编排数和每个租户的并发运行数都有上限。超限分别返回 400 或 429。
-- **SSE 事件**：`run_started`、`node_started`、`node_delta`（LLM 流式输出）、`node_finished`、`node_skipped`、`run_finished`。已结束的运行直接回一帧终态，与 Job 事件流的约定一致。断线重连时，先从控制面读回已持久化的步骤，再订阅实时事件。如果运行不在本副本，只提供轮询视图。
+- **SSE 事件**（2026-11-26 实现时修订）：流以 `run_snapshot` 开头（运行、已结束的步骤、进行中节点迄今的文本），之后是 `node_started`、`node_delta`（LLM 流式输出）、`node_finished`、`node_skipped`、`run_finished`。不再单独发 `run_started`：快照已包含它。断线重连时直接取新快照，不必先读控制面再订阅，也就不会在两者之间漏掉事件。已结束的运行直接回快照与终态，与 Job 事件流的约定一致。如果运行不在本副本，只发快照，客户端改为轮询 `GET /studio/v1/runs/{id}`。跟不上的观察者被断开，重连即可。
+- **每次模型调用单独计量**（2026-11-26 实现时补充）：运行中的每次模型调用都单独经过租户限流（各自的配额租约与 token 计数），并使用新的 request id。用量账本按 request id 去重，如果共用启动请求的 id，同一次运行的多次调用只会记一次账。
+- **身份**：运行沿用启动请求时的会话身份。会话在运行中途登出或吊销，以及余额在中途耗尽，都不会中止已开始的运行；只有启动运行时做 402 判断。
 
 ### 控制面
 
-- **新内部接口**：会话校验 `POST /internal/v1/sessions/verify`；Studio 数据的增删改查内部 API，供 Gateway 使用，全部以 `(tenant_id, user_id)` 为必填范围。
-- **新表**：`studio_conversations`、`studio_messages`、`studio_flows`、`studio_flow_versions`（不可变）、`studio_flow_runs`、`studio_flow_run_steps`。MySQL 9.7 与 PostgreSQL 表结构一致，`sql/init.sql` 同步。`studio_messages` 与 `studio_flow_run_steps` 按时间分区，接入现有分区维护与保留期清理，并新增保留期配置。
+- **新内部接口**：会话校验 `POST /internal/v1/sessions/verify`；Studio 数据的增删改查内部 API，供 Gateway 使用，全部以 `(tenant_id, user_id)` 为必填范围。编排与运行的接口（2026-11-25 已实现）：`/internal/v1/studio/flows`（`POST`、`GET`）、`/flows/:id`（`GET`、`PATCH`、`DELETE`）、`/flows/:id/versions/:version`、`/flows/:id/runs`、`/internal/v1/studio/runs`（`POST`）、`/runs/:id`（`GET`）、`/runs/:id/lease`、`/runs/:id/steps`、`/runs/:id/finish`，详见控制面 STATUS。保存时定义不合法回 400 `invalid_flow` 并附问题列表；`PATCH` 可带 `base_version`，编排已在别处保存时回 409 `studio_flow_changed`；超出同时进行的运行数上限回 429 `studio_run_limit`。
+- **新表**：`studio_conversations`、`studio_messages`、`studio_flows`、`studio_flow_versions`（不可变）、`studio_flow_runs`、`studio_flow_run_steps`。MySQL 9.7 与 PostgreSQL 表结构一致，`sql/init.sql` 同步。`studio_messages` 与 `studio_flow_run_steps` 按时间分区，接入现有分区维护与保留期清理，并新增保留期配置（尚未实现：四张编排表已建，暂不分区，与对话表一样留待保留期任务）。
 - **会话撤销联动**：登出、撤销会话、禁用用户时推进吊销 generation，使 Gateway 的会话校验缓存失效。
 - **用量入账**：接受 `key_id` 为空且带 `user_id` 的用量记录，以及新的 `source` 字段。升级顺序：**先升级控制面，再升级 Gateway**。
 
@@ -245,7 +267,7 @@ Console 的定位是管理后台（用户、Key、配额、计费、机群）。
 
 ## Further Notes
 
-- **术语待补**：「Studio」「编排（Flow）」「编排节点」「编排运行」需要经 `/domain-modeling` 写入 GLOSSARY.md，并明确与现有「工作流（ComfyUI 模板）」的区别。
+- **术语**：「编排」「编排节点」「编排运行」以及与之区分的「工作流」已写入 GLOSSARY.md（2026-11-25）。「Studio」尚未收录。
 - **ADR 候选**：「Studio 后端放在 Gateway 而非控制面」与「会话令牌在数据面的鉴权」值得各记一条 ADR。目前仓库没有 `docs/adr/`。
 - **安全红线**：对话内容、提示词、编排输入输出和附件不得进入日志、错误文本或指标标签。错误文本统一经 `runtime.Redact`。
 - **升级顺序**：先升级控制面（新表、内部接口、用量字段），再升级全部 Gateway，最后开启 Studio API 开关并部署 Studio。

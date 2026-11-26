@@ -26,6 +26,8 @@ const (
 	PrefixRefundRequest    = "rfd_"
 	PrefixConversation     = "cnv_"
 	PrefixMessage          = "msg_"
+	PrefixFlow             = "flw_"
+	PrefixFlowRun          = "frn_"
 )
 
 // IDSize is the column width, in characters, of every column that holds an

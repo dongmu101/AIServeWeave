@@ -1,3 +1,25 @@
+## Studio 编排存储（2026-11-25）
+
+新增 `studio_flows`、`studio_flow_versions`、`studio_flow_runs`、`studio_flow_run_steps`（迁移命名空间 `studio`，`0004`–`0007`，MySQL 与 PostgreSQL，均为 `CREATE TABLE IF NOT EXISTS`，表与列带注释），`sql/init.sql` 已同步。实现在 `internal/logic/studioflows.go`、`internal/store/*/studioflows.go`、`internal/handler/studioflows.go`。Gateway 侧还没有调用方。
+
+- **内部接口**（凭 `InternalToken`，归属由查询参数 `tenant_id`、`user_id` 指定，跨归属一律 404）：
+  - `POST`、`GET /internal/v1/studio/flows`：保存新编排（版本 1）；按 `updated_at` 倒序分页，列表不含定义。
+  - `GET`、`PATCH`、`DELETE /internal/v1/studio/flows/:id`：读取（含最新定义）；改名和/或保存新定义；删除（连带其版本、运行与步骤）。
+  - `GET …/flows/:id/versions/:version`：某个历史版本的定义。
+  - `GET …/flows/:id/runs`：运行记录，按创建时间倒序分页，不含输入、输出与步骤。
+  - `POST /internal/v1/studio/runs`：Gateway 开始执行前登记运行（id 由 Gateway 铸造，`frn_` 前缀，重试幂等），附 `replica_id` 与 `lease_seconds`。
+  - `GET /internal/v1/studio/runs/:id`：运行及其全部步骤（按结束时间排序）。
+  - `POST …/runs/:id/lease`、`…/steps`、`…/finish`：续租；写入一个节点的步骤（按节点幂等）；写入终态（`succeeded`、`failed`、`canceled`，相同终态重复写入幂等）。
+- **保存时校验**：定义经 `common/flowdef` 的 `Decode` 与 `Validate`，不通过时 400 `{"code":"invalid_flow","issues":[…]}`，每条问题带节点 id、字段路径和错误码。通过后按规范形式重新编码存储，因此与最新版本相同的定义（无论排版）不产生新版本。`PATCH` 可带 `base_version`，编排已被别处保存时 409 `studio_flow_changed`。
+- **租约**：租约到期时间由控制面按自己的时钟计算（`lease_seconds` 取 10–600）。状态为 `running` 而租约已过的运行读作 `interrupted`，结束时间取租约到期时间；数据库里不改写这一行，也没有后台扫描器。之后该副本的续租、步骤与终态写入都以 409 `studio_run_finished` 拒绝；其他副本的写入同样拒绝。
+- **上限**：每用户 200 个编排、每个编排 500 个版本（超出 409 `studio_limit`）；同时进行的运行每用户 3 个、每租户 20 个（超出 429 `studio_run_limit`，租约已过的不计入）；运行输入 2 MiB、运行输出 1 MiB、每个步骤的输入与输出各 256 KiB（截断由 Gateway 负责，超出 400）。
+
+升级须知：先迁移并升级控制面。只新增表，不影响已有数据；旧版控制面会以「unknown database migration」拒绝启动，回退须恢复迁移前的备份。
+
+尚未交付：运行与步骤表的分区与保留期；删除用户或租户时清理编排。
+
+验证：控制面全部默认测试；共享 store 契约 `storetest.StudioFlows` 在 memstore 上通过（覆盖归属隔离、分页、版本规则、运行准入与上限、租约隔离、幂等、删除连带）；logic 用例（假时钟下的租约过期、校验问题定位、版本冲突、上限）；e2e 用原始 HTTP 走通内部接口全流程与内部令牌校验。**未运行 gormstore live 用例**：本机没有 Docker、MySQL 或 PostgreSQL，`TestLiveStudioFlows` 与 schema 注释检查需在临时 MySQL 9.7 与 PostgreSQL 16 上补跑。
+
 ## Studio 免密码登录：会话交接（2026-11-17）
 
 新增 `POST /admin/v1/auth/session/handoff`（租户会话）：为同一账户另签一个独立会话，以登录响应形状返回。账户须仍为启用、角色与会话一致；平台运维会话与已登出会话返回 401（停用或角色变化为 403）。按登录记审计（detail `session handoff`），不更新最近登录时间。实现在 `internal/handler/handlers.go` 的 `handoffSession`、`internal/logic/sessions.go` 的 `SessionHandoffUser`。e2e `TestSessionHandoffIssuesAnIndependentSession` 覆盖：新令牌指向同一用户、原会话登出后仍有效、能在 Gateway 校验通过、拒绝平台运维/缺失/已登出会话。

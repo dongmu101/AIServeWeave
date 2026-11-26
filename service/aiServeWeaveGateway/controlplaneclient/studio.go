@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"AIServeWeave/common/flowdef"
 	"AIServeWeave/service/aiServeWeaveGateway/httpapi"
 )
 
@@ -267,9 +268,29 @@ func (c *StudioClient) call(ctx context.Context, method, path string, body, out 
 			return httpapi.ErrStudioLimit
 		case "studio_stale_turn":
 			return httpapi.ErrStudioStaleTurn
+		case "studio_flow_changed":
+			return httpapi.ErrStudioFlowChanged
+		case "studio_run_finished":
+			return httpapi.ErrStudioRunFinished
 		}
 		return httpapi.ErrStudioConflict
-	case http.StatusBadRequest, http.StatusRequestEntityTooLarge:
+	case http.StatusTooManyRequests:
+		return httpapi.ErrStudioRunLimit
+	case http.StatusBadRequest:
+		// A flow the control plane refused comes back with its issues, for
+		// the editor to show on the canvas.
+		// 控制面拒绝的编排连同问题列表一起返回，供编辑器在画布上标出。
+		var refusal struct {
+			Code      string          `json:"code"`
+			Issues    []flowdef.Issue `json:"issues"`
+			Truncated bool            `json:"truncated"`
+		}
+		_ = json.NewDecoder(io.LimitReader(resp.Body, 256<<10)).Decode(&refusal)
+		if refusal.Code == "invalid_flow" && len(refusal.Issues) > 0 {
+			return &flowdef.ValidationError{Issues: refusal.Issues, Truncated: refusal.Truncated}
+		}
+		return httpapi.ErrStudioInvalid
+	case http.StatusRequestEntityTooLarge:
 		return httpapi.ErrStudioInvalid
 	case http.StatusUnauthorized, http.StatusForbidden:
 		return fmt.Errorf("%w: this Gateway's internal token was refused by the control plane", ErrOutcomeUnknown)

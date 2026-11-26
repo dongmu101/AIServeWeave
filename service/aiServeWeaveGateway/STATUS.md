@@ -161,6 +161,23 @@ go run ./service/aiServeWeaveGateway -comfyui-managed-addr 127.0.0.1:8093 ...
 
 `InternalToken` 用 `AISW_CONTROL_PLANE_TOKEN` 环境变量传，不要用 `-control-plane-token` flag —— flag 在 `ps` 输出里可见。
 
+## Studio 编排与运行（2026-11-26）
+
+`-studio` 下新增编排与运行端点，实现在 `httpapi/studio_flows.go`（端点）、`httpapi/studio_runs.go`（本副本上的运行执行、续租、步骤持久化与实时订阅）、`httpapi/studio_dispatch.go`（模型调用）、`flow/`（执行引擎），存储经 `controlplaneclient/studioflows.go` 调控制面 `/internal/v1/studio/flows*`、`/internal/v1/studio/runs*`。编排定义与校验在 `common/flowdef`。
+
+- **端点**：
+  - `GET`、`POST /studio/v1/flows`；`GET`、`PATCH`、`DELETE /studio/v1/flows/{id}`（`PATCH` 改名和/或保存新定义，可带 `base_version`，过期时 409 `flow_changed`）；`GET /studio/v1/flows/{id}/versions/{version}`；`GET /studio/v1/flows/{id}/runs`。
+  - `POST /studio/v1/flows/{id}/runs`：body `{inputs, version?}`，默认运行最新版本。输入值不合法时 400 `invalid_inputs`，引用的模型对该用户不可用时 400 `model_unavailable`，两者都附 `issues`（节点 id、字段路径、错误码），且都发生在存储运行之前。成功时 202 并返回运行。同时进行的运行超出上限时 429 `run_limit`。
+  - `GET /studio/v1/runs/{id}`：运行及其步骤。在本副本执行的运行从内存读，其余从控制面读。
+  - `GET /studio/v1/runs/{id}/events`（SSE）：先发 `run_snapshot`（运行、已结束的步骤、进行中节点迄今的文本），再发 `node_started`、`node_delta`、`node_finished`、`node_skipped`，最后 `run_finished`。已结束的运行立即发快照与 `run_finished`。在其他副本执行的运行只发快照，客户端改为轮询。每 15 秒一行 SSE 注释保活。跟不上的观察者被断开，重连后从新快照开始。
+  - `POST /studio/v1/runs/{id}/cancel`：只有执行该运行的副本能取消（202）；在其他副本上 409 `run_elsewhere`，已结束时 409 `run_finished`。
+  - 定义不合法时 400 `invalid_flow` 附 `issues`（由控制面校验后带回）。只有启动运行会触发 402 余额判断。
+- **执行**：运行在接收请求的副本上于后台执行，关闭页面不影响。每个 LLM 节点在进程内走 `/v1/chat/completions` 的同一路径（等待模型、原生 CLI 对话、调度、用量与计费），`X-Session-Id` 取运行 id。**每次模型调用**都单独经过租户限流（各自的配额租约与 token 计数），并使用新的 request id，使按 request id 去重的用量账本记下每一次调用。用量以会话的 `user_id` 归属。
+- **租约与持久化**：运行以 `-replica-id` 加进程级随机后缀持有，租约 60 秒、每 20 秒续一次。每个节点结束后按顺序写入步骤（旁路、最多 3 次，输入与输出截断到每项 256 KiB 以内）。全部步骤写完后写终态，重试到成功、被拒或租约到期。控制面以 409 拒绝续租或写入（运行已结束、租约已过、编排已删除）、或连续一个租约周期续租失败时，本地立即停止该运行，且不写终态。Gateway 关闭时（`Server.Close`）取消本副本上的运行、不写终态，它们在租约过期后读作 `interrupted`。
+- **身份**：运行沿用启动请求时的会话身份、模型授权与节点策略。会话在运行中途登出或吊销时，已开始的运行继续执行完毕。运行中途余额耗尽不会中止已开始的运行（与一次长回复相同）。
+
+验证：`flow` 引擎单测（`-race`，覆盖率 93.5%）；`httpapi` 新增用例经进程内聊天路径与假节点走通执行、SSE 快照与实时帧、步骤与终态持久化、两次调用各自计入用量账本（request id 不同）、输入与模型的事前拒绝、402、429、取消、失去运行时停止且不写终态、其他副本的运行只给快照，在 `-race` 下重复 20 次稳定；Gateway 全部默认测试通过；控制面 e2e 用本客户端对真实控制面走通全部内部接口。未接真实模型与真实 Studio 前端联调；`openapi.yaml` 尚未收录 `/studio/v1`（对话端点同样未收录）。
+
 ## Studio API 与会话鉴权（2026-11-16）
 
 `-studio`（默认关闭，须同时配置 `-control-plane-addr`）挂载 `/studio/v1/*`，供 [Studio](../aiServeWeaveStudio/README.md) 使用。实现在 `httpapi/studio.go` 与 `controlplaneclient/session.go`。
@@ -182,7 +199,7 @@ go run ./service/aiServeWeaveGateway -comfyui-managed-addr 127.0.0.1:8093 ...
   - `POST /studio/v1/conversations/{id}/messages`：body 为 `{content, model}` 或 `{regenerate: true, model}`。先校验模型在本租户可用、写入轮次，再以 SSE 返回帧 `message_start`、`thinking_delta`、`text_delta`、`usage`、`error`、`message_stop`。生成在进程内走 `/v1/chat/completions` 的同一调度路径，`X-Session-Id` 取对话 id。结束后 Gateway 用独立 context 写回回答（最多 3 次），状态为 `complete`、`incomplete`（客户端断开）或 `error`。错误帧只带固定文案，不转发上游原文。
   - 只有发送会触发计费判断（402），读写对话不受余额影响。用量以会话的 `user_id` 归属，不带 `key_id`。
   - 未配置存储时不挂载对话端点。`-studio` 下 `main.go` 用 `-control-plane-token`（或 `AISW_CONTROL_PLANE_TOKEN`）构建客户端。
-- **尚未接入**：Studio 请求还不进入请求检索；没有服务端停止接口（停止靠断开连接）；附件不发送。编排端点见 [Studio 规格](../../.scratch/studio-chat-flows/spec.md)。
+- **尚未接入**：Studio 请求还不进入请求检索；没有服务端停止接口（停止靠断开连接）；附件不发送。编排端点见上一节「Studio 编排与运行」。
 
 升级顺序：先迁移并升级控制面（新增内部接口与 `studio` 表），再以 `-studio` 启动 Gateway。
 

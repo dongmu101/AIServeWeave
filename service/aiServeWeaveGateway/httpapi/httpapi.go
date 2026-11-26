@@ -51,6 +51,17 @@ type Config struct {
 	// StudioStore 持久化 Studio 对话。为 nil 时不挂载对话端点，/studio/v1/me 与
 	// /studio/v1/models 仍可用。
 	StudioStore StudioStore
+	// StudioFlows persists Studio flows and their runs. nil leaves the flow
+	// and run endpoints unmounted.
+	//
+	// StudioFlows 持久化 Studio 编排及其运行。为 nil 时不挂载编排与运行端点。
+	StudioFlows StudioFlowStore
+	// StudioReplicaID names this replica when it holds a flow run, the
+	// same identity it announces to Agents; a per-process suffix is added.
+	//
+	// StudioReplicaID 是本副本持有编排运行时使用的名称，与它向 Agent 宣告的身份相同；
+	// 会追加一个进程级后缀。
+	StudioReplicaID string
 	// APIKeys is the static set of accepted Bearer tokens, used when no
 	// Verifier is configured. Empty means authentication is disabled — see
 	// auth.go's warning about that.
@@ -673,7 +684,7 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 	// 租户，每条路由都受配额约束。
 	front := withAnthropicBasePath(h.observe(withLogging(logger, auth.middleware(h.requestLogMiddleware(h.rateLimit(mux))))))
 	if cfg.StudioSessions != nil {
-		front = withStudio(front, h.studioHandler(cfg.StudioSessions, cfg.StudioStore, logger))
+		front = withStudio(front, h.studioHandler(cfg.StudioSessions, cfg.StudioStore, cfg.StudioFlows, cfg.StudioReplicaID, logger))
 	}
 	return &Server{
 		Handler:           withWriteDeadline(writeStallTimeout, front),
@@ -742,6 +753,13 @@ type Server struct {
 //
 // 它不会停止 HTTP 处理器本身；那仍然是调用方自己的 http.Server 该做的关闭。
 func (s *Server) Close() {
+	// Studio flow runs stop first, while the tunnels their model calls use
+	// are still up; their leases lapse and they read as interrupted.
+	// Studio 编排运行最先停止，此时其模型调用所用的隧道仍在；它们的租约随后失效，读作
+	// interrupted。
+	if s.handlers.studioRunner != nil {
+		s.handlers.studioRunner.close()
+	}
 	// The queue goes first: its in-flight submits finish while the tunnels,
 	// the persister and the syncer they hand their jobs to are still up, and
 	// tasks it holds go back to the queue for another replica.
@@ -807,6 +825,9 @@ func (s *Server) Templates() []workflowview.Template {
 }
 
 type handlers struct {
+	// studioRunner executes Studio flow runs; nil when flows are not mounted.
+	// studioRunner 执行 Studio 编排运行；未挂载编排时为 nil。
+	studioRunner     *studioRunner
 	queue            *jobqueue.Queue
 	messagesSessions messagesession.Store
 	sched            *scheduler.Scheduler

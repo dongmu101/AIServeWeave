@@ -150,23 +150,38 @@ func (s *Service) ListStudioConversations(ctx context.Context, owner store.Studi
 }
 
 func encodeStudioCursor(c store.StudioConversationCursor) string {
-	return base64.RawURLEncoding.EncodeToString([]byte(c.UpdatedAt.UTC().Format(time.RFC3339Nano) + "|" + c.ID))
+	return encodeStudioKeyset(store.StudioCursor{At: c.UpdatedAt, ID: c.ID})
 }
 
 func decodeStudioCursor(cursor string) (store.StudioConversationCursor, bool) {
+	c, ok := decodeStudioKeyset(cursor, model.PrefixConversation)
+	return store.StudioConversationCursor{UpdatedAt: c.At, ID: c.ID}, ok
+}
+
+// encodeStudioKeyset and decodeStudioKeyset carry a Studio list position as
+// an opaque token. decodeStudioKeyset accepts only ids with prefix, so a
+// cursor from one list cannot page another.
+//
+// encodeStudioKeyset 与 decodeStudioKeyset 把 Studio 列表位置编码为不透明的令牌。
+// decodeStudioKeyset 只接受带 prefix 的 id，因此一个列表的游标不能用来翻另一个列表。
+func encodeStudioKeyset(c store.StudioCursor) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(c.At.UTC().Format(time.RFC3339Nano) + "|" + c.ID))
+}
+
+func decodeStudioKeyset(cursor, prefix string) (store.StudioCursor, bool) {
 	raw, err := base64.RawURLEncoding.DecodeString(cursor)
 	if err != nil {
-		return store.StudioConversationCursor{}, false
+		return store.StudioCursor{}, false
 	}
 	at, id, ok := strings.Cut(string(raw), "|")
-	if !ok || !validStudioID(id, model.PrefixConversation) {
-		return store.StudioConversationCursor{}, false
+	if !ok || !validStudioID(id, prefix) {
+		return store.StudioCursor{}, false
 	}
-	updated, err := time.Parse(time.RFC3339Nano, at)
+	parsed, err := time.Parse(time.RFC3339Nano, at)
 	if err != nil {
-		return store.StudioConversationCursor{}, false
+		return store.StudioCursor{}, false
 	}
-	return store.StudioConversationCursor{UpdatedAt: updated, ID: id}, true
+	return store.StudioCursor{At: parsed, ID: id}, true
 }
 
 // UpdateStudioConversation renames a conversation or changes its model or

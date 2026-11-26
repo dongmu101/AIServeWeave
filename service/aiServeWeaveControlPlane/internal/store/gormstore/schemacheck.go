@@ -21,7 +21,7 @@ func checkSchemaObjects(db *gorm.DB, all bool) error {
 		models = append(models, &model.AccountSale{}, &accountSalesLock{}, &model.AccountPresale{}, &model.AlipayPurchase{}, &model.AlipayRedemption{})
 		models = append(models, &model.CatalogModel{}, &model.CatalogPrice{}, &model.CatalogPending{}, &model.CatalogSyncState{}, &model.BillingSettings{})
 		models = append(models, &model.RouteRevision{}, &model.RouteActive{}, &model.WorkflowTemplateRevision{}, &model.WorkflowTemplateActive{}, &model.APIDoc{})
-		models = append(models, &model.StudioConversation{}, &model.StudioMessage{})
+		models = append(models, &model.StudioConversation{}, &model.StudioMessage{}, &model.StudioFlow{}, &model.StudioFlowVersion{}, &model.StudioFlowRun{}, &model.StudioFlowRunStep{})
 		if db.Name() == "mysql" {
 			models = append(models, &model.Job{}, &model.JobArtifact{})
 		}

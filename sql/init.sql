@@ -1552,6 +1552,70 @@ ALTER TABLE schema_migrations_studio
     MODIFY COLUMN dirty BOOLEAN NOT NULL DEFAULT FALSE COMMENT '迁移是否仍未完成',
     COMMENT = 'Studio 对话迁移的版本账本', ALGORITHM=INPLACE, LOCK=NONE;
 
+-- studio/mysql/0004_create_studio_flows.sql
+CREATE TABLE IF NOT EXISTS studio_flows (
+ id VARCHAR(40) NOT NULL COMMENT 'Studio 编排标识',
+ tenant_id VARCHAR(40) NOT NULL COMMENT '所属租户标识',
+ user_id VARCHAR(40) NOT NULL COMMENT '所属用户标识',
+ name VARCHAR(200) NOT NULL COMMENT '编排名称',
+ version BIGINT NOT NULL COMMENT '最新保存的版本号',
+ created_at DATETIME(6) NOT NULL COMMENT '创建时间',
+ updated_at DATETIME(6) NOT NULL COMMENT '最后更新时间',
+ PRIMARY KEY (id),
+ INDEX idx_studio_flows_owner (tenant_id, user_id, updated_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Studio 用户创建的编排';
+
+-- studio/mysql/0005_create_studio_flow_versions.sql
+CREATE TABLE IF NOT EXISTS studio_flow_versions (
+ flow_id VARCHAR(40) NOT NULL COMMENT '所属 Studio 编排标识',
+ version BIGINT NOT NULL COMMENT '版本号，从 1 开始递增',
+ definition MEDIUMTEXT NOT NULL COMMENT '通过校验的编排定义 JSON',
+ created_at DATETIME(6) NOT NULL COMMENT '保存时间',
+ PRIMARY KEY (flow_id, version)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Studio 编排每次保存的不可变版本';
+
+-- studio/mysql/0006_create_studio_flow_runs.sql
+CREATE TABLE IF NOT EXISTS studio_flow_runs (
+ id VARCHAR(40) NOT NULL COMMENT 'Studio 编排运行标识',
+ flow_id VARCHAR(40) NOT NULL COMMENT '所属 Studio 编排标识',
+ tenant_id VARCHAR(40) NOT NULL COMMENT '所属租户标识',
+ user_id VARCHAR(40) NOT NULL COMMENT '发起运行的用户标识',
+ flow_version BIGINT NOT NULL COMMENT '运行所用的编排版本号',
+ status VARCHAR(16) NOT NULL COMMENT '运行状态',
+ error_code VARCHAR(64) NOT NULL DEFAULT '' COMMENT '运行失败时的错误代码',
+ failed_node VARCHAR(64) NOT NULL DEFAULT '' COMMENT '导致运行失败的节点标识',
+ inputs MEDIUMTEXT NOT NULL COMMENT '提交时的输入值 JSON',
+ outputs MEDIUMTEXT NOT NULL COMMENT '运行结果字段 JSON',
+ prompt_tokens BIGINT NOT NULL DEFAULT 0 COMMENT '全部模型调用的输入 Token 数',
+ completion_tokens BIGINT NOT NULL DEFAULT 0 COMMENT '全部模型调用的输出 Token 数',
+ replica_id VARCHAR(128) NOT NULL COMMENT '执行运行的 Gateway 副本标识',
+ lease_until DATETIME(6) NOT NULL COMMENT '执行副本持有运行的租约到期时间',
+ created_at DATETIME(6) NOT NULL COMMENT '创建时间',
+ finished_at DATETIME(6) NULL COMMENT '结束时间，运行中为空',
+ PRIMARY KEY (id),
+ INDEX idx_studio_flow_runs_flow (flow_id, created_at),
+ INDEX idx_studio_flow_runs_active (tenant_id, status, lease_until)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Studio 编排的运行记录';
+
+-- studio/mysql/0007_create_studio_flow_run_steps.sql
+CREATE TABLE IF NOT EXISTS studio_flow_run_steps (
+ run_id VARCHAR(40) NOT NULL COMMENT '所属 Studio 编排运行标识',
+ node_id VARCHAR(64) NOT NULL COMMENT '编排节点标识',
+ tenant_id VARCHAR(40) NOT NULL COMMENT '所属租户标识',
+ user_id VARCHAR(40) NOT NULL COMMENT '发起运行的用户标识',
+ node_type VARCHAR(32) NOT NULL COMMENT '编排节点类型',
+ status VARCHAR(16) NOT NULL COMMENT '节点结束状态',
+ error_code VARCHAR(64) NOT NULL DEFAULT '' COMMENT '节点失败时的错误代码',
+ model VARCHAR(128) NOT NULL DEFAULT '' COMMENT '节点调用的模型别名',
+ inputs MEDIUMTEXT NOT NULL COMMENT '节点实际求值的输入 JSON，已截断',
+ outputs MEDIUMTEXT NOT NULL COMMENT '节点输出 JSON，已截断',
+ prompt_tokens BIGINT NOT NULL DEFAULT 0 COMMENT '节点模型调用的输入 Token 数',
+ completion_tokens BIGINT NOT NULL DEFAULT 0 COMMENT '节点模型调用的输出 Token 数',
+ started_at DATETIME(6) NOT NULL COMMENT '节点开始时间',
+ finished_at DATETIME(6) NOT NULL COMMENT '节点结束时间',
+ PRIMARY KEY (run_id, node_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Studio 编排运行中每个节点的结果';
+
 -- ============================================================
 -- jobs
 -- ============================================================

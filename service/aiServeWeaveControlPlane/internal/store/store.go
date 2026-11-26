@@ -1140,6 +1140,7 @@ type Store interface {
 	JobArtifacts
 	ResponseTurns
 	StudioConversations
+	StudioFlows
 	MetricsHistory
 	RequestLogs
 	UsageRecords

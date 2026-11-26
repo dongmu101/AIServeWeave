@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { resolveStudioRoute } from "./upstream-routes.ts";
+import { FLOW_BODY_BYTES, RUN_BODY_BYTES, resolveStudioRoute } from "./upstream-routes.ts";
 
 const none = new URLSearchParams();
 
@@ -37,4 +37,20 @@ test("conversation routes are allowed with their own query parameters", () => {
 
 test("sending is not on the forward list: it has its own streaming route", () => {
   assert.equal(resolveStudioRoute("POST", ["conversations", "cnv_1", "messages"], none), null);
+});
+
+test("flow and run routes are allowed, with room for a definition and input values", () => {
+  assert.deepEqual(resolveStudioRoute("POST", ["flows"], none), { method: "POST", path: "/studio/v1/flows", search: "", maxBody: FLOW_BODY_BYTES });
+  assert.equal(resolveStudioRoute("PATCH", ["flows", "flw_1"], none)?.maxBody, FLOW_BODY_BYTES);
+  assert.equal(resolveStudioRoute("POST", ["flows", "flw_1", "runs"], none)?.maxBody, RUN_BODY_BYTES);
+  assert.equal(resolveStudioRoute("GET", ["flows", "flw_1"], none)?.maxBody, undefined);
+  assert.equal(resolveStudioRoute("GET", ["flows", "flw_1", "versions", "3"], none)?.path, "/studio/v1/flows/flw_1/versions/3");
+  assert.equal(resolveStudioRoute("GET", ["flows", "flw_1", "runs"], new URLSearchParams("cursor=x&q=y"))?.search, "?cursor=x");
+  assert.equal(resolveStudioRoute("GET", ["runs", "frn_1"], none)?.path, "/studio/v1/runs/frn_1");
+  assert.equal(resolveStudioRoute("POST", ["runs", "frn_1", "cancel"], none)?.path, "/studio/v1/runs/frn_1/cancel");
+});
+
+test("run events are not on the forward list: they have their own streaming route", () => {
+  assert.equal(resolveStudioRoute("GET", ["runs", "frn_1", "events"], none), null);
+  assert.equal(resolveStudioRoute("PUT", ["flows", "flw_1"], none), null);
 });

@@ -1,3 +1,20 @@
+# Studio 编排（2026-11-26）
+
+编排第一期从前到后都已交付：在 Studio 画布上编辑并保存（带校验与版本）→ 在 Gateway 上执行（真实调度与计费路径）→ 实时事件流 → 步骤与结果落库 → 运行视图与运行记录。
+
+- **`common/flowdef`**：编排的 JSON 结构、第一期节点类型（输入、LLM、文本模板、条件、输出）、`{{inputs.x}}` / `{{节点.字段}}` 引用语法、`Decode`、`Validate` 与运行输入绑定 `BindInputs`。`Validate` 一次列出全部问题，每条带节点 id 和稳定的错误码。
+- **Gateway**：执行引擎 `flow`（并行分支、条件跳过与汇合、变量替换、单节点超时、整体期限、取消、首个失败即停、结构化输出），以及 `/studio/v1/flows*`、`/studio/v1/runs*` 端点。运行在接收请求的副本上于后台执行，每次模型调用都在进程内走 `/v1/chat/completions` 的同一路径，并**各自**经过租户限流、各自计入用量账本。SSE 事件流以快照开头，断线重连不丢进度。见 [Gateway STATUS](service/aiServeWeaveGateway/STATUS.md#studio-编排与运行2026-11-26)。
+- **Studio**：编排列表、画布编辑器（`@xyflow/react`）、运行表单、运行视图（实时节点状态与逐段文字、停止、重跑）、运行记录，以及运行事件流的 BFF 转发。见 [Studio STATUS](service/aiServeWeaveStudio/STATUS.md)。
+- **控制面**：四张新表与 12 个内部接口；保存时用 `flowdef` 校验；运行凭租约由副本持有，租约过期即读作 `interrupted` 并拒绝该副本的后续写入。见 [ControlPlane STATUS](service/aiServeWeaveControlPlane/STATUS.md#studio-编排存储2026-11-25)。
+
+契约、执行规则与分期见 `.scratch/studio-chat-flows/spec.md` 的「编排（Flow）」一节，术语见 [GLOSSARY.md](GLOSSARY.md)。
+
+升级须知：先迁移并升级控制面（`studio/0004`–`0007` 只新增表，`sql/init.sql` 已同步），再升级 Gateway。Gateway 以 `-studio` 启动时自动挂载编排端点，无新开关。
+
+已通过的检查：flowdef 与 flow 的 `go test -race`（覆盖率 98% / 93.5%）；Gateway 与控制面全部默认测试；Gateway httpapi 新用例经进程内聊天路径与假节点走通执行、事件流、持久化、取消、失去运行与事前拒绝，`-race` 下重复 20 次稳定；控制面 e2e 用 Gateway 真实客户端对真实控制面走通全部内部接口。Studio 的 lint、typecheck、76 项单元测试与生产构建通过，并用桩上游在无头 Chrome 中走通从新建、编辑、保存出错定位、运行、实时观察到停止与重跑的全流程，包括手机宽度与深色主题。
+
+尚未验收：**gormstore live 用例未运行**（本机没有 Docker 与数据库），新表在真实 MySQL 与 PostgreSQL 上的迁移、结构自检与契约测试待补跑；Studio、Gateway、控制面与真实模型的端到端联调未做。尚未交付：第二期节点（图像生成、ComfyUI 模板）与文件类输入、运行表分区与保留期、编排指标、请求检索中的 `studio_flow` 来源、`openapi.yaml` 中的 `/studio/v1`。
+
 # 购买与赠送点数、注册赠送入库（2026-11-24）
 
 租户余额分为**购买点数**与**赠送点数**，注册赠送点数改由运维在 Console 配置并存入数据库（默认 0）。规则见[按 token 计价「购买点数与赠送点数」](docs/billing-token-pricing.md#购买点数与赠送点数)与 [ControlPlane STATUS](service/aiServeWeaveControlPlane/STATUS.md)。

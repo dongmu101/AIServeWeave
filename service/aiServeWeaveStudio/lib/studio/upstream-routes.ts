@@ -16,7 +16,20 @@ interface Route {
   method: Method;
   pattern: string[];
   query: string[];
+  /** maxBody raises the request body bound for this route; others keep the
+   * default. Saving a flow carries its whole definition, and starting a run
+   * its input values.
+   * maxBody 为该路由放宽请求体上限；其他路由保持默认值。保存编排要带上完整定义，
+   * 启动运行要带上输入值。 */
+  maxBody?: number;
 }
+
+/** FLOW_BODY_BYTES fits a definition of common/flowdef's 1 MiB bound plus the
+ * name; RUN_BODY_BYTES fits a run's input values.
+ * FLOW_BODY_BYTES 容得下 common/flowdef 上限 1 MiB 的定义加名称；RUN_BODY_BYTES 容得下
+ * 一次运行的输入值。 */
+export const FLOW_BODY_BYTES = (1 << 20) + 64 * 1024;
+export const RUN_BODY_BYTES = 2 << 20;
 
 const ROUTES: Route[] = [
   { method: "GET", pattern: ["me"], query: [] },
@@ -27,6 +40,16 @@ const ROUTES: Route[] = [
   { method: "PATCH", pattern: ["conversations", ":id"], query: [] },
   { method: "DELETE", pattern: ["conversations", ":id"], query: [] },
   { method: "GET", pattern: ["conversations", ":id", "messages"], query: ["after_seq", "limit"] },
+  { method: "GET", pattern: ["flows"], query: ["cursor", "limit"] },
+  { method: "POST", pattern: ["flows"], query: [], maxBody: FLOW_BODY_BYTES },
+  { method: "GET", pattern: ["flows", ":id"], query: [] },
+  { method: "PATCH", pattern: ["flows", ":id"], query: [], maxBody: FLOW_BODY_BYTES },
+  { method: "DELETE", pattern: ["flows", ":id"], query: [] },
+  { method: "GET", pattern: ["flows", ":id", "versions", ":id"], query: [] },
+  { method: "GET", pattern: ["flows", ":id", "runs"], query: ["cursor", "limit"] },
+  { method: "POST", pattern: ["flows", ":id", "runs"], query: [], maxBody: RUN_BODY_BYTES },
+  { method: "GET", pattern: ["runs", ":id"], query: [] },
+  { method: "POST", pattern: ["runs", ":id", "cancel"], query: [] },
 ];
 
 const SEGMENT = /^[A-Za-z0-9_-]{1,128}$/;
@@ -35,6 +58,7 @@ export interface ResolvedRoute {
   method: Method;
   path: string;
   search: string;
+  maxBody?: number;
 }
 
 /** resolveStudioRoute maps a browser request onto an allowed Gateway call, or
@@ -57,5 +81,7 @@ export function resolveStudioRoute(method: string, segments: string[], params: U
     if (value !== null) kept.set(name, value);
   }
   const search = kept.toString();
-  return { method: route.method, path: `/studio/v1/${segments.join("/")}`, search: search ? `?${search}` : "" };
+  const resolved: ResolvedRoute = { method: route.method, path: `/studio/v1/${segments.join("/")}`, search: search ? `?${search}` : "" };
+  if (route.maxBody !== undefined) resolved.maxBody = route.maxBody;
+  return resolved;
 }

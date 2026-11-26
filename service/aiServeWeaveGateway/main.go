@@ -626,6 +626,8 @@ func run() error {
 			return err
 		}
 		httpCfg.StudioStore = conversations
+		httpCfg.StudioFlows = conversations
+		httpCfg.StudioReplicaID = id
 		logger.Info("serving the Studio API at /studio/v1")
 	}
 	front := httpapi.New(sched, httpCfg)

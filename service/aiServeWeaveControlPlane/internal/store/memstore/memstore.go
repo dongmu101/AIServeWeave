@@ -60,6 +60,10 @@ type Store struct {
 	responseTurns        map[string]model.ResponseTurn
 	studioConversations  map[string]model.StudioConversation
 	studioMessages       map[string][]model.StudioMessage
+	studioFlows          map[string]model.StudioFlow
+	studioFlowVersions   map[string][]model.StudioFlowVersion // by flow id, oldest first
+	studioRuns           map[string]model.StudioFlowRun
+	studioRunSteps       map[string][]model.StudioFlowRunStep // by run id, in write order
 	metricsHistory       []model.MetricsHistoryPoint
 	requestLogs          map[string]model.RequestLog
 	usageRecords         map[string]model.UsageRecord
@@ -94,6 +98,10 @@ func New() *Store {
 		responseTurns:        map[string]model.ResponseTurn{},
 		studioConversations:  map[string]model.StudioConversation{},
 		studioMessages:       map[string][]model.StudioMessage{},
+		studioFlows:          map[string]model.StudioFlow{},
+		studioFlowVersions:   map[string][]model.StudioFlowVersion{},
+		studioRuns:           map[string]model.StudioFlowRun{},
+		studioRunSteps:       map[string][]model.StudioFlowRunStep{},
 		requestLogs:          map[string]model.RequestLog{},
 		usageRecords:         map[string]model.UsageRecord{},
 		alertRules:           map[string]model.AlertRule{},

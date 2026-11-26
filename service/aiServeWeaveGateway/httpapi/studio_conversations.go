@@ -145,7 +145,13 @@ func (s *studioConversations) storeError(w http.ResponseWriter, err error) {
 // decodeStudioBody decodes a JSON body, treating an empty one as {}.
 // decodeStudioBody 解码 JSON 请求体，空请求体视为 {}。
 func decodeStudioBody(w http.ResponseWriter, r *http.Request, out any) bool {
-	r.Body = http.MaxBytesReader(w, r.Body, maxStudioBodyBytes)
+	return decodeStudioBodyLimit(w, r, out, maxStudioBodyBytes)
+}
+
+// decodeStudioBodyLimit is decodeStudioBody with its own size bound.
+// decodeStudioBodyLimit 是带自定义大小上限的 decodeStudioBody。
+func decodeStudioBodyLimit(w http.ResponseWriter, r *http.Request, out any, limit int64) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(out); err != nil && !errors.Is(err, io.EOF) {
@@ -361,7 +367,7 @@ func (s *studioConversations) send(w http.ResponseWriter, r *http.Request) {
 	}{renderConversation(conversation), renderMessage(question), replyID, req.Model}
 	out.emit("message_start", start)
 
-	tap := newChatTap(out)
+	tap := framesTap(out)
 	s.h.chatCompletions(tap, studioChatRequest(r, conversation, history, req.Model))
 	status, code := tap.outcome(r.Context().Err() != nil)
 
@@ -471,6 +477,22 @@ type studioFrames struct {
 	gone bool
 }
 
+// comment writes an SSE comment line, which clients ignore; it keeps idle
+// proxies from closing a quiet stream.
+// comment 写出一行 SSE 注释，客户端会忽略它；它防止空闲代理关闭安静的流。
+func (f *studioFrames) comment(text string) {
+	if f.gone {
+		return
+	}
+	if _, err := f.w.Write([]byte(": " + text + "\n\n")); err != nil {
+		f.gone = true
+		return
+	}
+	if flusher, ok := f.w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
 func (f *studioFrames) emit(event string, payload any) {
 	if f.gone {
 		return
@@ -495,15 +517,16 @@ func (f *studioFrames) emit(event string, payload any) {
 }
 
 // chatTap is the http.ResponseWriter the in-process Chat Completions call
-// writes to. It parses the OpenAI chunk stream as it arrives, forwards the
-// deltas as Studio frames, and keeps what the reply needs to be saved. An
+// writes to. It parses the OpenAI chunk stream as it arrives, hands the
+// deltas to its callbacks, and keeps what the reply needs to be saved. An
 // error response (any status but 200) is kept, bounded, for its code.
 //
 // chatTap 是进程内 Chat Completions 调用写入的 http.ResponseWriter。它边到边解析
-// OpenAI chunk 流，把增量转发为 Studio 帧，并保存写入回复所需的内容。错误响应（200 之外的
+// OpenAI chunk 流，把增量交给回调，并保存写入回复所需的内容。错误响应（200 之外的
 // 任何状态）被有界地保留，用于读取其错误码。
 type chatTap struct {
-	out       *studioFrames
+	text      func(string) // receives each piece of reply text; may be nil
+	thinking  func(string) // receives each piece of reasoning; may be nil
 	header    http.Header
 	status    int
 	pending   []byte
@@ -515,8 +538,22 @@ type chatTap struct {
 	usage     studioUsageJSON
 }
 
-func newChatTap(out *studioFrames) *chatTap {
-	return &chatTap{out: out, header: http.Header{}}
+func newChatTap(text, thinking func(string)) *chatTap {
+	return &chatTap{text: text, thinking: thinking, header: http.Header{}}
+}
+
+// framesTap is the chatTap of a conversation turn: it forwards the deltas as
+// Studio frames.
+//
+// framesTap 是对话一轮所用的 chatTap：把增量转发为 Studio 帧。
+func framesTap(out *studioFrames) *chatTap {
+	type delta struct {
+		Delta string `json:"delta"`
+	}
+	return newChatTap(
+		func(d string) { out.emit("text_delta", delta{d}) },
+		func(d string) { out.emit("thinking_delta", delta{d}) },
+	)
 }
 
 func (t *chatTap) Header() http.Header { return t.header }
@@ -573,15 +610,15 @@ func (t *chatTap) frame(event []byte) {
 		for _, choice := range chunk.Choices {
 			if d := choice.Delta.ReasoningContent; d != "" {
 				appendBounded(&t.reasoning, d)
-				t.out.emit("thinking_delta", struct {
-					Delta string `json:"delta"`
-				}{d})
+				if t.thinking != nil {
+					t.thinking(d)
+				}
 			}
 			if d := choice.Delta.Content; d != "" {
 				appendBounded(&t.content, d)
-				t.out.emit("text_delta", struct {
-					Delta string `json:"delta"`
-				}{d})
+				if t.text != nil {
+					t.text(d)
+				}
 			}
 			if choice.FinishReason != nil && *choice.FinishReason == "error" {
 				t.failed = true

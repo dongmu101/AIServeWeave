@@ -1,0 +1,21 @@
+CREATE TABLE IF NOT EXISTS studio_flow_runs (
+ id VARCHAR(40) NOT NULL COMMENT 'Studio 编排运行标识',
+ flow_id VARCHAR(40) NOT NULL COMMENT '所属 Studio 编排标识',
+ tenant_id VARCHAR(40) NOT NULL COMMENT '所属租户标识',
+ user_id VARCHAR(40) NOT NULL COMMENT '发起运行的用户标识',
+ flow_version BIGINT NOT NULL COMMENT '运行所用的编排版本号',
+ status VARCHAR(16) NOT NULL COMMENT '运行状态',
+ error_code VARCHAR(64) NOT NULL DEFAULT '' COMMENT '运行失败时的错误代码',
+ failed_node VARCHAR(64) NOT NULL DEFAULT '' COMMENT '导致运行失败的节点标识',
+ inputs MEDIUMTEXT NOT NULL COMMENT '提交时的输入值 JSON',
+ outputs MEDIUMTEXT NOT NULL COMMENT '运行结果字段 JSON',
+ prompt_tokens BIGINT NOT NULL DEFAULT 0 COMMENT '全部模型调用的输入 Token 数',
+ completion_tokens BIGINT NOT NULL DEFAULT 0 COMMENT '全部模型调用的输出 Token 数',
+ replica_id VARCHAR(128) NOT NULL COMMENT '执行运行的 Gateway 副本标识',
+ lease_until DATETIME(6) NOT NULL COMMENT '执行副本持有运行的租约到期时间',
+ created_at DATETIME(6) NOT NULL COMMENT '创建时间',
+ finished_at DATETIME(6) NULL COMMENT '结束时间，运行中为空',
+ PRIMARY KEY (id),
+ INDEX idx_studio_flow_runs_flow (flow_id, created_at),
+ INDEX idx_studio_flow_runs_active (tenant_id, status, lease_until)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Studio 编排的运行记录';

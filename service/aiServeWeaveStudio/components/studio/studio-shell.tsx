@@ -139,7 +139,7 @@ function SidebarContent({
       <nav className="grid gap-0.5 px-2" aria-label="主导航">
         <NavItem href="/" icon={<PlusIcon />} label="新建对话" collapsed={collapsed} onNavigate={onNavigate} prominent />
         <NavItem icon={<SearchIcon />} label="搜索" collapsed={collapsed} onClick={onSearch} hint={shortcut} />
-        <NavItem icon={<WorkflowIcon />} label="编排" collapsed={collapsed} soon />
+        <NavItem href="/flows" icon={<WorkflowIcon />} label="编排" collapsed={collapsed} onNavigate={onNavigate} />
       </nav>
 
       <div className="mt-6 min-h-0 flex-1 overflow-y-auto px-2">
