@@ -31,7 +31,7 @@ const common = {
   "common.telegramSupport": "Telegram 客服",
   "common.languageLoadFailed": "語言載入失敗，請重試。",
   "common.consoleTitle": "AIServeWeave 控制台",
-  "common.consoleDescription": "AIServeWeave 租戶管理控制台：使用者、API Key 與管理稽核。",
+  "common.consoleDescription": "AIServeWeave 管理控制台：使用者、API Key 與管理稽核。",
   "common.seconds": "{value} 秒",
   "common.items": {
     "other": "{count} 項"

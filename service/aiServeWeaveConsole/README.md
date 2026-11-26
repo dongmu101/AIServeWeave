@@ -264,7 +264,7 @@ Playwright 结果、失败截图与 trace 位于 `test-results/`，指定窄屏�
 - `GET /api/captcha` 签发挑战（PBKDF2/SHA-256，5 分钟有效，`no-store`）；开关关闭时返回 404。签名密钥由 `AISW_CONSOLE_SESSION_SECRET` 按独立用途派生，无需另配。
 - `/api/session` 与 `/api/signup` 在请求控制面**之前**校验请求体中的 `captcha`。缺少或不通过时返回 `428 captcha_failed`，页面显示固定文案。注册的校验发生在控制面 `Signup.MaxPerHour` 计数之前，失败的尝试不占用配额。注册成功后的自动登录在服务端完成，不再校验。
 - 一个解只能用一次：校验通过的挑战签名记在进程内直到过期，重放返回 428。记录是**单实例**的，多副本部署时同一个解最多在每个副本各用一次。
-- 表单在验证通过前禁用提交，每次提交后（无论成败）重置组件。组件在挂载后动态加载，颜色跟随 Console 主题，语言随界面切换（八种语言）。
+- 表单在验证通过前禁用提交，每次提交后（无论成败）重置组件。组件在挂载后动态加载，隐藏 ALTCHA 署名页脚与图标，以与输入框同高（40px）的单行呈现，颜色、边框、圆角与焦点环跟随 Console 主题与 Input 组件，语言随界面切换（八种语言）。表单任一字段获得焦点即开始后台求解，通常用户填完密码时已自动勾选。
 - 平台运维登录 `/operator/login`、Studio 登录与控制面 API 不受影响。
 - 实现：`lib/server/captcha.ts`（签发、校验、防重放）、`app/api/captcha/route.ts`、`components/console/captcha-field.tsx`。
 
