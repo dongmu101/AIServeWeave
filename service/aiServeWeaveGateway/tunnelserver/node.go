@@ -120,8 +120,15 @@ type node struct {
 	//
 	// load 是最近一次心跳携带的主机负载；该心跳未携带时 hasLoad 为 false，使旧版 Agent
 	// 保持「未上报」。
-	load     nodeload.Report
-	hasLoad  bool
+	load    nodeload.Report
+	hasLoad bool
+	// rtt is the smoothed round trip time of this replica's Control pings
+	// to the node; hasRTT is false until the current stream answered one.
+	//
+	// rtt 是本副本对该节点 Control Ping 往返时间的平滑值；当前流应答第一个 Ping 之前
+	// hasRTT 为 false。
+	rtt      time.Duration
+	hasRTT   bool
 	draining bool
 	// maintenance is set from the Registry's GatewayRoster.maintenance_node_ids
 	// (STATUS.md's P01), not by the Agent. Unlike draining it never closes
@@ -323,6 +330,11 @@ type NodeInfo struct {
 	// Load 是该节点在最近一次心跳上报的实时主机负载；未上报时（旧版 Agent 或尚无心跳）
 	// 为 nil。nil 表示「未上报」，绝不表示「空闲」。
 	Load *nodeload.Report
+	// RTT is the smoothed round trip time of this replica's link to the node,
+	// zero while unknown (pinging disabled, or no Pong on this stream yet).
+	//
+	// RTT 是本副本到该节点链路的平滑往返时间；未知时（未启用 Ping，或本条流尚无 Pong）为零。
+	RTT time.Duration
 }
 
 // Nodes returns a view of every node connected to this replica, sorted by
@@ -502,7 +514,33 @@ func (n *node) info(now time.Time, heartbeatTimeout time.Duration) NodeInfo {
 		Live:             n.liveLocked(now, heartbeatTimeout),
 		CLIUsage:         cloneCLIUsage(n.cliUsage),
 		Load:             n.loadLocked(),
+		RTT:              n.rttLocked(),
 	}
+}
+
+// rttLocked returns the smoothed RTT, or zero while unknown. n.mu is held.
+// rttLocked 返回平滑后的 RTT，未知时为零。调用方持有 n.mu。
+func (n *node) rttLocked() time.Duration {
+	if !n.hasRTT {
+		return 0
+	}
+	return n.rtt
+}
+
+// observeRTT folds one ping round trip into the smoothed RTT: the first
+// sample is taken as is, later ones move it a quarter of the way, so a single
+// delayed Pong does not flip the scheduler's preference.
+//
+// observeRTT 把一次 Ping 往返并入平滑 RTT：第一个样本原样采用，之后每个样本只把它
+// 推动四分之一，单个迟到的 Pong 不会让调度偏好翻转。
+func (n *node) observeRTT(sample time.Duration) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if !n.hasRTT {
+		n.rtt, n.hasRTT = sample, true
+		return
+	}
+	n.rtt += (sample - n.rtt) / 4
 }
 
 // loadLocked returns a copy of the last heartbeat's load, or nil. n.mu is held.

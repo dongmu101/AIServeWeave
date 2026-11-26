@@ -233,7 +233,15 @@ func (d *Dispatcher) run(ctx context.Context, rt runtime.Runtime, spec tunnelwir
 	}()
 
 	id := req.Headers.GetRuntimeId()
-	reqPayload := req.Headers.GetPayload()
+	// The Gateway compresses large payloads only for slots whose Ready
+	// declared the encoding (tunnelwire.EncodePayload), so decoding here
+	// is the single place every operation below sees the original bytes.
+	// Gateway 只对 Ready 声明过该编码的槽压缩大 payload（tunnelwire.EncodePayload），
+	// 因此在这里解码，下面每个操作看到的都是原始字节。
+	reqPayload, err := tunnelwire.DecodePayload(req.Headers.GetPayload(), req.Headers.GetPayloadEncoding())
+	if err != nil {
+		return err
+	}
 
 	switch spec.Operation {
 	case tunnelv1.Operation_OPERATION_LIST_MODELS:

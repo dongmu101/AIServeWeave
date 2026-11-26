@@ -19,6 +19,12 @@ before upgrading; do not assume a `0.x` bump is safe by default.
 
 ### Added
 
+- 跨地域隧道优化（Gateway + Agent，升级顺序不限，任一侧为旧版时对应项不生效）：
+  - 大于 16 KiB 的请求 payload 由 Gateway 以 zstd 压缩后发往 Agent（`Ready.payload_encodings` / `RequestHeaders.payload_encoding`，均为新增字段；只对声明支持的槽压缩，流式响应不压缩）。见 [tunnel README「payload 压缩」](service/aiServeWeaveAgent/tunnel/README.md#payload-压缩)。
+  - Gateway 每 15s 经 Control 流 Ping 测量各节点链路 RTT（新指标 `tunnel_server_node_rtt_seconds`，`tunnelserver.Config.PingInterval`）；调度器在负载完全相同的候选之间优先选 RTT 档位更低的节点。
+  - Agent 的 bulk 槽（产物上传下载、音频）改用到同一副本的第二条 TCP 连接，丢包重传不再阻塞推理流；每个 Agent 对每个副本多一条连接。
+  - 部署：Gateway 容器设置 `net.ipv4.tcp_slow_start_after_idle=0`；[deploy/README「跨地域隧道网络调优」](deploy/README.md#跨地域隧道网络调优) 说明宿主机 BBR、缓冲区与 netem 基线测量。
+
 - CLI 订阅额度调度（Gateway + Agent）：
   - Gateway 排序新增「快到期」档：窗口进入最后 `-quota-expiring-percent`（新 flag，默认 10%；负值关闭）的时间、按均匀速度还会剩下额度的账户，在节点有空闲槽、其他窗口没有明显超速时排在最前，先用掉重置时会作废的额度；进行中对话的钉选账户（额度充足、有空闲槽、无资源紧张）仍排在它之前，对话不会因此迁走。
   - Gateway 在 CLI 账户答复 `rate_limited` 时，依据快照推断拒绝它的窗口，把该窗口覆盖的同账户其他模型一并冷却到同一时刻（按系列的窗口只覆盖同系列）；之后的快照显示未用完时立即解除。

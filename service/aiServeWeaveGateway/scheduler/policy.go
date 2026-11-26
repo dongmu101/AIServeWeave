@@ -145,6 +145,32 @@ type scored struct {
 	// pinned 标记上一次服务该请求所属会话的账户（与 affinity.pin 满足 samePinAccount）。
 	// 只有 PolicyPrefixHash 设置它，而带会话 key 的请求都按这一策略排序。
 	pinned bool
+	// rttBand is the node's link RTT in rttBandWidth steps (rttBandOf). It
+	// is the last tie-break: only between candidates whose load figures are
+	// equal does the nearer one go first.
+	// rttBand 是节点链路 RTT 按 rttBandWidth 分档后的值（rttBandOf）。它是最后一级平局
+	// 裁决：只有负载数据都相同的候选之间，才让更近的先试。
+	rttBand int64
+}
+
+// rttBandWidth groups link RTTs so that jitter, and nodes in the same region,
+// do not count as a difference: candidates within one band stay in the
+// shuffled order pickOn gave them.
+//
+// rttBandWidth 把链路 RTT 分档，使抖动与同地域的节点不被算作差异：同一档内的候选保持
+// pickOn 打乱后的顺序。
+const rttBandWidth = 20 * time.Millisecond
+
+// rttBandOf maps an RTT to its band. An unknown RTT (zero) is band 0, the same
+// as a nearby node: not having been measured yet is never a penalty.
+//
+// rttBandOf 把 RTT 映射到档位。未知的 RTT（零）为 0 档，与近处节点相同：尚未测量从不
+// 被当作惩罚。
+func rttBandOf(rtt time.Duration) int64 {
+	if rtt <= 0 {
+		return 0
+	}
+	return int64(rtt / rttBandWidth)
 }
 
 // quotaRank is the quota tier s counts as. quotaExpiring counts only while
@@ -214,7 +240,9 @@ func compareInTier(a, b *scored, rank quotaTier) int {
 
 // lessLoaded is the least-load comparator: lower quota tier first (orderRank,
 // then compareInTier), then no resource pressure, then more idle slots, then
-// lower queue occupancy, then fewer in-flight requests.
+// lower queue occupancy, then fewer in-flight requests, and finally the lower
+// link RTT band — so among equally loaded nodes the nearer one is tried
+// first, while load still always outranks distance.
 //
 // queued (STATUS.md's P2 realtime-utilization signal) breaks ties inside an
 // idle tier, before inflight: idle is a software slot count that a
@@ -226,7 +254,8 @@ func compareInTier(a, b *scored, rank quotaTier) int {
 // "confirmed empty" — never a penalty for not reporting.
 //
 // lessLoaded 是最少负载比较器：额度档位低的优先（orderRank，再 compareInTier），其次无
-// 资源紧张的，再次空闲槽多的，然后队列占用低的，最后在途请求少的。
+// 资源紧张的，再次空闲槽多的，然后队列占用低的，然后在途请求少的，最后是链路 RTT 档位低的
+// ——负载相同的节点中先试更近的，而负载始终优先于距离。
 //
 // queued（STATUS.md P2 的实时利用率信号）在同一个 idle 档位内、排在 inflight 之前
 // 打破平局：idle 是一个软件层面的槽位计数，像 ComfyUI 这种同一时间只跑一个任务的后端
@@ -251,7 +280,10 @@ func lessLoaded(a, b scored) bool {
 	if a.queued != b.queued {
 		return a.queued < b.queued
 	}
-	return a.inflight < b.inflight
+	if a.inflight != b.inflight {
+		return a.inflight < b.inflight
+	}
+	return a.rttBand < b.rttBand
 }
 
 // stableSort sorts found in place by less, keeping the order of equal

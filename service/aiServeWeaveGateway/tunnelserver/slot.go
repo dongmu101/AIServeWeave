@@ -29,6 +29,11 @@ type slot struct {
 	id     string
 	class  tunnelv1.SlotClass
 	stream tunnelv1.Tunnel_ServeServer
+	// encodings is what the first Ready declared this slot can decode. It
+	// never changes: a slot belongs to one Agent process for its whole life.
+	// encodings 是首个 Ready 声明的该槽可解码的编码。它不会变化：一个槽在整个生命周期里
+	// 属于同一个 Agent 进程。
+	encodings []tunnelv1.PayloadEncoding
 
 	sendMu sync.Mutex
 
@@ -78,12 +83,13 @@ func (s *Server) Serve(stream tunnelv1.Tunnel_ServeServer) error {
 	}
 
 	sl := &slot{
-		srv:    s,
-		node:   n,
-		id:     ready.GetSlotId(),
-		class:  ready.GetClass(),
-		stream: stream,
-		done:   make(chan struct{}),
+		srv:       s,
+		node:      n,
+		id:        ready.GetSlotId(),
+		class:     ready.GetClass(),
+		stream:    stream,
+		encodings: ready.GetPayloadEncodings(),
+		done:      make(chan struct{}),
 	}
 
 	n.addLive(sl.class, 1)

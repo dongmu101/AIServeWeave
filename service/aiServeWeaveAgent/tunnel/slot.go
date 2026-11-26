@@ -163,7 +163,7 @@ func (s *slot) run(ctx context.Context) {
 	s.cancel = cancel
 	defer cancel()
 
-	stream, err := s.pool.transport.Serve(streamCtx)
+	stream, err := s.openStream(streamCtx)
 	if err != nil {
 		s.pool.metrics.SlotAcquireFailure(s.class)
 		s.pool.slotOpenFailed()
@@ -403,12 +403,28 @@ func (s *slot) match(id string) *slotRequest {
 	return s.active
 }
 
+// openStream opens this slot's Serve stream: a bulk slot on the transport's
+// dedicated bulk connection when it has one (BulkTransport), every other slot
+// on the shared connection.
+//
+// openStream 打开本槽的 Serve 流：transport 有专用 bulk 连接时（BulkTransport），bulk
+// 槽开在它上面，其余槽开在共享连接上。
+func (s *slot) openStream(ctx context.Context) (ServeStream, error) {
+	if s.class == tunnelv1.SlotClass_SLOT_CLASS_BULK {
+		if bulk, ok := s.pool.transport.(BulkTransport); ok {
+			return bulk.ServeBulk(ctx)
+		}
+	}
+	return s.pool.transport.Serve(ctx)
+}
+
 // park sends Ready and hands the slot back to the pool's idle set.
 func (s *slot) park() error {
 	if err := s.send(&tunnelv1.AgentFrame{Body: &tunnelv1.AgentFrame_Ready{Ready: &tunnelv1.Ready{
-		NodeId: s.pool.cfg.NodeID,
-		SlotId: s.id,
-		Class:  s.class,
+		NodeId:           s.pool.cfg.NodeID,
+		SlotId:           s.id,
+		Class:            s.class,
+		PayloadEncodings: tunnelwire.SupportedPayloadEncodings(),
 	}}}); err != nil {
 		return err
 	}

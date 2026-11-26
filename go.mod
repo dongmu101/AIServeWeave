@@ -15,6 +15,7 @@ require (
 	github.com/go-viper/mapstructure/v2 v2.4.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/hibiken/asynq v0.25.1
+	github.com/klauspost/compress v1.18.7
 	github.com/redis/go-redis/v9 v9.23.0
 	github.com/spf13/viper v1.20.1
 	github.com/standard-webhooks/standard-webhooks/libraries v0.0.1
@@ -59,7 +60,6 @@ require (
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
-	github.com/klauspost/compress v1.18.7 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect

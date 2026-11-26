@@ -615,6 +615,16 @@ services:
     # drainGrace（30 秒，见 main.go）。Docker 默认 10 秒就 SIGKILL，会切断常常持续
     # 20–60 秒的 Messages 流，因此覆盖两段；空闲的 Gateway 仍会立即退出。
     stop_grace_period: 75s
+    # The Agent tunnel is a long-lived TCP connection that idles between
+    # requests. Linux resets the congestion window after an idle period, so
+    # every large request body would start slow start again; on a 200ms
+    # cross-region RTT that costs several round trips. The setting is per
+    # network namespace and not inherited from the host, hence set here.
+    # Agent 隧道是请求之间会空闲的长连接 TCP。Linux 默认在空闲后重置拥塞窗口，
+    # 每个大请求体都要重新慢启动，在 200ms 的跨地域 RTT 上要多付好几个往返。
+    # 该参数按网络命名空间生效、不继承宿主机，因此在这里设置。
+    sysctls:
+      net.ipv4.tcp_slow_start_after_idle: "0"
     logging: *logging
     init: true
     entrypoint: ["/bin/sh", "/usr/local/bin/service-logs.sh", "/var/log/aisw/gateway.log", "/usr/local/bin/service"]

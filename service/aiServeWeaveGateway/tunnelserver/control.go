@@ -1,11 +1,14 @@
 package tunnelserver
 
 import (
+	"context"
 	"errors"
 	"io"
 	"log/slog"
 	"maps"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -22,6 +25,13 @@ import (
 type controlSession struct {
 	stream tunnelv1.Tunnel_ControlServer
 	sendMu sync.Mutex
+	// lastPing is the sent_unix_ms of the Ping still awaiting its Pong, zero
+	// when none is. Only a Pong echoing it is measured, so an Agent cannot
+	// claim a shorter round trip than the link has.
+	//
+	// lastPing 是仍在等待 Pong 的 Ping 的 sent_unix_ms，没有时为零。只有回显它的 Pong
+	// 才会被计量，因此 Agent 无法声称比链路实际更短的往返时间。
+	lastPing atomic.Int64
 }
 
 func (s *controlSession) send(frame *tunnelv1.GatewayControl) error {
@@ -92,6 +102,10 @@ func (s *Server) Control(stream tunnelv1.Tunnel_ControlServer) error {
 	// 负载描述的是上一条流的心跳；在本条流发出心跳之前，节点负载是「未上报」，而不是沿用
 	// 上一次的值。
 	n.load, n.hasLoad = nodeload.Report{}, false
+	// Likewise the RTT was the previous stream's path, which a reconnect
+	// may have changed.
+	// 同理，RTT 描述的是上一条流的路径，重连可能已经换了路径。
+	n.rtt, n.hasRTT = 0, false
 	n.lastHeartbeat = s.clock.Now()
 	n.publishStaticLocked()
 	streams := len(n.controls)
@@ -149,7 +163,68 @@ func (s *Server) Control(stream tunnelv1.Tunnel_ControlServer) error {
 		}
 	}
 
+	if s.cfg.PingInterval > 0 {
+		pingCtx, stopPing := context.WithCancel(ctx)
+		pingDone := make(chan struct{})
+		go func() {
+			defer close(pingDone)
+			s.pingLoop(pingCtx, session)
+		}()
+		// The loop must not outlive the handler: a Send on a finished
+		// stream is not allowed.
+		// 循环不得比处理函数活得更久：不允许在已结束的流上 Send。
+		defer func() {
+			stopPing()
+			<-pingDone
+		}()
+	}
+
 	return s.serveControl(n, session)
+}
+
+// pingLoop pings the node right away, so the scheduler knows the link's RTT
+// within one round trip of the connection, and then every PingInterval
+// until ctx ends or a send fails.
+//
+// pingLoop 立即 Ping 一次，使调度器在连接后一个往返内就知道链路 RTT，之后每隔
+// PingInterval 一次，直到 ctx 结束或发送失败。
+func (s *Server) pingLoop(ctx context.Context, session *controlSession) {
+	for {
+		sent := s.clock.Now().UnixMilli()
+		session.lastPing.Store(sent)
+		if err := session.send(&tunnelv1.GatewayControl{Body: &tunnelv1.GatewayControl_Ping{Ping: &tunnelv1.Ping{SentUnixMs: sent}}}); err != nil {
+			return
+		}
+		timer, stop := s.clock.NewTimer(s.cfg.PingInterval)
+		select {
+		case <-ctx.Done():
+			stop()
+			return
+		case <-timer:
+		}
+	}
+}
+
+// maxPlausibleRTT bounds a measured round trip. A Pong later than this says
+// more about a stalled stream than about the path, and must not teach the
+// scheduler that a node is that far away.
+//
+// maxPlausibleRTT 限定一次测得的往返时间。比它更晚的 Pong 说明的是流卡住了，而不是路径
+// 有多远，不应让调度器以为节点真有那么远。
+const maxPlausibleRTT = 30 * time.Second
+
+// observePong measures a Pong that echoes the session's outstanding Ping.
+// observePong 计量回显本会话未决 Ping 的 Pong。
+func (s *Server) observePong(n *node, session *controlSession, sent int64) {
+	if sent == 0 || !session.lastPing.CompareAndSwap(sent, 0) {
+		return
+	}
+	rtt := time.Duration(s.clock.Now().UnixMilli()-sent) * time.Millisecond
+	if rtt < 0 || rtt > maxPlausibleRTT {
+		return
+	}
+	n.observeRTT(rtt)
+	n.metrics.RTT(rtt)
 }
 
 // recvHello reads the first frame of a Control stream and requires it to be
@@ -278,8 +353,7 @@ func (s *Server) serveControl(n *node, session *controlSession) error {
 				slog.String("reason", body.Draining.GetReason()))
 
 		case *tunnelv1.AgentControl_Pong:
-			// RTT accounting for replica-initiated pings lives with the
-			// heartbeat metrics; nothing to do until those are wired up.
+			s.observePong(n, session, body.Pong.GetSentUnixMs())
 
 		case *tunnelv1.AgentControl_Hello:
 			return status.Error(codes.InvalidArgument, "Hello may only be the first frame on a control stream")

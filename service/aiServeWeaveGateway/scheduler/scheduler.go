@@ -1149,6 +1149,7 @@ func (s *Scheduler) collect(ctx context.Context, view *nodeView, target routing.
 				quota:      quota.tier,
 				used:       quota.usedPercent(),
 				quotaKnown: quota.known,
+				rttBand:    rttBandOf(node.RTT),
 			})
 		}
 	}

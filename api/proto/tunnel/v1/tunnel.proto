@@ -321,6 +321,20 @@ message Ready {
   string node_id = 1;
   string slot_id = 2;                   // Agent-generated, so both sides' logs line up
   SlotClass class = 3;
+  // payload_encodings lists the RequestHeaders.payload encodings this slot
+  // can decode beyond identity. It is declared per slot rather than in Hello
+  // because a slot belongs to one Agent process: while an upgrade overlaps an
+  // old and a new process under one node_id, each slot still states exactly
+  // what its own process accepts. Absent means identity only.
+  repeated PayloadEncoding payload_encodings = 4;
+}
+
+// PayloadEncoding names how RequestHeaders.payload travels. Compression is
+// applied to the request payload only, never to streamed response frames:
+// a compressor that waits to fill a block would delay the first token.
+enum PayloadEncoding {
+  PAYLOAD_ENCODING_IDENTITY = 0;
+  PAYLOAD_ENCODING_ZSTD = 1;            // a single zstd frame of the operation payload
 }
 
 enum SlotClass {
@@ -339,6 +353,9 @@ message RequestHeaders {
   int64 deadline_unix_ms = 3;
   bytes payload = 4;                    // decoded according to operation
   map<string, string> trace = 5;        // fixed key set only, e.g. request_id, tenant_id
+  // payload_encoding is how payload is encoded. The Gateway only picks an
+  // encoding the slot's Ready declared, so an older Agent always gets identity.
+  PayloadEncoding payload_encoding = 6;
 }
 
 enum Operation {

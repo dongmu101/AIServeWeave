@@ -214,14 +214,20 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (*Response, error) {
 		deadlineMs = deadline.UnixMilli()
 	}
 
+	// Large payloads travel compressed when the slot's Agent can decode them;
+	// across regions that saves whole round trips before the Agent can start.
+	// 槽所属的 Agent 能解码时，大 payload 压缩后发送；跨地域时这能省下 Agent 开始处理
+	// 之前的整轮往返。
+	payload, encoding := tunnelwire.EncodePayload(req.Payload, sl.encodings)
 	headers := &tunnelv1.GatewayFrame{
 		RequestId: requestID,
 		Body: &tunnelv1.GatewayFrame_Headers{Headers: &tunnelv1.RequestHeaders{
-			RuntimeId:      req.RuntimeID,
-			Operation:      req.Operation,
-			DeadlineUnixMs: deadlineMs,
-			Payload:        req.Payload,
-			Trace:          req.Trace,
+			RuntimeId:       req.RuntimeID,
+			Operation:       req.Operation,
+			DeadlineUnixMs:  deadlineMs,
+			Payload:         payload,
+			Trace:           req.Trace,
+			PayloadEncoding: encoding,
 		}},
 	}
 	if err := sl.send(headers); err != nil {

@@ -86,6 +86,13 @@ const (
 	// 延迟」在服务端的读数：Agent 自己的 RTT 指标看不见一次根本没到达的心跳，而这个
 	// 分布的长尾看得见。
 	MetricHeartbeatIntervalSeconds = "tunnel_server_heartbeat_interval_seconds"
+	// MetricNodeRTTSeconds observes the round trip of this replica's Control
+	// pings to a node: the link's own latency, measured on the Gateway's
+	// clock alone, and what the scheduler prefers nearer nodes by.
+	//
+	// MetricNodeRTTSeconds 观测本副本对某节点 Control Ping 的往返时间：链路自身的延迟，
+	// 只用 Gateway 自己的时钟测量，也是调度器优先选近节点的依据。
+	MetricNodeRTTSeconds = "tunnel_server_node_rtt_seconds"
 	// MetricNodePressure is 1 while the node's last heartbeat said it is
 	// refusing new heavy work for lack of CPU or memory, else 0.
 	//
@@ -272,6 +279,11 @@ func Descriptions() metrics.Descriptions {
 			Help:    "Gap between consecutive heartbeats received from the node.",
 			Buckets: metrics.SecondsBuckets(),
 		},
+		MetricNodeRTTSeconds: {
+			Kind:    metrics.KindHistogram,
+			Help:    "Round trip time of this replica's Control pings to the node.",
+			Buckets: metrics.SecondsBuckets(),
+		},
 		MetricSlotsTotal: {
 			Kind: metrics.KindGauge,
 			Help: "Slots this replica holds for the node, by class and state.",
@@ -400,6 +412,13 @@ func (r *recorder) Heartbeat(interval time.Duration) {
 	if interval > 0 {
 		r.sink.Histogram(MetricHeartbeatIntervalSeconds, r.link()).Observe(interval.Seconds())
 	}
+}
+
+// RTT observes one Control ping round trip.
+//
+// RTT 观测一次 Control Ping 往返。
+func (r *recorder) RTT(d time.Duration) {
+	r.sink.Histogram(MetricNodeRTTSeconds, r.link()).Observe(d.Seconds())
 }
 
 // Pressure publishes whether the node reports resource pressure.

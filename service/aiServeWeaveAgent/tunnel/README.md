@@ -195,6 +195,12 @@ message Ready {
   string    node_id  = 1;
   string    slot_id  = 2;             // Agent 生成，便于两侧日志对齐
   SlotClass class    = 3;
+  repeated PayloadEncoding payload_encodings = 4;  // 本槽可解码的 payload 编码（identity 之外），见「payload 压缩」
+}
+
+enum PayloadEncoding {
+  PAYLOAD_ENCODING_IDENTITY = 0;
+  PAYLOAD_ENCODING_ZSTD     = 1;
 }
 
 enum SlotClass {
@@ -209,6 +215,7 @@ message RequestHeaders {
   int64       deadline_unix_ms = 3;   // 绝对截止时间，槽复用后 gRPC 流级 deadline 不可用
   bytes       payload     = 4;        // 按 operation 反序列化为对应请求类型
   map<string, string> trace = 5;      // 只允许 request_id、tenant_id 等固定键
+  PayloadEncoding payload_encoding = 6; // payload 的编码；只会是本槽 Ready 声明过的编码
 }
 
 enum Operation {
@@ -295,6 +302,15 @@ payload 统一使用 protobuf 消息，与 `runtime` 包的 Go 类型一一对�
 **CLI 订阅额度上报（`AgentControl.cli_usage`）是一条只上行、不带指令的帧。** `CLIUsageReport{accounts[]}` 镜像 Agent 本机 `cliusage.Monitor` 的缓存快照：每个账户只有 `runtime_id`（账户所属的本地声明运行时，一个 Agent 可以上报同一 kind 的多个账户；旧版 Agent 不填）、`kind`（`codex`/`claude`）、`status`（pending/ready/unauthorized/unavailable/error）、`checked_unix_ms` 与若干窗口（`name`/`bucket`/`used_percent`/`duration_minutes`/`resets_unix_ms`）——全是上游报告的百分比与时间戳，不含账户名、token 与任何凭据，也不含 token 数量推算值。`Expired`、`Stale` 取决于读取时刻，不上线，由接收方按时间戳推出；Agent 每次心跳比较确定性编码，只在变化时重发（与 `model_pull` 同一套比较方式）。每次成功查询都会更新 `checked_unix_ms`，因此会重发一次；暂时性查询失败保留上一轮读数与查询时间，编码不变、不重发，Gateway 依据收到时刻让它在 15 分钟后失效。Agent 只在隧道启用且有 Codex/Claude CLI 账户时才上报；运行时重新加载移除了最后一个 CLI 账户后，曾经上报过的隧道会发送一次空报告，让副本清掉旧额度（副本跨重连保留最后一份报告）。并由 `Monitor.Run` 每 5 分钟刷新一次缓存（每次刷新会启动 CLI 进程，故刻意慢于 Monitor「每分钟一批」的下限）；有窗口达到 80% 时改为每分钟一次（覆盖所有模型的窗口已用完的账户除外，它的数字在重置前不会变化），CLI 报告接近上限或拒绝时经 `Monitor.Nudge` 立即刷新（仍受每分钟一批约束）。Gateway 把它原样存进节点，渲染时经 `common/nodeview.CLIUsageFromAccounts` 这条允许列表：只放行 `codex`/`claude` 两种 kind 与已知状态，限制账户/窗口数量与标签长度，百分比夹到 0–100；控制面租户模型目录再把对应额度挂到该服务上（`cli_usage`）：优先按 `runtime_id` 精确匹配，没有时退回 `runtime_id` 为空、`kind` 相同的旧版条目。这是 CLI 账户的共享额度，不是按租户划分的数字。
 
 `RERANK`（STATUS.md 的 P2）是「新增 `InferenceRuntime` 方法」这套破坏性变更模式的试点，`AUDIO_TRANSCRIBE` 随后复用了同一套模式。但它请求体是纯文本 JSON（一个 query 加一组 documents），不携带任何二进制体，因此形状与 `EMBED` 相同——单个 `RequestHeaders.payload`、无 `DataChunk` 请求体、跑在推理槽而非批量槽。同样没有任何适配器的 `Discover` 会发布 `CapabilityRerank`，这个 Operation 到达 Agent 后同样总是被能力门禁拒绝，直到某个部署确认后端支持。
+
+### payload 压缩
+
+跨地域隧道上，一个几 MB 的 Messages 请求（Claude Code 每轮重发完整上下文）要多花好几个往返才能送到 Agent。Gateway 因此对 `RequestHeaders.payload` 做 zstd 压缩（`common/tunnelwire/payload.go`）：
+
+- **能力按槽声明。** Agent 在每个 `Ready` 的 `payload_encodings` 里声明可解码的编码，Gateway 只对声明了 `ZSTD` 的槽压缩。放在 `Ready` 而不是 `Hello`，是因为槽属于某一个 Agent 进程：升级期间同一 `node_id` 的新旧进程短暂并存时，每个槽仍准确表达自己进程的能力。旧版 Agent 不声明，始终收到原文。
+- **只压缩值得压的。** payload 不小于 16 KiB（`PayloadCompressionMinBytes`）且压缩后至少省下八分之一才用 `ZSTD`，否则发原文。大于 `MaxTunnelMessageBytes` 的 payload 保持原文，由 gRPC 像以前一样拒绝。
+- **解码上限不是新限制。** Agent 解码输出上限为 `MaxTunnelMessageBytes`：原文 payload 本就过不了这个 gRPC 消息上限，以前能送达的现在仍能送达，恶意帧也无法膨胀成无界内存。损坏的帧或未知编码以 `protocol_error` 结束该请求。
+- **只压请求，不压响应。** 流式响应帧很小，压缩器攒块会拖慢首字；`DataChunk` 请求体（模板、上传文件、音频）也不压缩。
 
 **流式事件严禁聚合。** `CHAT_STREAM` 每收到一个 `ChatEvent` 就 `Send` 一帧；Gateway 每收到一帧就 flush。这条规则是 TTFT 的唯一保障，任何"攒够 N 条再发"的优化都必须先证明不影响首字延迟。
 
@@ -462,7 +478,9 @@ enum ReplicaState {
 | 传输层 | gRPC keepalive（HTTP/2 PING） | 20s，超时 10s | 检测 TCP 假连接，穿透 NAT 会话表老化 |
 | 应用层 | `Control` 流 `Heartbeat` | 15s，连续 3 次无 `HeartbeatAck` 判死 | 检测服务端逻辑假死，携带轻量负载指标；`load`（`NodeLoad`，2026-11-14 新增字段 4）携带实时 CPU、内存、负载均值与准入判断，准入判断翻转时在下一次状态轮询（≤2s）补发一次不计入判死阈值的心跳。缺席表示「未上报」，绝不视为空闲 |
 
-NAT 设备的 UDP/TCP 会话老化时间常见为 30s 到 5min，20s 的传输层保活足以覆盖绝大多数家用路由器。`Serve` 数据槽长时间空闲也依赖同一条 TCP 的 PING 保活，不需要各自心跳。
+NAT 设备的 UDP/TCP 会话老化时间常见为 30s 到 5min，20s 的传输层保活足以覆盖绝大多数家用路由器。`Serve` 数据槽长时间空闲也依赖所在 TCP 连接的 PING 保活，不需要各自心跳。
+
+**链路 RTT 由 Gateway 测量。** Gateway（`tunnelserver.Config.PingInterval`，`main.go` 设为 15s）连上节点后立即在 Control 流上发一个 `Ping`，之后每 15s 一次；Agent 一直以来都会回显 `Pong`，因此旧版 Agent 同样适用。只有回显本会话最近一次 `Ping` 时间戳的 `Pong` 才计量，Agent 无法声称更短的 RTT；超过 30s 的样本丢弃。首个样本原样采用，之后按 1/4 平滑，重连时清零。结果进入 `NodeInfo.RTT`、`SchedNode.RTT` 与指标 `tunnel_server_node_rtt_seconds`，调度器在负载相同的候选之间优先选 RTT 档位（20ms 一档）更低的节点。
 
 ## 槽池
 
@@ -475,7 +493,7 @@ NAT 设备的 UDP/TCP 会话老化时间常见为 30s 到 5min，20s 的传输�
 | `min_slots` | 2 | 每副本常驻空闲槽，保证突发请求零建流延迟 |
 | `low_watermark` | 1 | 空闲槽低于此值立即补充 |
 | `max_slots` | 见下 | 每副本上限，由节点总额度按副本数分摊 |
-| `bulk_slots` | 1 | 每副本 `SLOT_CLASS_BULK` 配额，防止大产物挤占推理槽 |
+| `bulk_slots` | 1 | 每副本 `SLOT_CLASS_BULK` 配额，防止大产物挤占推理槽；bulk 槽走到该副本的第二条 TCP 连接（`BulkTransport`），丢包重传不阻塞推理流 |
 | `slot_idle_timeout` | 5min | 超时关闭多余槽，但保底不低于 `min_slots` |
 | `max_gateways` | 16 | 名册异常时的连接数上限保护 |
 
@@ -689,7 +707,7 @@ Gateway 侧有一份对称的服务端指标，前缀 `tunnel_server_`，刻意�
 | 模型首 token | 主要成本 | 不在隧道控制范围 |
 | 首 token 回程 | ≈ RTT/2 | 逐条 Send，两侧立即 flush |
 
-因此隧道引入的额外开销约等于一个 RTT 加两次序列化，可控在 10ms 量级。真正的杀手是各层缓冲：**任何一处 `bufio.Writer` 未 flush、启用 gRPC 压缩、或 Gateway 前置反向代理开了响应缓冲，TTFT 都会从毫秒级劣化到秒级。** 流式路径默认关闭 gRPC 压缩（压缩器需要攒够数据才出帧），`SLOT_CLASS_BULK` 的产物传输可以单独开启。
+因此隧道引入的额外开销约等于一个 RTT 加两次序列化，可控在 10ms 量级。真正的杀手是各层缓冲：**任何一处 `bufio.Writer` 未 flush、启用 gRPC 压缩、或 Gateway 前置反向代理开了响应缓冲，TTFT 都会从毫秒级劣化到秒级。** 流式路径不启用 gRPC 压缩（压缩器需要攒够数据才出帧）。大请求 payload 在应用层单独压缩，只作用于请求方向，见「payload 压缩」。
 
 ### 实测数据与偏差
 
@@ -1008,7 +1026,7 @@ go test -race ./service/aiServeWeaveAgent/...
 | --- | --- | --- | --- |
 | 槽复用导致迟到 `Cancel` 误杀新请求 | 用户请求被无故中断 | 每帧携带 `request_id`，不匹配即丢弃 | 已缓解 |
 | 大产物传输挤占推理槽 | TTFT 劣化 | `SLOT_CLASS_BULK` 物理隔离 + 独立配额 | 已缓解 |
-| 单 TCP 连接丢包引发该副本全部槽卡顿 | 到该副本的请求延迟抖动 | 多副本天然分散：其他副本的隧道是独立 TCP 连接，不受影响 | 已缓解 |
+| 单 TCP 连接丢包引发该副本全部槽卡顿 | 到该副本的请求延迟抖动 | 多副本天然分散：其他副本的隧道是独立 TCP 连接，不受影响；同一副本内 bulk 槽另用一条 TCP 连接，大产物传输的重传不阻塞推理流 | 已缓解 |
 | 隧道连接数随副本数线性增长 | 家用 Mac 的 FD 与内存压力 | 每副本 `min_slots=2`；`max_gateways=16` 兜底；副本数 ≤ 10 时总流数在 30 条量级 | 已缓解 |
 | 槽位软配额总和超过节点真实并发 | 多副本同时派活触碰 limiter 上限 | 有意为之：limiter 返回背压，Gateway 换节点且不计入熔断 | 已接受 |
 | 名册被污染或配置错误 | Agent 向非预期地址发起连接 | 名册经 mTLS 信道下发；endpoint 格式校验 + `max_gateways` 截断 | 已缓解 |
@@ -1034,7 +1052,7 @@ go test -race ./service/aiServeWeaveAgent/...
 
 1. **独立 Tunnel Hub。** 触发条件：Gateway 副本数超过 10、节点数超过 200，或 Agent 侧出现维持多条隧道的 FD/内存压力。届时把隧道终结从 Gateway 剥离到 Hub 集群，Gateway 按一致性哈希 `node_id` 找到持有隧道的 Hub。代价是每个请求多一跳内网转发，因此不到触发条件不做。
 2. **跨副本的精确并发协调**，用共享计数替代当前的"软配额 + limiter 兜底"。只有在 `tunnel_limiter_rejections_total` 高到影响调度效率时才值得做。
-3. **单副本多 TCP 连接分散槽位**，进一步规避单连接的 TCP 层队头阻塞。多副本已经提供了一层天然分散，优先级不高。
+3. **单副本多 TCP 连接分散推理槽**，进一步规避单连接的 TCP 层队头阻塞。bulk 槽已经独立成第二条连接（`BulkTransport`）；推理槽之间仍共用一条，多副本已经提供了一层天然分散，优先级不高。
 4. **QUIC 传输**，在弱网和移动网络下改善丢包恢复；需评估 gRPC-over-QUIC 的生态成熟度。
 5. **跨地域副本的就近连接**，Agent 优先连接同地域副本，远端副本作为备份。需要名册携带地域标签。
 6. **在途请求续传**，为非流式和尚未 `Committed` 的流式请求提供跨连接恢复——多副本下还可以尝试跨副本恢复。

@@ -57,6 +57,17 @@ type Config struct {
 	// DefaultHeartbeatTimeout.
 	HeartbeatTimeout time.Duration
 
+	// PingInterval is how often this replica pings each node's Control
+	// stream to measure the link's round trip time, which the scheduler uses
+	// to prefer the nearer of otherwise equal nodes. Every Agent already
+	// answers Ping with Pong, so this works with older Agents too. Zero
+	// disables pinging, leaving RTT unknown.
+	//
+	// PingInterval 是本副本在每个节点的 Control 流上发 Ping 测量链路往返时间的间隔，
+	// 调度器据此在其他条件相同的节点中优先选近的。所有 Agent 都已用 Pong 应答 Ping，
+	// 因此对旧版 Agent 同样有效。为零时不发 Ping，RTT 保持未知。
+	PingInterval time.Duration
+
 	// DepartedRetention is how long the inventory of a node that left this
 	// replica is kept for AppendDepartedNodes, so a request arriving while
 	// the node reconnects is told the model is temporarily unavailable

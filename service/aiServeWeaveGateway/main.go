@@ -315,6 +315,10 @@ func run() error {
 		ReplicaID: id,
 		Logger:    logger,
 		Metrics:   registry,
+		// Measures each node's link RTT so the scheduler prefers the nearer
+		// of equally loaded nodes; one tiny frame per node every 15s.
+		// 测量每个节点的链路 RTT，使调度器在负载相同的节点中优先选近的；每节点每 15 秒一个小帧。
+		PingInterval: 15 * time.Second,
 		SlotHint: &tunnelv1.SlotHint{
 			MinSlots:  2,
 			MaxSlots:  8,

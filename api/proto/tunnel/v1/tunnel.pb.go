@@ -44,6 +44,55 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// PayloadEncoding names how RequestHeaders.payload travels. Compression is
+// applied to the request payload only, never to streamed response frames:
+// a compressor that waits to fill a block would delay the first token.
+type PayloadEncoding int32
+
+const (
+	PayloadEncoding_PAYLOAD_ENCODING_IDENTITY PayloadEncoding = 0
+	PayloadEncoding_PAYLOAD_ENCODING_ZSTD     PayloadEncoding = 1 // a single zstd frame of the operation payload
+)
+
+// Enum value maps for PayloadEncoding.
+var (
+	PayloadEncoding_name = map[int32]string{
+		0: "PAYLOAD_ENCODING_IDENTITY",
+		1: "PAYLOAD_ENCODING_ZSTD",
+	}
+	PayloadEncoding_value = map[string]int32{
+		"PAYLOAD_ENCODING_IDENTITY": 0,
+		"PAYLOAD_ENCODING_ZSTD":     1,
+	}
+)
+
+func (x PayloadEncoding) Enum() *PayloadEncoding {
+	p := new(PayloadEncoding)
+	*p = x
+	return p
+}
+
+func (x PayloadEncoding) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (PayloadEncoding) Descriptor() protoreflect.EnumDescriptor {
+	return file_api_proto_tunnel_v1_tunnel_proto_enumTypes[0].Descriptor()
+}
+
+func (PayloadEncoding) Type() protoreflect.EnumType {
+	return &file_api_proto_tunnel_v1_tunnel_proto_enumTypes[0]
+}
+
+func (x PayloadEncoding) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use PayloadEncoding.Descriptor instead.
+func (PayloadEncoding) EnumDescriptor() ([]byte, []int) {
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{0}
+}
+
 type SlotClass int32
 
 const (
@@ -77,11 +126,11 @@ func (x SlotClass) String() string {
 }
 
 func (SlotClass) Descriptor() protoreflect.EnumDescriptor {
-	return file_api_proto_tunnel_v1_tunnel_proto_enumTypes[0].Descriptor()
+	return file_api_proto_tunnel_v1_tunnel_proto_enumTypes[1].Descriptor()
 }
 
 func (SlotClass) Type() protoreflect.EnumType {
-	return &file_api_proto_tunnel_v1_tunnel_proto_enumTypes[0]
+	return &file_api_proto_tunnel_v1_tunnel_proto_enumTypes[1]
 }
 
 func (x SlotClass) Number() protoreflect.EnumNumber {
@@ -90,7 +139,7 @@ func (x SlotClass) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use SlotClass.Descriptor instead.
 func (SlotClass) EnumDescriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{0}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{1}
 }
 
 type Operation int32
@@ -165,11 +214,11 @@ func (x Operation) String() string {
 }
 
 func (Operation) Descriptor() protoreflect.EnumDescriptor {
-	return file_api_proto_tunnel_v1_tunnel_proto_enumTypes[1].Descriptor()
+	return file_api_proto_tunnel_v1_tunnel_proto_enumTypes[2].Descriptor()
 }
 
 func (Operation) Type() protoreflect.EnumType {
-	return &file_api_proto_tunnel_v1_tunnel_proto_enumTypes[1]
+	return &file_api_proto_tunnel_v1_tunnel_proto_enumTypes[2]
 }
 
 func (x Operation) Number() protoreflect.EnumNumber {
@@ -178,7 +227,7 @@ func (x Operation) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use Operation.Descriptor instead.
 func (Operation) EnumDescriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{1}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{2}
 }
 
 type LoadPressureReason int32
@@ -214,11 +263,11 @@ func (x LoadPressureReason) String() string {
 }
 
 func (LoadPressureReason) Descriptor() protoreflect.EnumDescriptor {
-	return file_api_proto_tunnel_v1_tunnel_proto_enumTypes[2].Descriptor()
+	return file_api_proto_tunnel_v1_tunnel_proto_enumTypes[3].Descriptor()
 }
 
 func (LoadPressureReason) Type() protoreflect.EnumType {
-	return &file_api_proto_tunnel_v1_tunnel_proto_enumTypes[2]
+	return &file_api_proto_tunnel_v1_tunnel_proto_enumTypes[3]
 }
 
 func (x LoadPressureReason) Number() protoreflect.EnumNumber {
@@ -227,7 +276,7 @@ func (x LoadPressureReason) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use LoadPressureReason.Descriptor instead.
 func (LoadPressureReason) EnumDescriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{2}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{3}
 }
 
 type ReplicaState int32
@@ -266,11 +315,11 @@ func (x ReplicaState) String() string {
 }
 
 func (ReplicaState) Descriptor() protoreflect.EnumDescriptor {
-	return file_api_proto_tunnel_v1_tunnel_proto_enumTypes[3].Descriptor()
+	return file_api_proto_tunnel_v1_tunnel_proto_enumTypes[4].Descriptor()
 }
 
 func (ReplicaState) Type() protoreflect.EnumType {
-	return &file_api_proto_tunnel_v1_tunnel_proto_enumTypes[3]
+	return &file_api_proto_tunnel_v1_tunnel_proto_enumTypes[4]
 }
 
 func (x ReplicaState) Number() protoreflect.EnumNumber {
@@ -279,7 +328,7 @@ func (x ReplicaState) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ReplicaState.Descriptor instead.
 func (ReplicaState) EnumDescriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{3}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{4}
 }
 
 type ConfigAction int32
@@ -318,11 +367,11 @@ func (x ConfigAction) String() string {
 }
 
 func (ConfigAction) Descriptor() protoreflect.EnumDescriptor {
-	return file_api_proto_tunnel_v1_tunnel_proto_enumTypes[4].Descriptor()
+	return file_api_proto_tunnel_v1_tunnel_proto_enumTypes[5].Descriptor()
 }
 
 func (ConfigAction) Type() protoreflect.EnumType {
-	return &file_api_proto_tunnel_v1_tunnel_proto_enumTypes[4]
+	return &file_api_proto_tunnel_v1_tunnel_proto_enumTypes[5]
 }
 
 func (x ConfigAction) Number() protoreflect.EnumNumber {
@@ -331,7 +380,7 @@ func (x ConfigAction) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ConfigAction.Descriptor instead.
 func (ConfigAction) EnumDescriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{4}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{5}
 }
 
 type ModelPullState int32
@@ -373,11 +422,11 @@ func (x ModelPullState) String() string {
 }
 
 func (ModelPullState) Descriptor() protoreflect.EnumDescriptor {
-	return file_api_proto_tunnel_v1_tunnel_proto_enumTypes[5].Descriptor()
+	return file_api_proto_tunnel_v1_tunnel_proto_enumTypes[6].Descriptor()
 }
 
 func (ModelPullState) Type() protoreflect.EnumType {
-	return &file_api_proto_tunnel_v1_tunnel_proto_enumTypes[5]
+	return &file_api_proto_tunnel_v1_tunnel_proto_enumTypes[6]
 }
 
 func (x ModelPullState) Number() protoreflect.EnumNumber {
@@ -386,7 +435,7 @@ func (x ModelPullState) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ModelPullState.Descriptor instead.
 func (ModelPullState) EnumDescriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{5}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{6}
 }
 
 type ModelPullFailureReason int32
@@ -452,11 +501,11 @@ func (x ModelPullFailureReason) String() string {
 }
 
 func (ModelPullFailureReason) Descriptor() protoreflect.EnumDescriptor {
-	return file_api_proto_tunnel_v1_tunnel_proto_enumTypes[6].Descriptor()
+	return file_api_proto_tunnel_v1_tunnel_proto_enumTypes[7].Descriptor()
 }
 
 func (ModelPullFailureReason) Type() protoreflect.EnumType {
-	return &file_api_proto_tunnel_v1_tunnel_proto_enumTypes[6]
+	return &file_api_proto_tunnel_v1_tunnel_proto_enumTypes[7]
 }
 
 func (x ModelPullFailureReason) Number() protoreflect.EnumNumber {
@@ -465,7 +514,7 @@ func (x ModelPullFailureReason) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ModelPullFailureReason.Descriptor instead.
 func (ModelPullFailureReason) EnumDescriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{6}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{7}
 }
 
 type ComfyUIManagedActionType int32
@@ -504,11 +553,11 @@ func (x ComfyUIManagedActionType) String() string {
 }
 
 func (ComfyUIManagedActionType) Descriptor() protoreflect.EnumDescriptor {
-	return file_api_proto_tunnel_v1_tunnel_proto_enumTypes[7].Descriptor()
+	return file_api_proto_tunnel_v1_tunnel_proto_enumTypes[8].Descriptor()
 }
 
 func (ComfyUIManagedActionType) Type() protoreflect.EnumType {
-	return &file_api_proto_tunnel_v1_tunnel_proto_enumTypes[7]
+	return &file_api_proto_tunnel_v1_tunnel_proto_enumTypes[8]
 }
 
 func (x ComfyUIManagedActionType) Number() protoreflect.EnumNumber {
@@ -517,7 +566,7 @@ func (x ComfyUIManagedActionType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ComfyUIManagedActionType.Descriptor instead.
 func (ComfyUIManagedActionType) EnumDescriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{7}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{8}
 }
 
 type ComfyUIManagedState int32
@@ -562,11 +611,11 @@ func (x ComfyUIManagedState) String() string {
 }
 
 func (ComfyUIManagedState) Descriptor() protoreflect.EnumDescriptor {
-	return file_api_proto_tunnel_v1_tunnel_proto_enumTypes[8].Descriptor()
+	return file_api_proto_tunnel_v1_tunnel_proto_enumTypes[9].Descriptor()
 }
 
 func (ComfyUIManagedState) Type() protoreflect.EnumType {
-	return &file_api_proto_tunnel_v1_tunnel_proto_enumTypes[8]
+	return &file_api_proto_tunnel_v1_tunnel_proto_enumTypes[9]
 }
 
 func (x ComfyUIManagedState) Number() protoreflect.EnumNumber {
@@ -575,7 +624,7 @@ func (x ComfyUIManagedState) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ComfyUIManagedState.Descriptor instead.
 func (ComfyUIManagedState) EnumDescriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{8}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{9}
 }
 
 type AgentUpgradeActionType int32
@@ -614,11 +663,11 @@ func (x AgentUpgradeActionType) String() string {
 }
 
 func (AgentUpgradeActionType) Descriptor() protoreflect.EnumDescriptor {
-	return file_api_proto_tunnel_v1_tunnel_proto_enumTypes[9].Descriptor()
+	return file_api_proto_tunnel_v1_tunnel_proto_enumTypes[10].Descriptor()
 }
 
 func (AgentUpgradeActionType) Type() protoreflect.EnumType {
-	return &file_api_proto_tunnel_v1_tunnel_proto_enumTypes[9]
+	return &file_api_proto_tunnel_v1_tunnel_proto_enumTypes[10]
 }
 
 func (x AgentUpgradeActionType) Number() protoreflect.EnumNumber {
@@ -627,7 +676,7 @@ func (x AgentUpgradeActionType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use AgentUpgradeActionType.Descriptor instead.
 func (AgentUpgradeActionType) EnumDescriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{9}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{10}
 }
 
 type AgentUpgradeState int32
@@ -675,11 +724,11 @@ func (x AgentUpgradeState) String() string {
 }
 
 func (AgentUpgradeState) Descriptor() protoreflect.EnumDescriptor {
-	return file_api_proto_tunnel_v1_tunnel_proto_enumTypes[10].Descriptor()
+	return file_api_proto_tunnel_v1_tunnel_proto_enumTypes[11].Descriptor()
 }
 
 func (AgentUpgradeState) Type() protoreflect.EnumType {
-	return &file_api_proto_tunnel_v1_tunnel_proto_enumTypes[10]
+	return &file_api_proto_tunnel_v1_tunnel_proto_enumTypes[11]
 }
 
 func (x AgentUpgradeState) Number() protoreflect.EnumNumber {
@@ -688,7 +737,7 @@ func (x AgentUpgradeState) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use AgentUpgradeState.Descriptor instead.
 func (AgentUpgradeState) EnumDescriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{10}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{11}
 }
 
 type AgentUpgradeFailureReason int32
@@ -733,11 +782,11 @@ func (x AgentUpgradeFailureReason) String() string {
 }
 
 func (AgentUpgradeFailureReason) Descriptor() protoreflect.EnumDescriptor {
-	return file_api_proto_tunnel_v1_tunnel_proto_enumTypes[11].Descriptor()
+	return file_api_proto_tunnel_v1_tunnel_proto_enumTypes[12].Descriptor()
 }
 
 func (AgentUpgradeFailureReason) Type() protoreflect.EnumType {
-	return &file_api_proto_tunnel_v1_tunnel_proto_enumTypes[11]
+	return &file_api_proto_tunnel_v1_tunnel_proto_enumTypes[12]
 }
 
 func (x AgentUpgradeFailureReason) Number() protoreflect.EnumNumber {
@@ -746,7 +795,7 @@ func (x AgentUpgradeFailureReason) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use AgentUpgradeFailureReason.Descriptor instead.
 func (AgentUpgradeFailureReason) EnumDescriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{11}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{12}
 }
 
 // AudioTask selects which of the two OpenAI-compatible audio endpoints a
@@ -784,11 +833,11 @@ func (x AudioTask) String() string {
 }
 
 func (AudioTask) Descriptor() protoreflect.EnumDescriptor {
-	return file_api_proto_tunnel_v1_tunnel_proto_enumTypes[12].Descriptor()
+	return file_api_proto_tunnel_v1_tunnel_proto_enumTypes[13].Descriptor()
 }
 
 func (AudioTask) Type() protoreflect.EnumType {
-	return &file_api_proto_tunnel_v1_tunnel_proto_enumTypes[12]
+	return &file_api_proto_tunnel_v1_tunnel_proto_enumTypes[13]
 }
 
 func (x AudioTask) Number() protoreflect.EnumNumber {
@@ -797,7 +846,7 @@ func (x AudioTask) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use AudioTask.Descriptor instead.
 func (AudioTask) EnumDescriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{12}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{13}
 }
 
 type RemoteProvidersOutcome int32
@@ -845,11 +894,11 @@ func (x RemoteProvidersOutcome) String() string {
 }
 
 func (RemoteProvidersOutcome) Descriptor() protoreflect.EnumDescriptor {
-	return file_api_proto_tunnel_v1_tunnel_proto_enumTypes[13].Descriptor()
+	return file_api_proto_tunnel_v1_tunnel_proto_enumTypes[14].Descriptor()
 }
 
 func (RemoteProvidersOutcome) Type() protoreflect.EnumType {
-	return &file_api_proto_tunnel_v1_tunnel_proto_enumTypes[13]
+	return &file_api_proto_tunnel_v1_tunnel_proto_enumTypes[14]
 }
 
 func (x RemoteProvidersOutcome) Number() protoreflect.EnumNumber {
@@ -858,7 +907,7 @@ func (x RemoteProvidersOutcome) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use RemoteProvidersOutcome.Descriptor instead.
 func (RemoteProvidersOutcome) EnumDescriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{13}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{14}
 }
 
 type RemoteRuntimeState int32
@@ -897,11 +946,11 @@ func (x RemoteRuntimeState) String() string {
 }
 
 func (RemoteRuntimeState) Descriptor() protoreflect.EnumDescriptor {
-	return file_api_proto_tunnel_v1_tunnel_proto_enumTypes[14].Descriptor()
+	return file_api_proto_tunnel_v1_tunnel_proto_enumTypes[15].Descriptor()
 }
 
 func (RemoteRuntimeState) Type() protoreflect.EnumType {
-	return &file_api_proto_tunnel_v1_tunnel_proto_enumTypes[14]
+	return &file_api_proto_tunnel_v1_tunnel_proto_enumTypes[15]
 }
 
 func (x RemoteRuntimeState) Number() protoreflect.EnumNumber {
@@ -910,7 +959,7 @@ func (x RemoteRuntimeState) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use RemoteRuntimeState.Descriptor instead.
 func (RemoteRuntimeState) EnumDescriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{14}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{15}
 }
 
 type RegisterRequest struct {
@@ -2296,12 +2345,18 @@ func (*AgentFrame_Pong) isAgentFrame_Body() {}
 
 // Ready parks a slot in the idle pool, waiting for a request.
 type Ready struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	NodeId        string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
-	SlotId        string                 `protobuf:"bytes,2,opt,name=slot_id,json=slotId,proto3" json:"slot_id,omitempty"` // Agent-generated, so both sides' logs line up
-	Class         SlotClass              `protobuf:"varint,3,opt,name=class,proto3,enum=tunnel.v1.SlotClass" json:"class,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	NodeId string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	SlotId string                 `protobuf:"bytes,2,opt,name=slot_id,json=slotId,proto3" json:"slot_id,omitempty"` // Agent-generated, so both sides' logs line up
+	Class  SlotClass              `protobuf:"varint,3,opt,name=class,proto3,enum=tunnel.v1.SlotClass" json:"class,omitempty"`
+	// payload_encodings lists the RequestHeaders.payload encodings this slot
+	// can decode beyond identity. It is declared per slot rather than in Hello
+	// because a slot belongs to one Agent process: while an upgrade overlaps an
+	// old and a new process under one node_id, each slot still states exactly
+	// what its own process accepts. Absent means identity only.
+	PayloadEncodings []PayloadEncoding `protobuf:"varint,4,rep,packed,name=payload_encodings,json=payloadEncodings,proto3,enum=tunnel.v1.PayloadEncoding" json:"payload_encodings,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *Ready) Reset() {
@@ -2355,6 +2410,13 @@ func (x *Ready) GetClass() SlotClass {
 	return SlotClass_SLOT_CLASS_UNSPECIFIED
 }
 
+func (x *Ready) GetPayloadEncodings() []PayloadEncoding {
+	if x != nil {
+		return x.PayloadEncodings
+	}
+	return nil
+}
+
 type RequestHeaders struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	RuntimeId string                 `protobuf:"bytes,1,opt,name=runtime_id,json=runtimeId,proto3" json:"runtime_id,omitempty"` // must match the Agent's local allowlist
@@ -2366,8 +2428,11 @@ type RequestHeaders struct {
 	DeadlineUnixMs int64             `protobuf:"varint,3,opt,name=deadline_unix_ms,json=deadlineUnixMs,proto3" json:"deadline_unix_ms,omitempty"`
 	Payload        []byte            `protobuf:"bytes,4,opt,name=payload,proto3" json:"payload,omitempty"`                                                                       // decoded according to operation
 	Trace          map[string]string `protobuf:"bytes,5,rep,name=trace,proto3" json:"trace,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // fixed key set only, e.g. request_id, tenant_id
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// payload_encoding is how payload is encoded. The Gateway only picks an
+	// encoding the slot's Ready declared, so an older Agent always gets identity.
+	PayloadEncoding PayloadEncoding `protobuf:"varint,6,opt,name=payload_encoding,json=payloadEncoding,proto3,enum=tunnel.v1.PayloadEncoding" json:"payload_encoding,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *RequestHeaders) Reset() {
@@ -2433,6 +2498,13 @@ func (x *RequestHeaders) GetTrace() map[string]string {
 		return x.Trace
 	}
 	return nil
+}
+
+func (x *RequestHeaders) GetPayloadEncoding() PayloadEncoding {
+	if x != nil {
+		return x.PayloadEncoding
+	}
+	return PayloadEncoding_PAYLOAD_ENCODING_IDENTITY
 }
 
 // MessagesRequest preserves the native inference document, validated by the
@@ -9256,18 +9328,20 @@ const file_api_proto_tunnel_v1_tunnel_proto_rawDesc = "" +
 	"\x04data\x18\x04 \x01(\v2\x14.tunnel.v1.DataChunkH\x00R\x04data\x12*\n" +
 	"\x03end\x18\x05 \x01(\v2\x16.tunnel.v1.ResponseEndH\x00R\x03end\x12%\n" +
 	"\x04pong\x18\x06 \x01(\v2\x0f.tunnel.v1.PongH\x00R\x04pongB\x06\n" +
-	"\x04body\"e\n" +
+	"\x04body\"\xae\x01\n" +
 	"\x05Ready\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x17\n" +
 	"\aslot_id\x18\x02 \x01(\tR\x06slotId\x12*\n" +
-	"\x05class\x18\x03 \x01(\x0e2\x14.tunnel.v1.SlotClassR\x05class\"\x9d\x02\n" +
+	"\x05class\x18\x03 \x01(\x0e2\x14.tunnel.v1.SlotClassR\x05class\x12G\n" +
+	"\x11payload_encodings\x18\x04 \x03(\x0e2\x1a.tunnel.v1.PayloadEncodingR\x10payloadEncodings\"\xe4\x02\n" +
 	"\x0eRequestHeaders\x12\x1d\n" +
 	"\n" +
 	"runtime_id\x18\x01 \x01(\tR\truntimeId\x122\n" +
 	"\toperation\x18\x02 \x01(\x0e2\x14.tunnel.v1.OperationR\toperation\x12(\n" +
 	"\x10deadline_unix_ms\x18\x03 \x01(\x03R\x0edeadlineUnixMs\x12\x18\n" +
 	"\apayload\x18\x04 \x01(\fR\apayload\x12:\n" +
-	"\x05trace\x18\x05 \x03(\v2$.tunnel.v1.RequestHeaders.TraceEntryR\x05trace\x1a8\n" +
+	"\x05trace\x18\x05 \x03(\v2$.tunnel.v1.RequestHeaders.TraceEntryR\x05trace\x12E\n" +
+	"\x10payload_encoding\x18\x06 \x01(\x0e2\x1a.tunnel.v1.PayloadEncodingR\x0fpayloadEncoding\x1a8\n" +
 	"\n" +
 	"TraceEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
@@ -9807,7 +9881,10 @@ const file_api_proto_tunnel_v1_tunnel_proto_rawDesc = "" +
 	"\fcontent_type\x18\x01 \x01(\tR\vcontentType\x12\x12\n" +
 	"\x04size\x18\x02 \x01(\x03R\x04size\x12%\n" +
 	"\x0erevised_prompt\x18\x03 \x01(\tR\rrevisedPrompt\x12&\n" +
-	"\x05usage\x18\x04 \x01(\v2\x10.tunnel.v1.UsageR\x05usage*V\n" +
+	"\x05usage\x18\x04 \x01(\v2\x10.tunnel.v1.UsageR\x05usage*K\n" +
+	"\x0fPayloadEncoding\x12\x1d\n" +
+	"\x19PAYLOAD_ENCODING_IDENTITY\x10\x00\x12\x19\n" +
+	"\x15PAYLOAD_ENCODING_ZSTD\x10\x01*V\n" +
 	"\tSlotClass\x12\x1a\n" +
 	"\x16SLOT_CLASS_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14SLOT_CLASS_INFERENCE\x10\x01\x12\x13\n" +
@@ -9948,323 +10025,326 @@ func file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP() []byte {
 	return file_api_proto_tunnel_v1_tunnel_proto_rawDescData
 }
 
-var file_api_proto_tunnel_v1_tunnel_proto_enumTypes = make([]protoimpl.EnumInfo, 15)
+var file_api_proto_tunnel_v1_tunnel_proto_enumTypes = make([]protoimpl.EnumInfo, 16)
 var file_api_proto_tunnel_v1_tunnel_proto_msgTypes = make([]protoimpl.MessageInfo, 130)
 var file_api_proto_tunnel_v1_tunnel_proto_goTypes = []any{
-	(SlotClass)(0),                                 // 0: tunnel.v1.SlotClass
-	(Operation)(0),                                 // 1: tunnel.v1.Operation
-	(LoadPressureReason)(0),                        // 2: tunnel.v1.LoadPressureReason
-	(ReplicaState)(0),                              // 3: tunnel.v1.ReplicaState
-	(ConfigAction)(0),                              // 4: tunnel.v1.ConfigAction
-	(ModelPullState)(0),                            // 5: tunnel.v1.ModelPullState
-	(ModelPullFailureReason)(0),                    // 6: tunnel.v1.ModelPullFailureReason
-	(ComfyUIManagedActionType)(0),                  // 7: tunnel.v1.ComfyUIManagedActionType
-	(ComfyUIManagedState)(0),                       // 8: tunnel.v1.ComfyUIManagedState
-	(AgentUpgradeActionType)(0),                    // 9: tunnel.v1.AgentUpgradeActionType
-	(AgentUpgradeState)(0),                         // 10: tunnel.v1.AgentUpgradeState
-	(AgentUpgradeFailureReason)(0),                 // 11: tunnel.v1.AgentUpgradeFailureReason
-	(AudioTask)(0),                                 // 12: tunnel.v1.AudioTask
-	(RemoteProvidersOutcome)(0),                    // 13: tunnel.v1.RemoteProvidersOutcome
-	(RemoteRuntimeState)(0),                        // 14: tunnel.v1.RemoteRuntimeState
-	(*RegisterRequest)(nil),                        // 15: tunnel.v1.RegisterRequest
-	(*RegisterResponse)(nil),                       // 16: tunnel.v1.RegisterResponse
-	(*RenewRequest)(nil),                           // 17: tunnel.v1.RenewRequest
-	(*RenewResponse)(nil),                          // 18: tunnel.v1.RenewResponse
-	(*MintTokenRequest)(nil),                       // 19: tunnel.v1.MintTokenRequest
-	(*MintTokenResponse)(nil),                      // 20: tunnel.v1.MintTokenResponse
-	(*RevokeTokenRequest)(nil),                     // 21: tunnel.v1.RevokeTokenRequest
-	(*RevokeTokenResponse)(nil),                    // 22: tunnel.v1.RevokeTokenResponse
-	(*DisableNodeRequest)(nil),                     // 23: tunnel.v1.DisableNodeRequest
-	(*DisableNodeResponse)(nil),                    // 24: tunnel.v1.DisableNodeResponse
-	(*EnableNodeRequest)(nil),                      // 25: tunnel.v1.EnableNodeRequest
-	(*EnableNodeResponse)(nil),                     // 26: tunnel.v1.EnableNodeResponse
-	(*DeleteNodeRequest)(nil),                      // 27: tunnel.v1.DeleteNodeRequest
-	(*DeleteNodeResponse)(nil),                     // 28: tunnel.v1.DeleteNodeResponse
-	(*ApproveNodeRequest)(nil),                     // 29: tunnel.v1.ApproveNodeRequest
-	(*ApproveNodeResponse)(nil),                    // 30: tunnel.v1.ApproveNodeResponse
-	(*SetMaintenanceRequest)(nil),                  // 31: tunnel.v1.SetMaintenanceRequest
-	(*SetMaintenanceResponse)(nil),                 // 32: tunnel.v1.SetMaintenanceResponse
-	(*ClearMaintenanceRequest)(nil),                // 33: tunnel.v1.ClearMaintenanceRequest
-	(*ClearMaintenanceResponse)(nil),               // 34: tunnel.v1.ClearMaintenanceResponse
-	(*ListNodeStatesRequest)(nil),                  // 35: tunnel.v1.ListNodeStatesRequest
-	(*ListNodeStatesResponse)(nil),                 // 36: tunnel.v1.ListNodeStatesResponse
-	(*NodeState)(nil),                              // 37: tunnel.v1.NodeState
-	(*GatewayFrame)(nil),                           // 38: tunnel.v1.GatewayFrame
-	(*AgentFrame)(nil),                             // 39: tunnel.v1.AgentFrame
-	(*Ready)(nil),                                  // 40: tunnel.v1.Ready
-	(*RequestHeaders)(nil),                         // 41: tunnel.v1.RequestHeaders
-	(*MessagesRequest)(nil),                        // 42: tunnel.v1.MessagesRequest
-	(*MessagesEvent)(nil),                          // 43: tunnel.v1.MessagesEvent
-	(*UpstreamHeader)(nil),                         // 44: tunnel.v1.UpstreamHeader
-	(*UpstreamResponse)(nil),                       // 45: tunnel.v1.UpstreamResponse
-	(*RequestEnd)(nil),                             // 46: tunnel.v1.RequestEnd
-	(*Cancel)(nil),                                 // 47: tunnel.v1.Cancel
-	(*Ping)(nil),                                   // 48: tunnel.v1.Ping
-	(*Pong)(nil),                                   // 49: tunnel.v1.Pong
-	(*ResponseHeaders)(nil),                        // 50: tunnel.v1.ResponseHeaders
-	(*DataChunk)(nil),                              // 51: tunnel.v1.DataChunk
-	(*ResponseEnd)(nil),                            // 52: tunnel.v1.ResponseEnd
-	(*TunnelError)(nil),                            // 53: tunnel.v1.TunnelError
-	(*AgentControl)(nil),                           // 54: tunnel.v1.AgentControl
-	(*GatewayControl)(nil),                         // 55: tunnel.v1.GatewayControl
-	(*Hello)(nil),                                  // 56: tunnel.v1.Hello
-	(*NodeResources)(nil),                          // 57: tunnel.v1.NodeResources
-	(*HelloAck)(nil),                               // 58: tunnel.v1.HelloAck
-	(*Heartbeat)(nil),                              // 59: tunnel.v1.Heartbeat
-	(*NodeLoad)(nil),                               // 60: tunnel.v1.NodeLoad
-	(*HeartbeatAck)(nil),                           // 61: tunnel.v1.HeartbeatAck
-	(*Draining)(nil),                               // 62: tunnel.v1.Draining
-	(*Shutdown)(nil),                               // 63: tunnel.v1.Shutdown
-	(*SlotHint)(nil),                               // 64: tunnel.v1.SlotHint
-	(*GatewayRoster)(nil),                          // 65: tunnel.v1.GatewayRoster
-	(*GatewayReplica)(nil),                         // 66: tunnel.v1.GatewayReplica
-	(*JoinRequest)(nil),                            // 67: tunnel.v1.JoinRequest
-	(*RuntimeStatus)(nil),                          // 68: tunnel.v1.RuntimeStatus
-	(*RuntimeConfig)(nil),                          // 69: tunnel.v1.RuntimeConfig
-	(*ModelPullTrigger)(nil),                       // 70: tunnel.v1.ModelPullTrigger
-	(*ModelPullReport)(nil),                        // 71: tunnel.v1.ModelPullReport
-	(*ModelPullStatus)(nil),                        // 72: tunnel.v1.ModelPullStatus
-	(*ComfyUIManagedAction)(nil),                   // 73: tunnel.v1.ComfyUIManagedAction
-	(*ComfyUIManagedReport)(nil),                   // 74: tunnel.v1.ComfyUIManagedReport
-	(*ComfyUIManagedStatus)(nil),                   // 75: tunnel.v1.ComfyUIManagedStatus
-	(*ComfyUIManagedCustomNodeInstallTrigger)(nil), // 76: tunnel.v1.ComfyUIManagedCustomNodeInstallTrigger
-	(*AgentUpgradeAction)(nil),                     // 77: tunnel.v1.AgentUpgradeAction
-	(*AgentUpgradeReport)(nil),                     // 78: tunnel.v1.AgentUpgradeReport
-	(*CLIUsageReport)(nil),                         // 79: tunnel.v1.CLIUsageReport
-	(*CLIUsageAccount)(nil),                        // 80: tunnel.v1.CLIUsageAccount
-	(*CLIUsageWindow)(nil),                         // 81: tunnel.v1.CLIUsageWindow
-	(*ComfyUIManagedCustomNode)(nil),               // 82: tunnel.v1.ComfyUIManagedCustomNode
-	(*RuntimeSpec)(nil),                            // 83: tunnel.v1.RuntimeSpec
-	(*TLSSpec)(nil),                                // 84: tunnel.v1.TLSSpec
-	(*RuntimeSnapshot)(nil),                        // 85: tunnel.v1.RuntimeSnapshot
-	(*RuntimeDescriptor)(nil),                      // 86: tunnel.v1.RuntimeDescriptor
-	(*ProbeResult)(nil),                            // 87: tunnel.v1.ProbeResult
-	(*HealthReport)(nil),                           // 88: tunnel.v1.HealthReport
-	(*Discovery)(nil),                              // 89: tunnel.v1.Discovery
-	(*CapabilityEvidence)(nil),                     // 90: tunnel.v1.CapabilityEvidence
-	(*Model)(nil),                                  // 91: tunnel.v1.Model
-	(*ModelList)(nil),                              // 92: tunnel.v1.ModelList
-	(*ChatRequest)(nil),                            // 93: tunnel.v1.ChatRequest
-	(*ChatMessage)(nil),                            // 94: tunnel.v1.ChatMessage
-	(*ReasoningBlock)(nil),                         // 95: tunnel.v1.ReasoningBlock
-	(*ReasoningConfig)(nil),                        // 96: tunnel.v1.ReasoningConfig
-	(*ContentPart)(nil),                            // 97: tunnel.v1.ContentPart
-	(*ContentImageURL)(nil),                        // 98: tunnel.v1.ContentImageURL
-	(*ContentAudio)(nil),                           // 99: tunnel.v1.ContentAudio
-	(*ContentFile)(nil),                            // 100: tunnel.v1.ContentFile
-	(*ToolCall)(nil),                               // 101: tunnel.v1.ToolCall
-	(*FunctionCall)(nil),                           // 102: tunnel.v1.FunctionCall
-	(*Tool)(nil),                                   // 103: tunnel.v1.Tool
-	(*FunctionDefinition)(nil),                     // 104: tunnel.v1.FunctionDefinition
-	(*ResponseFormat)(nil),                         // 105: tunnel.v1.ResponseFormat
-	(*JSONSchemaFormat)(nil),                       // 106: tunnel.v1.JSONSchemaFormat
-	(*ChatResponse)(nil),                           // 107: tunnel.v1.ChatResponse
-	(*ChatEvent)(nil),                              // 108: tunnel.v1.ChatEvent
-	(*ChatMessageDelta)(nil),                       // 109: tunnel.v1.ChatMessageDelta
-	(*ToolCallDelta)(nil),                          // 110: tunnel.v1.ToolCallDelta
-	(*FunctionCallDelta)(nil),                      // 111: tunnel.v1.FunctionCallDelta
-	(*Usage)(nil),                                  // 112: tunnel.v1.Usage
-	(*EmbeddingRequest)(nil),                       // 113: tunnel.v1.EmbeddingRequest
-	(*EmbeddingResponse)(nil),                      // 114: tunnel.v1.EmbeddingResponse
-	(*Embedding)(nil),                              // 115: tunnel.v1.Embedding
-	(*WorkflowRequest)(nil),                        // 116: tunnel.v1.WorkflowRequest
-	(*WorkflowRun)(nil),                            // 117: tunnel.v1.WorkflowRun
-	(*RunRef)(nil),                                 // 118: tunnel.v1.RunRef
-	(*WorkflowEvent)(nil),                          // 119: tunnel.v1.WorkflowEvent
-	(*WorkflowStatus)(nil),                         // 120: tunnel.v1.WorkflowStatus
-	(*ArtifactRef)(nil),                            // 121: tunnel.v1.ArtifactRef
-	(*ArtifactList)(nil),                           // 122: tunnel.v1.ArtifactList
-	(*InputUploadRequest)(nil),                     // 123: tunnel.v1.InputUploadRequest
-	(*InputUploadResult)(nil),                      // 124: tunnel.v1.InputUploadResult
-	(*AudioTranscriptionRequest)(nil),              // 125: tunnel.v1.AudioTranscriptionRequest
-	(*AudioTranscriptionResponse)(nil),             // 126: tunnel.v1.AudioTranscriptionResponse
-	(*RerankRequest)(nil),                          // 127: tunnel.v1.RerankRequest
-	(*RerankResponse)(nil),                         // 128: tunnel.v1.RerankResponse
-	(*RerankResult)(nil),                           // 129: tunnel.v1.RerankResult
-	(*RemoteProviders)(nil),                        // 130: tunnel.v1.RemoteProviders
-	(*RemoteProvidersReport)(nil),                  // 131: tunnel.v1.RemoteProvidersReport
-	(*RemoteRuntimeResult)(nil),                    // 132: tunnel.v1.RemoteRuntimeResult
-	(*ImageGenerateRequest)(nil),                   // 133: tunnel.v1.ImageGenerateRequest
-	(*ImageGenerateEvent)(nil),                     // 134: tunnel.v1.ImageGenerateEvent
-	(*ImageGenerateMeta)(nil),                      // 135: tunnel.v1.ImageGenerateMeta
-	nil,                                            // 136: tunnel.v1.RequestHeaders.TraceEntry
-	nil,                                            // 137: tunnel.v1.Hello.LabelsEntry
-	nil,                                            // 138: tunnel.v1.RuntimeSpec.HeadersEntry
-	nil,                                            // 139: tunnel.v1.RuntimeSpec.CapabilityOverridesEntry
-	nil,                                            // 140: tunnel.v1.Discovery.CapabilitiesEntry
-	nil,                                            // 141: tunnel.v1.Model.CapabilitiesEntry
-	nil,                                            // 142: tunnel.v1.ChatRequest.ExtraEntry
-	nil,                                            // 143: tunnel.v1.Usage.DetailsEntry
-	nil,                                            // 144: tunnel.v1.Usage.AttributesEntry
-	(*timestamppb.Timestamp)(nil),                  // 145: google.protobuf.Timestamp
-	(*durationpb.Duration)(nil),                    // 146: google.protobuf.Duration
+	(PayloadEncoding)(0),                           // 0: tunnel.v1.PayloadEncoding
+	(SlotClass)(0),                                 // 1: tunnel.v1.SlotClass
+	(Operation)(0),                                 // 2: tunnel.v1.Operation
+	(LoadPressureReason)(0),                        // 3: tunnel.v1.LoadPressureReason
+	(ReplicaState)(0),                              // 4: tunnel.v1.ReplicaState
+	(ConfigAction)(0),                              // 5: tunnel.v1.ConfigAction
+	(ModelPullState)(0),                            // 6: tunnel.v1.ModelPullState
+	(ModelPullFailureReason)(0),                    // 7: tunnel.v1.ModelPullFailureReason
+	(ComfyUIManagedActionType)(0),                  // 8: tunnel.v1.ComfyUIManagedActionType
+	(ComfyUIManagedState)(0),                       // 9: tunnel.v1.ComfyUIManagedState
+	(AgentUpgradeActionType)(0),                    // 10: tunnel.v1.AgentUpgradeActionType
+	(AgentUpgradeState)(0),                         // 11: tunnel.v1.AgentUpgradeState
+	(AgentUpgradeFailureReason)(0),                 // 12: tunnel.v1.AgentUpgradeFailureReason
+	(AudioTask)(0),                                 // 13: tunnel.v1.AudioTask
+	(RemoteProvidersOutcome)(0),                    // 14: tunnel.v1.RemoteProvidersOutcome
+	(RemoteRuntimeState)(0),                        // 15: tunnel.v1.RemoteRuntimeState
+	(*RegisterRequest)(nil),                        // 16: tunnel.v1.RegisterRequest
+	(*RegisterResponse)(nil),                       // 17: tunnel.v1.RegisterResponse
+	(*RenewRequest)(nil),                           // 18: tunnel.v1.RenewRequest
+	(*RenewResponse)(nil),                          // 19: tunnel.v1.RenewResponse
+	(*MintTokenRequest)(nil),                       // 20: tunnel.v1.MintTokenRequest
+	(*MintTokenResponse)(nil),                      // 21: tunnel.v1.MintTokenResponse
+	(*RevokeTokenRequest)(nil),                     // 22: tunnel.v1.RevokeTokenRequest
+	(*RevokeTokenResponse)(nil),                    // 23: tunnel.v1.RevokeTokenResponse
+	(*DisableNodeRequest)(nil),                     // 24: tunnel.v1.DisableNodeRequest
+	(*DisableNodeResponse)(nil),                    // 25: tunnel.v1.DisableNodeResponse
+	(*EnableNodeRequest)(nil),                      // 26: tunnel.v1.EnableNodeRequest
+	(*EnableNodeResponse)(nil),                     // 27: tunnel.v1.EnableNodeResponse
+	(*DeleteNodeRequest)(nil),                      // 28: tunnel.v1.DeleteNodeRequest
+	(*DeleteNodeResponse)(nil),                     // 29: tunnel.v1.DeleteNodeResponse
+	(*ApproveNodeRequest)(nil),                     // 30: tunnel.v1.ApproveNodeRequest
+	(*ApproveNodeResponse)(nil),                    // 31: tunnel.v1.ApproveNodeResponse
+	(*SetMaintenanceRequest)(nil),                  // 32: tunnel.v1.SetMaintenanceRequest
+	(*SetMaintenanceResponse)(nil),                 // 33: tunnel.v1.SetMaintenanceResponse
+	(*ClearMaintenanceRequest)(nil),                // 34: tunnel.v1.ClearMaintenanceRequest
+	(*ClearMaintenanceResponse)(nil),               // 35: tunnel.v1.ClearMaintenanceResponse
+	(*ListNodeStatesRequest)(nil),                  // 36: tunnel.v1.ListNodeStatesRequest
+	(*ListNodeStatesResponse)(nil),                 // 37: tunnel.v1.ListNodeStatesResponse
+	(*NodeState)(nil),                              // 38: tunnel.v1.NodeState
+	(*GatewayFrame)(nil),                           // 39: tunnel.v1.GatewayFrame
+	(*AgentFrame)(nil),                             // 40: tunnel.v1.AgentFrame
+	(*Ready)(nil),                                  // 41: tunnel.v1.Ready
+	(*RequestHeaders)(nil),                         // 42: tunnel.v1.RequestHeaders
+	(*MessagesRequest)(nil),                        // 43: tunnel.v1.MessagesRequest
+	(*MessagesEvent)(nil),                          // 44: tunnel.v1.MessagesEvent
+	(*UpstreamHeader)(nil),                         // 45: tunnel.v1.UpstreamHeader
+	(*UpstreamResponse)(nil),                       // 46: tunnel.v1.UpstreamResponse
+	(*RequestEnd)(nil),                             // 47: tunnel.v1.RequestEnd
+	(*Cancel)(nil),                                 // 48: tunnel.v1.Cancel
+	(*Ping)(nil),                                   // 49: tunnel.v1.Ping
+	(*Pong)(nil),                                   // 50: tunnel.v1.Pong
+	(*ResponseHeaders)(nil),                        // 51: tunnel.v1.ResponseHeaders
+	(*DataChunk)(nil),                              // 52: tunnel.v1.DataChunk
+	(*ResponseEnd)(nil),                            // 53: tunnel.v1.ResponseEnd
+	(*TunnelError)(nil),                            // 54: tunnel.v1.TunnelError
+	(*AgentControl)(nil),                           // 55: tunnel.v1.AgentControl
+	(*GatewayControl)(nil),                         // 56: tunnel.v1.GatewayControl
+	(*Hello)(nil),                                  // 57: tunnel.v1.Hello
+	(*NodeResources)(nil),                          // 58: tunnel.v1.NodeResources
+	(*HelloAck)(nil),                               // 59: tunnel.v1.HelloAck
+	(*Heartbeat)(nil),                              // 60: tunnel.v1.Heartbeat
+	(*NodeLoad)(nil),                               // 61: tunnel.v1.NodeLoad
+	(*HeartbeatAck)(nil),                           // 62: tunnel.v1.HeartbeatAck
+	(*Draining)(nil),                               // 63: tunnel.v1.Draining
+	(*Shutdown)(nil),                               // 64: tunnel.v1.Shutdown
+	(*SlotHint)(nil),                               // 65: tunnel.v1.SlotHint
+	(*GatewayRoster)(nil),                          // 66: tunnel.v1.GatewayRoster
+	(*GatewayReplica)(nil),                         // 67: tunnel.v1.GatewayReplica
+	(*JoinRequest)(nil),                            // 68: tunnel.v1.JoinRequest
+	(*RuntimeStatus)(nil),                          // 69: tunnel.v1.RuntimeStatus
+	(*RuntimeConfig)(nil),                          // 70: tunnel.v1.RuntimeConfig
+	(*ModelPullTrigger)(nil),                       // 71: tunnel.v1.ModelPullTrigger
+	(*ModelPullReport)(nil),                        // 72: tunnel.v1.ModelPullReport
+	(*ModelPullStatus)(nil),                        // 73: tunnel.v1.ModelPullStatus
+	(*ComfyUIManagedAction)(nil),                   // 74: tunnel.v1.ComfyUIManagedAction
+	(*ComfyUIManagedReport)(nil),                   // 75: tunnel.v1.ComfyUIManagedReport
+	(*ComfyUIManagedStatus)(nil),                   // 76: tunnel.v1.ComfyUIManagedStatus
+	(*ComfyUIManagedCustomNodeInstallTrigger)(nil), // 77: tunnel.v1.ComfyUIManagedCustomNodeInstallTrigger
+	(*AgentUpgradeAction)(nil),                     // 78: tunnel.v1.AgentUpgradeAction
+	(*AgentUpgradeReport)(nil),                     // 79: tunnel.v1.AgentUpgradeReport
+	(*CLIUsageReport)(nil),                         // 80: tunnel.v1.CLIUsageReport
+	(*CLIUsageAccount)(nil),                        // 81: tunnel.v1.CLIUsageAccount
+	(*CLIUsageWindow)(nil),                         // 82: tunnel.v1.CLIUsageWindow
+	(*ComfyUIManagedCustomNode)(nil),               // 83: tunnel.v1.ComfyUIManagedCustomNode
+	(*RuntimeSpec)(nil),                            // 84: tunnel.v1.RuntimeSpec
+	(*TLSSpec)(nil),                                // 85: tunnel.v1.TLSSpec
+	(*RuntimeSnapshot)(nil),                        // 86: tunnel.v1.RuntimeSnapshot
+	(*RuntimeDescriptor)(nil),                      // 87: tunnel.v1.RuntimeDescriptor
+	(*ProbeResult)(nil),                            // 88: tunnel.v1.ProbeResult
+	(*HealthReport)(nil),                           // 89: tunnel.v1.HealthReport
+	(*Discovery)(nil),                              // 90: tunnel.v1.Discovery
+	(*CapabilityEvidence)(nil),                     // 91: tunnel.v1.CapabilityEvidence
+	(*Model)(nil),                                  // 92: tunnel.v1.Model
+	(*ModelList)(nil),                              // 93: tunnel.v1.ModelList
+	(*ChatRequest)(nil),                            // 94: tunnel.v1.ChatRequest
+	(*ChatMessage)(nil),                            // 95: tunnel.v1.ChatMessage
+	(*ReasoningBlock)(nil),                         // 96: tunnel.v1.ReasoningBlock
+	(*ReasoningConfig)(nil),                        // 97: tunnel.v1.ReasoningConfig
+	(*ContentPart)(nil),                            // 98: tunnel.v1.ContentPart
+	(*ContentImageURL)(nil),                        // 99: tunnel.v1.ContentImageURL
+	(*ContentAudio)(nil),                           // 100: tunnel.v1.ContentAudio
+	(*ContentFile)(nil),                            // 101: tunnel.v1.ContentFile
+	(*ToolCall)(nil),                               // 102: tunnel.v1.ToolCall
+	(*FunctionCall)(nil),                           // 103: tunnel.v1.FunctionCall
+	(*Tool)(nil),                                   // 104: tunnel.v1.Tool
+	(*FunctionDefinition)(nil),                     // 105: tunnel.v1.FunctionDefinition
+	(*ResponseFormat)(nil),                         // 106: tunnel.v1.ResponseFormat
+	(*JSONSchemaFormat)(nil),                       // 107: tunnel.v1.JSONSchemaFormat
+	(*ChatResponse)(nil),                           // 108: tunnel.v1.ChatResponse
+	(*ChatEvent)(nil),                              // 109: tunnel.v1.ChatEvent
+	(*ChatMessageDelta)(nil),                       // 110: tunnel.v1.ChatMessageDelta
+	(*ToolCallDelta)(nil),                          // 111: tunnel.v1.ToolCallDelta
+	(*FunctionCallDelta)(nil),                      // 112: tunnel.v1.FunctionCallDelta
+	(*Usage)(nil),                                  // 113: tunnel.v1.Usage
+	(*EmbeddingRequest)(nil),                       // 114: tunnel.v1.EmbeddingRequest
+	(*EmbeddingResponse)(nil),                      // 115: tunnel.v1.EmbeddingResponse
+	(*Embedding)(nil),                              // 116: tunnel.v1.Embedding
+	(*WorkflowRequest)(nil),                        // 117: tunnel.v1.WorkflowRequest
+	(*WorkflowRun)(nil),                            // 118: tunnel.v1.WorkflowRun
+	(*RunRef)(nil),                                 // 119: tunnel.v1.RunRef
+	(*WorkflowEvent)(nil),                          // 120: tunnel.v1.WorkflowEvent
+	(*WorkflowStatus)(nil),                         // 121: tunnel.v1.WorkflowStatus
+	(*ArtifactRef)(nil),                            // 122: tunnel.v1.ArtifactRef
+	(*ArtifactList)(nil),                           // 123: tunnel.v1.ArtifactList
+	(*InputUploadRequest)(nil),                     // 124: tunnel.v1.InputUploadRequest
+	(*InputUploadResult)(nil),                      // 125: tunnel.v1.InputUploadResult
+	(*AudioTranscriptionRequest)(nil),              // 126: tunnel.v1.AudioTranscriptionRequest
+	(*AudioTranscriptionResponse)(nil),             // 127: tunnel.v1.AudioTranscriptionResponse
+	(*RerankRequest)(nil),                          // 128: tunnel.v1.RerankRequest
+	(*RerankResponse)(nil),                         // 129: tunnel.v1.RerankResponse
+	(*RerankResult)(nil),                           // 130: tunnel.v1.RerankResult
+	(*RemoteProviders)(nil),                        // 131: tunnel.v1.RemoteProviders
+	(*RemoteProvidersReport)(nil),                  // 132: tunnel.v1.RemoteProvidersReport
+	(*RemoteRuntimeResult)(nil),                    // 133: tunnel.v1.RemoteRuntimeResult
+	(*ImageGenerateRequest)(nil),                   // 134: tunnel.v1.ImageGenerateRequest
+	(*ImageGenerateEvent)(nil),                     // 135: tunnel.v1.ImageGenerateEvent
+	(*ImageGenerateMeta)(nil),                      // 136: tunnel.v1.ImageGenerateMeta
+	nil,                                            // 137: tunnel.v1.RequestHeaders.TraceEntry
+	nil,                                            // 138: tunnel.v1.Hello.LabelsEntry
+	nil,                                            // 139: tunnel.v1.RuntimeSpec.HeadersEntry
+	nil,                                            // 140: tunnel.v1.RuntimeSpec.CapabilityOverridesEntry
+	nil,                                            // 141: tunnel.v1.Discovery.CapabilitiesEntry
+	nil,                                            // 142: tunnel.v1.Model.CapabilitiesEntry
+	nil,                                            // 143: tunnel.v1.ChatRequest.ExtraEntry
+	nil,                                            // 144: tunnel.v1.Usage.DetailsEntry
+	nil,                                            // 145: tunnel.v1.Usage.AttributesEntry
+	(*timestamppb.Timestamp)(nil),                  // 146: google.protobuf.Timestamp
+	(*durationpb.Duration)(nil),                    // 147: google.protobuf.Duration
 }
 var file_api_proto_tunnel_v1_tunnel_proto_depIdxs = []int32{
-	145, // 0: tunnel.v1.RegisterResponse.not_after:type_name -> google.protobuf.Timestamp
-	145, // 1: tunnel.v1.RenewResponse.not_after:type_name -> google.protobuf.Timestamp
-	146, // 2: tunnel.v1.MintTokenRequest.ttl:type_name -> google.protobuf.Duration
-	145, // 3: tunnel.v1.MintTokenResponse.expires_at:type_name -> google.protobuf.Timestamp
-	37,  // 4: tunnel.v1.ListNodeStatesResponse.states:type_name -> tunnel.v1.NodeState
-	145, // 5: tunnel.v1.NodeState.first_seen_at:type_name -> google.protobuf.Timestamp
-	145, // 6: tunnel.v1.NodeState.last_seen_at:type_name -> google.protobuf.Timestamp
-	41,  // 7: tunnel.v1.GatewayFrame.headers:type_name -> tunnel.v1.RequestHeaders
-	51,  // 8: tunnel.v1.GatewayFrame.data:type_name -> tunnel.v1.DataChunk
-	46,  // 9: tunnel.v1.GatewayFrame.end:type_name -> tunnel.v1.RequestEnd
-	47,  // 10: tunnel.v1.GatewayFrame.cancel:type_name -> tunnel.v1.Cancel
-	48,  // 11: tunnel.v1.GatewayFrame.ping:type_name -> tunnel.v1.Ping
-	40,  // 12: tunnel.v1.AgentFrame.ready:type_name -> tunnel.v1.Ready
-	50,  // 13: tunnel.v1.AgentFrame.headers:type_name -> tunnel.v1.ResponseHeaders
-	51,  // 14: tunnel.v1.AgentFrame.data:type_name -> tunnel.v1.DataChunk
-	52,  // 15: tunnel.v1.AgentFrame.end:type_name -> tunnel.v1.ResponseEnd
-	49,  // 16: tunnel.v1.AgentFrame.pong:type_name -> tunnel.v1.Pong
-	0,   // 17: tunnel.v1.Ready.class:type_name -> tunnel.v1.SlotClass
-	1,   // 18: tunnel.v1.RequestHeaders.operation:type_name -> tunnel.v1.Operation
-	136, // 19: tunnel.v1.RequestHeaders.trace:type_name -> tunnel.v1.RequestHeaders.TraceEntry
-	44,  // 20: tunnel.v1.MessagesEvent.upstream_headers:type_name -> tunnel.v1.UpstreamHeader
-	44,  // 21: tunnel.v1.UpstreamResponse.headers:type_name -> tunnel.v1.UpstreamHeader
-	53,  // 22: tunnel.v1.ResponseEnd.error:type_name -> tunnel.v1.TunnelError
-	146, // 23: tunnel.v1.TunnelError.retry_after:type_name -> google.protobuf.Duration
-	45,  // 24: tunnel.v1.TunnelError.upstream:type_name -> tunnel.v1.UpstreamResponse
-	56,  // 25: tunnel.v1.AgentControl.hello:type_name -> tunnel.v1.Hello
-	59,  // 26: tunnel.v1.AgentControl.heartbeat:type_name -> tunnel.v1.Heartbeat
-	68,  // 27: tunnel.v1.AgentControl.status:type_name -> tunnel.v1.RuntimeStatus
-	62,  // 28: tunnel.v1.AgentControl.draining:type_name -> tunnel.v1.Draining
-	49,  // 29: tunnel.v1.AgentControl.pong:type_name -> tunnel.v1.Pong
-	71,  // 30: tunnel.v1.AgentControl.model_pull:type_name -> tunnel.v1.ModelPullReport
-	74,  // 31: tunnel.v1.AgentControl.comfyui_managed:type_name -> tunnel.v1.ComfyUIManagedReport
-	78,  // 32: tunnel.v1.AgentControl.agent_upgrade:type_name -> tunnel.v1.AgentUpgradeReport
-	79,  // 33: tunnel.v1.AgentControl.cli_usage:type_name -> tunnel.v1.CLIUsageReport
-	131, // 34: tunnel.v1.AgentControl.remote_providers:type_name -> tunnel.v1.RemoteProvidersReport
-	58,  // 35: tunnel.v1.GatewayControl.ack:type_name -> tunnel.v1.HelloAck
-	61,  // 36: tunnel.v1.GatewayControl.hb_ack:type_name -> tunnel.v1.HeartbeatAck
-	69,  // 37: tunnel.v1.GatewayControl.config:type_name -> tunnel.v1.RuntimeConfig
-	64,  // 38: tunnel.v1.GatewayControl.slot_hint:type_name -> tunnel.v1.SlotHint
-	65,  // 39: tunnel.v1.GatewayControl.roster:type_name -> tunnel.v1.GatewayRoster
-	63,  // 40: tunnel.v1.GatewayControl.shutdown:type_name -> tunnel.v1.Shutdown
-	48,  // 41: tunnel.v1.GatewayControl.ping:type_name -> tunnel.v1.Ping
-	70,  // 42: tunnel.v1.GatewayControl.model_pull_trigger:type_name -> tunnel.v1.ModelPullTrigger
-	73,  // 43: tunnel.v1.GatewayControl.comfyui_managed_action:type_name -> tunnel.v1.ComfyUIManagedAction
-	76,  // 44: tunnel.v1.GatewayControl.comfyui_managed_custom_node_install:type_name -> tunnel.v1.ComfyUIManagedCustomNodeInstallTrigger
-	77,  // 45: tunnel.v1.GatewayControl.agent_upgrade_action:type_name -> tunnel.v1.AgentUpgradeAction
-	130, // 46: tunnel.v1.GatewayControl.remote_providers:type_name -> tunnel.v1.RemoteProviders
-	57,  // 47: tunnel.v1.Hello.resources:type_name -> tunnel.v1.NodeResources
-	137, // 48: tunnel.v1.Hello.labels:type_name -> tunnel.v1.Hello.LabelsEntry
-	60,  // 49: tunnel.v1.Heartbeat.load:type_name -> tunnel.v1.NodeLoad
-	2,   // 50: tunnel.v1.NodeLoad.pressure_reasons:type_name -> tunnel.v1.LoadPressureReason
-	146, // 51: tunnel.v1.Shutdown.grace_period:type_name -> google.protobuf.Duration
-	66,  // 52: tunnel.v1.GatewayRoster.replicas:type_name -> tunnel.v1.GatewayReplica
-	3,   // 53: tunnel.v1.GatewayReplica.state:type_name -> tunnel.v1.ReplicaState
-	3,   // 54: tunnel.v1.JoinRequest.state:type_name -> tunnel.v1.ReplicaState
-	85,  // 55: tunnel.v1.RuntimeStatus.snapshots:type_name -> tunnel.v1.RuntimeSnapshot
-	145, // 56: tunnel.v1.RuntimeStatus.reported_at:type_name -> google.protobuf.Timestamp
-	4,   // 57: tunnel.v1.RuntimeConfig.action:type_name -> tunnel.v1.ConfigAction
-	83,  // 58: tunnel.v1.RuntimeConfig.spec:type_name -> tunnel.v1.RuntimeSpec
-	72,  // 59: tunnel.v1.ModelPullReport.pulls:type_name -> tunnel.v1.ModelPullStatus
-	5,   // 60: tunnel.v1.ModelPullStatus.state:type_name -> tunnel.v1.ModelPullState
-	6,   // 61: tunnel.v1.ModelPullStatus.reason:type_name -> tunnel.v1.ModelPullFailureReason
-	7,   // 62: tunnel.v1.ComfyUIManagedAction.action:type_name -> tunnel.v1.ComfyUIManagedActionType
-	75,  // 63: tunnel.v1.ComfyUIManagedReport.instances:type_name -> tunnel.v1.ComfyUIManagedStatus
-	8,   // 64: tunnel.v1.ComfyUIManagedStatus.state:type_name -> tunnel.v1.ComfyUIManagedState
-	82,  // 65: tunnel.v1.ComfyUIManagedStatus.custom_nodes:type_name -> tunnel.v1.ComfyUIManagedCustomNode
-	9,   // 66: tunnel.v1.AgentUpgradeAction.action:type_name -> tunnel.v1.AgentUpgradeActionType
-	10,  // 67: tunnel.v1.AgentUpgradeReport.state:type_name -> tunnel.v1.AgentUpgradeState
-	11,  // 68: tunnel.v1.AgentUpgradeReport.reason:type_name -> tunnel.v1.AgentUpgradeFailureReason
-	80,  // 69: tunnel.v1.CLIUsageReport.accounts:type_name -> tunnel.v1.CLIUsageAccount
-	81,  // 70: tunnel.v1.CLIUsageAccount.windows:type_name -> tunnel.v1.CLIUsageWindow
-	138, // 71: tunnel.v1.RuntimeSpec.headers:type_name -> tunnel.v1.RuntimeSpec.HeadersEntry
-	146, // 72: tunnel.v1.RuntimeSpec.probe_timeout:type_name -> google.protobuf.Duration
-	146, // 73: tunnel.v1.RuntimeSpec.request_timeout:type_name -> google.protobuf.Duration
-	146, // 74: tunnel.v1.RuntimeSpec.stream_idle_timeout:type_name -> google.protobuf.Duration
-	146, // 75: tunnel.v1.RuntimeSpec.health_interval:type_name -> google.protobuf.Duration
-	146, // 76: tunnel.v1.RuntimeSpec.discovery_interval:type_name -> google.protobuf.Duration
-	84,  // 77: tunnel.v1.RuntimeSpec.tls:type_name -> tunnel.v1.TLSSpec
-	139, // 78: tunnel.v1.RuntimeSpec.capability_overrides:type_name -> tunnel.v1.RuntimeSpec.CapabilityOverridesEntry
-	86,  // 79: tunnel.v1.RuntimeSnapshot.descriptor:type_name -> tunnel.v1.RuntimeDescriptor
-	87,  // 80: tunnel.v1.RuntimeSnapshot.probe:type_name -> tunnel.v1.ProbeResult
-	88,  // 81: tunnel.v1.RuntimeSnapshot.health:type_name -> tunnel.v1.HealthReport
-	89,  // 82: tunnel.v1.RuntimeSnapshot.discovery:type_name -> tunnel.v1.Discovery
-	145, // 83: tunnel.v1.RuntimeSnapshot.updated_at:type_name -> google.protobuf.Timestamp
-	145, // 84: tunnel.v1.ProbeResult.probed_at:type_name -> google.protobuf.Timestamp
-	146, // 85: tunnel.v1.HealthReport.latency:type_name -> google.protobuf.Duration
-	145, // 86: tunnel.v1.HealthReport.checked_at:type_name -> google.protobuf.Timestamp
-	91,  // 87: tunnel.v1.Discovery.models:type_name -> tunnel.v1.Model
-	140, // 88: tunnel.v1.Discovery.capabilities:type_name -> tunnel.v1.Discovery.CapabilitiesEntry
-	145, // 89: tunnel.v1.Discovery.discovered_at:type_name -> google.protobuf.Timestamp
-	141, // 90: tunnel.v1.Model.capabilities:type_name -> tunnel.v1.Model.CapabilitiesEntry
-	91,  // 91: tunnel.v1.ModelList.models:type_name -> tunnel.v1.Model
-	94,  // 92: tunnel.v1.ChatRequest.messages:type_name -> tunnel.v1.ChatMessage
-	103, // 93: tunnel.v1.ChatRequest.tools:type_name -> tunnel.v1.Tool
-	105, // 94: tunnel.v1.ChatRequest.response_format:type_name -> tunnel.v1.ResponseFormat
-	142, // 95: tunnel.v1.ChatRequest.extra:type_name -> tunnel.v1.ChatRequest.ExtraEntry
-	96,  // 96: tunnel.v1.ChatRequest.reasoning:type_name -> tunnel.v1.ReasoningConfig
-	101, // 97: tunnel.v1.ChatMessage.tool_calls:type_name -> tunnel.v1.ToolCall
-	97,  // 98: tunnel.v1.ChatMessage.content_parts:type_name -> tunnel.v1.ContentPart
-	95,  // 99: tunnel.v1.ChatMessage.reasoning_blocks:type_name -> tunnel.v1.ReasoningBlock
-	98,  // 100: tunnel.v1.ContentPart.image_url:type_name -> tunnel.v1.ContentImageURL
-	99,  // 101: tunnel.v1.ContentPart.input_audio:type_name -> tunnel.v1.ContentAudio
-	100, // 102: tunnel.v1.ContentPart.file:type_name -> tunnel.v1.ContentFile
-	102, // 103: tunnel.v1.ToolCall.function:type_name -> tunnel.v1.FunctionCall
-	104, // 104: tunnel.v1.Tool.function:type_name -> tunnel.v1.FunctionDefinition
-	106, // 105: tunnel.v1.ResponseFormat.json_schema:type_name -> tunnel.v1.JSONSchemaFormat
-	94,  // 106: tunnel.v1.ChatResponse.message:type_name -> tunnel.v1.ChatMessage
-	112, // 107: tunnel.v1.ChatResponse.usage:type_name -> tunnel.v1.Usage
-	145, // 108: tunnel.v1.ChatResponse.created_at:type_name -> google.protobuf.Timestamp
-	109, // 109: tunnel.v1.ChatEvent.delta:type_name -> tunnel.v1.ChatMessageDelta
-	112, // 110: tunnel.v1.ChatEvent.usage:type_name -> tunnel.v1.Usage
-	110, // 111: tunnel.v1.ChatMessageDelta.tool_calls:type_name -> tunnel.v1.ToolCallDelta
-	95,  // 112: tunnel.v1.ChatMessageDelta.reasoning_block:type_name -> tunnel.v1.ReasoningBlock
-	111, // 113: tunnel.v1.ToolCallDelta.function:type_name -> tunnel.v1.FunctionCallDelta
-	143, // 114: tunnel.v1.Usage.details:type_name -> tunnel.v1.Usage.DetailsEntry
-	144, // 115: tunnel.v1.Usage.attributes:type_name -> tunnel.v1.Usage.AttributesEntry
-	115, // 116: tunnel.v1.EmbeddingResponse.data:type_name -> tunnel.v1.Embedding
-	112, // 117: tunnel.v1.EmbeddingResponse.usage:type_name -> tunnel.v1.Usage
-	145, // 118: tunnel.v1.WorkflowRun.submitted_at:type_name -> google.protobuf.Timestamp
-	145, // 119: tunnel.v1.WorkflowEvent.received_at:type_name -> google.protobuf.Timestamp
-	145, // 120: tunnel.v1.WorkflowStatus.started_at:type_name -> google.protobuf.Timestamp
-	145, // 121: tunnel.v1.WorkflowStatus.finished_at:type_name -> google.protobuf.Timestamp
-	121, // 122: tunnel.v1.ArtifactList.artifacts:type_name -> tunnel.v1.ArtifactRef
-	12,  // 123: tunnel.v1.AudioTranscriptionRequest.task:type_name -> tunnel.v1.AudioTask
-	129, // 124: tunnel.v1.RerankResponse.results:type_name -> tunnel.v1.RerankResult
-	13,  // 125: tunnel.v1.RemoteProvidersReport.outcome:type_name -> tunnel.v1.RemoteProvidersOutcome
-	132, // 126: tunnel.v1.RemoteProvidersReport.runtimes:type_name -> tunnel.v1.RemoteRuntimeResult
-	14,  // 127: tunnel.v1.RemoteRuntimeResult.state:type_name -> tunnel.v1.RemoteRuntimeState
-	135, // 128: tunnel.v1.ImageGenerateEvent.meta:type_name -> tunnel.v1.ImageGenerateMeta
-	112, // 129: tunnel.v1.ImageGenerateMeta.usage:type_name -> tunnel.v1.Usage
-	90,  // 130: tunnel.v1.Discovery.CapabilitiesEntry.value:type_name -> tunnel.v1.CapabilityEvidence
-	90,  // 131: tunnel.v1.Model.CapabilitiesEntry.value:type_name -> tunnel.v1.CapabilityEvidence
-	54,  // 132: tunnel.v1.Tunnel.Control:input_type -> tunnel.v1.AgentControl
-	39,  // 133: tunnel.v1.Tunnel.Serve:input_type -> tunnel.v1.AgentFrame
-	15,  // 134: tunnel.v1.NodeIdentity.Register:input_type -> tunnel.v1.RegisterRequest
-	17,  // 135: tunnel.v1.NodeIdentity.RenewCertificate:input_type -> tunnel.v1.RenewRequest
-	67,  // 136: tunnel.v1.GatewayDirectory.Join:input_type -> tunnel.v1.JoinRequest
-	19,  // 137: tunnel.v1.TokenAdmin.MintToken:input_type -> tunnel.v1.MintTokenRequest
-	21,  // 138: tunnel.v1.TokenAdmin.RevokeToken:input_type -> tunnel.v1.RevokeTokenRequest
-	23,  // 139: tunnel.v1.TokenAdmin.DisableNode:input_type -> tunnel.v1.DisableNodeRequest
-	25,  // 140: tunnel.v1.TokenAdmin.EnableNode:input_type -> tunnel.v1.EnableNodeRequest
-	27,  // 141: tunnel.v1.TokenAdmin.DeleteNode:input_type -> tunnel.v1.DeleteNodeRequest
-	29,  // 142: tunnel.v1.TokenAdmin.ApproveNode:input_type -> tunnel.v1.ApproveNodeRequest
-	31,  // 143: tunnel.v1.TokenAdmin.SetMaintenance:input_type -> tunnel.v1.SetMaintenanceRequest
-	33,  // 144: tunnel.v1.TokenAdmin.ClearMaintenance:input_type -> tunnel.v1.ClearMaintenanceRequest
-	35,  // 145: tunnel.v1.TokenAdmin.ListNodeStates:input_type -> tunnel.v1.ListNodeStatesRequest
-	55,  // 146: tunnel.v1.Tunnel.Control:output_type -> tunnel.v1.GatewayControl
-	38,  // 147: tunnel.v1.Tunnel.Serve:output_type -> tunnel.v1.GatewayFrame
-	16,  // 148: tunnel.v1.NodeIdentity.Register:output_type -> tunnel.v1.RegisterResponse
-	18,  // 149: tunnel.v1.NodeIdentity.RenewCertificate:output_type -> tunnel.v1.RenewResponse
-	65,  // 150: tunnel.v1.GatewayDirectory.Join:output_type -> tunnel.v1.GatewayRoster
-	20,  // 151: tunnel.v1.TokenAdmin.MintToken:output_type -> tunnel.v1.MintTokenResponse
-	22,  // 152: tunnel.v1.TokenAdmin.RevokeToken:output_type -> tunnel.v1.RevokeTokenResponse
-	24,  // 153: tunnel.v1.TokenAdmin.DisableNode:output_type -> tunnel.v1.DisableNodeResponse
-	26,  // 154: tunnel.v1.TokenAdmin.EnableNode:output_type -> tunnel.v1.EnableNodeResponse
-	28,  // 155: tunnel.v1.TokenAdmin.DeleteNode:output_type -> tunnel.v1.DeleteNodeResponse
-	30,  // 156: tunnel.v1.TokenAdmin.ApproveNode:output_type -> tunnel.v1.ApproveNodeResponse
-	32,  // 157: tunnel.v1.TokenAdmin.SetMaintenance:output_type -> tunnel.v1.SetMaintenanceResponse
-	34,  // 158: tunnel.v1.TokenAdmin.ClearMaintenance:output_type -> tunnel.v1.ClearMaintenanceResponse
-	36,  // 159: tunnel.v1.TokenAdmin.ListNodeStates:output_type -> tunnel.v1.ListNodeStatesResponse
-	146, // [146:160] is the sub-list for method output_type
-	132, // [132:146] is the sub-list for method input_type
-	132, // [132:132] is the sub-list for extension type_name
-	132, // [132:132] is the sub-list for extension extendee
-	0,   // [0:132] is the sub-list for field type_name
+	146, // 0: tunnel.v1.RegisterResponse.not_after:type_name -> google.protobuf.Timestamp
+	146, // 1: tunnel.v1.RenewResponse.not_after:type_name -> google.protobuf.Timestamp
+	147, // 2: tunnel.v1.MintTokenRequest.ttl:type_name -> google.protobuf.Duration
+	146, // 3: tunnel.v1.MintTokenResponse.expires_at:type_name -> google.protobuf.Timestamp
+	38,  // 4: tunnel.v1.ListNodeStatesResponse.states:type_name -> tunnel.v1.NodeState
+	146, // 5: tunnel.v1.NodeState.first_seen_at:type_name -> google.protobuf.Timestamp
+	146, // 6: tunnel.v1.NodeState.last_seen_at:type_name -> google.protobuf.Timestamp
+	42,  // 7: tunnel.v1.GatewayFrame.headers:type_name -> tunnel.v1.RequestHeaders
+	52,  // 8: tunnel.v1.GatewayFrame.data:type_name -> tunnel.v1.DataChunk
+	47,  // 9: tunnel.v1.GatewayFrame.end:type_name -> tunnel.v1.RequestEnd
+	48,  // 10: tunnel.v1.GatewayFrame.cancel:type_name -> tunnel.v1.Cancel
+	49,  // 11: tunnel.v1.GatewayFrame.ping:type_name -> tunnel.v1.Ping
+	41,  // 12: tunnel.v1.AgentFrame.ready:type_name -> tunnel.v1.Ready
+	51,  // 13: tunnel.v1.AgentFrame.headers:type_name -> tunnel.v1.ResponseHeaders
+	52,  // 14: tunnel.v1.AgentFrame.data:type_name -> tunnel.v1.DataChunk
+	53,  // 15: tunnel.v1.AgentFrame.end:type_name -> tunnel.v1.ResponseEnd
+	50,  // 16: tunnel.v1.AgentFrame.pong:type_name -> tunnel.v1.Pong
+	1,   // 17: tunnel.v1.Ready.class:type_name -> tunnel.v1.SlotClass
+	0,   // 18: tunnel.v1.Ready.payload_encodings:type_name -> tunnel.v1.PayloadEncoding
+	2,   // 19: tunnel.v1.RequestHeaders.operation:type_name -> tunnel.v1.Operation
+	137, // 20: tunnel.v1.RequestHeaders.trace:type_name -> tunnel.v1.RequestHeaders.TraceEntry
+	0,   // 21: tunnel.v1.RequestHeaders.payload_encoding:type_name -> tunnel.v1.PayloadEncoding
+	45,  // 22: tunnel.v1.MessagesEvent.upstream_headers:type_name -> tunnel.v1.UpstreamHeader
+	45,  // 23: tunnel.v1.UpstreamResponse.headers:type_name -> tunnel.v1.UpstreamHeader
+	54,  // 24: tunnel.v1.ResponseEnd.error:type_name -> tunnel.v1.TunnelError
+	147, // 25: tunnel.v1.TunnelError.retry_after:type_name -> google.protobuf.Duration
+	46,  // 26: tunnel.v1.TunnelError.upstream:type_name -> tunnel.v1.UpstreamResponse
+	57,  // 27: tunnel.v1.AgentControl.hello:type_name -> tunnel.v1.Hello
+	60,  // 28: tunnel.v1.AgentControl.heartbeat:type_name -> tunnel.v1.Heartbeat
+	69,  // 29: tunnel.v1.AgentControl.status:type_name -> tunnel.v1.RuntimeStatus
+	63,  // 30: tunnel.v1.AgentControl.draining:type_name -> tunnel.v1.Draining
+	50,  // 31: tunnel.v1.AgentControl.pong:type_name -> tunnel.v1.Pong
+	72,  // 32: tunnel.v1.AgentControl.model_pull:type_name -> tunnel.v1.ModelPullReport
+	75,  // 33: tunnel.v1.AgentControl.comfyui_managed:type_name -> tunnel.v1.ComfyUIManagedReport
+	79,  // 34: tunnel.v1.AgentControl.agent_upgrade:type_name -> tunnel.v1.AgentUpgradeReport
+	80,  // 35: tunnel.v1.AgentControl.cli_usage:type_name -> tunnel.v1.CLIUsageReport
+	132, // 36: tunnel.v1.AgentControl.remote_providers:type_name -> tunnel.v1.RemoteProvidersReport
+	59,  // 37: tunnel.v1.GatewayControl.ack:type_name -> tunnel.v1.HelloAck
+	62,  // 38: tunnel.v1.GatewayControl.hb_ack:type_name -> tunnel.v1.HeartbeatAck
+	70,  // 39: tunnel.v1.GatewayControl.config:type_name -> tunnel.v1.RuntimeConfig
+	65,  // 40: tunnel.v1.GatewayControl.slot_hint:type_name -> tunnel.v1.SlotHint
+	66,  // 41: tunnel.v1.GatewayControl.roster:type_name -> tunnel.v1.GatewayRoster
+	64,  // 42: tunnel.v1.GatewayControl.shutdown:type_name -> tunnel.v1.Shutdown
+	49,  // 43: tunnel.v1.GatewayControl.ping:type_name -> tunnel.v1.Ping
+	71,  // 44: tunnel.v1.GatewayControl.model_pull_trigger:type_name -> tunnel.v1.ModelPullTrigger
+	74,  // 45: tunnel.v1.GatewayControl.comfyui_managed_action:type_name -> tunnel.v1.ComfyUIManagedAction
+	77,  // 46: tunnel.v1.GatewayControl.comfyui_managed_custom_node_install:type_name -> tunnel.v1.ComfyUIManagedCustomNodeInstallTrigger
+	78,  // 47: tunnel.v1.GatewayControl.agent_upgrade_action:type_name -> tunnel.v1.AgentUpgradeAction
+	131, // 48: tunnel.v1.GatewayControl.remote_providers:type_name -> tunnel.v1.RemoteProviders
+	58,  // 49: tunnel.v1.Hello.resources:type_name -> tunnel.v1.NodeResources
+	138, // 50: tunnel.v1.Hello.labels:type_name -> tunnel.v1.Hello.LabelsEntry
+	61,  // 51: tunnel.v1.Heartbeat.load:type_name -> tunnel.v1.NodeLoad
+	3,   // 52: tunnel.v1.NodeLoad.pressure_reasons:type_name -> tunnel.v1.LoadPressureReason
+	147, // 53: tunnel.v1.Shutdown.grace_period:type_name -> google.protobuf.Duration
+	67,  // 54: tunnel.v1.GatewayRoster.replicas:type_name -> tunnel.v1.GatewayReplica
+	4,   // 55: tunnel.v1.GatewayReplica.state:type_name -> tunnel.v1.ReplicaState
+	4,   // 56: tunnel.v1.JoinRequest.state:type_name -> tunnel.v1.ReplicaState
+	86,  // 57: tunnel.v1.RuntimeStatus.snapshots:type_name -> tunnel.v1.RuntimeSnapshot
+	146, // 58: tunnel.v1.RuntimeStatus.reported_at:type_name -> google.protobuf.Timestamp
+	5,   // 59: tunnel.v1.RuntimeConfig.action:type_name -> tunnel.v1.ConfigAction
+	84,  // 60: tunnel.v1.RuntimeConfig.spec:type_name -> tunnel.v1.RuntimeSpec
+	73,  // 61: tunnel.v1.ModelPullReport.pulls:type_name -> tunnel.v1.ModelPullStatus
+	6,   // 62: tunnel.v1.ModelPullStatus.state:type_name -> tunnel.v1.ModelPullState
+	7,   // 63: tunnel.v1.ModelPullStatus.reason:type_name -> tunnel.v1.ModelPullFailureReason
+	8,   // 64: tunnel.v1.ComfyUIManagedAction.action:type_name -> tunnel.v1.ComfyUIManagedActionType
+	76,  // 65: tunnel.v1.ComfyUIManagedReport.instances:type_name -> tunnel.v1.ComfyUIManagedStatus
+	9,   // 66: tunnel.v1.ComfyUIManagedStatus.state:type_name -> tunnel.v1.ComfyUIManagedState
+	83,  // 67: tunnel.v1.ComfyUIManagedStatus.custom_nodes:type_name -> tunnel.v1.ComfyUIManagedCustomNode
+	10,  // 68: tunnel.v1.AgentUpgradeAction.action:type_name -> tunnel.v1.AgentUpgradeActionType
+	11,  // 69: tunnel.v1.AgentUpgradeReport.state:type_name -> tunnel.v1.AgentUpgradeState
+	12,  // 70: tunnel.v1.AgentUpgradeReport.reason:type_name -> tunnel.v1.AgentUpgradeFailureReason
+	81,  // 71: tunnel.v1.CLIUsageReport.accounts:type_name -> tunnel.v1.CLIUsageAccount
+	82,  // 72: tunnel.v1.CLIUsageAccount.windows:type_name -> tunnel.v1.CLIUsageWindow
+	139, // 73: tunnel.v1.RuntimeSpec.headers:type_name -> tunnel.v1.RuntimeSpec.HeadersEntry
+	147, // 74: tunnel.v1.RuntimeSpec.probe_timeout:type_name -> google.protobuf.Duration
+	147, // 75: tunnel.v1.RuntimeSpec.request_timeout:type_name -> google.protobuf.Duration
+	147, // 76: tunnel.v1.RuntimeSpec.stream_idle_timeout:type_name -> google.protobuf.Duration
+	147, // 77: tunnel.v1.RuntimeSpec.health_interval:type_name -> google.protobuf.Duration
+	147, // 78: tunnel.v1.RuntimeSpec.discovery_interval:type_name -> google.protobuf.Duration
+	85,  // 79: tunnel.v1.RuntimeSpec.tls:type_name -> tunnel.v1.TLSSpec
+	140, // 80: tunnel.v1.RuntimeSpec.capability_overrides:type_name -> tunnel.v1.RuntimeSpec.CapabilityOverridesEntry
+	87,  // 81: tunnel.v1.RuntimeSnapshot.descriptor:type_name -> tunnel.v1.RuntimeDescriptor
+	88,  // 82: tunnel.v1.RuntimeSnapshot.probe:type_name -> tunnel.v1.ProbeResult
+	89,  // 83: tunnel.v1.RuntimeSnapshot.health:type_name -> tunnel.v1.HealthReport
+	90,  // 84: tunnel.v1.RuntimeSnapshot.discovery:type_name -> tunnel.v1.Discovery
+	146, // 85: tunnel.v1.RuntimeSnapshot.updated_at:type_name -> google.protobuf.Timestamp
+	146, // 86: tunnel.v1.ProbeResult.probed_at:type_name -> google.protobuf.Timestamp
+	147, // 87: tunnel.v1.HealthReport.latency:type_name -> google.protobuf.Duration
+	146, // 88: tunnel.v1.HealthReport.checked_at:type_name -> google.protobuf.Timestamp
+	92,  // 89: tunnel.v1.Discovery.models:type_name -> tunnel.v1.Model
+	141, // 90: tunnel.v1.Discovery.capabilities:type_name -> tunnel.v1.Discovery.CapabilitiesEntry
+	146, // 91: tunnel.v1.Discovery.discovered_at:type_name -> google.protobuf.Timestamp
+	142, // 92: tunnel.v1.Model.capabilities:type_name -> tunnel.v1.Model.CapabilitiesEntry
+	92,  // 93: tunnel.v1.ModelList.models:type_name -> tunnel.v1.Model
+	95,  // 94: tunnel.v1.ChatRequest.messages:type_name -> tunnel.v1.ChatMessage
+	104, // 95: tunnel.v1.ChatRequest.tools:type_name -> tunnel.v1.Tool
+	106, // 96: tunnel.v1.ChatRequest.response_format:type_name -> tunnel.v1.ResponseFormat
+	143, // 97: tunnel.v1.ChatRequest.extra:type_name -> tunnel.v1.ChatRequest.ExtraEntry
+	97,  // 98: tunnel.v1.ChatRequest.reasoning:type_name -> tunnel.v1.ReasoningConfig
+	102, // 99: tunnel.v1.ChatMessage.tool_calls:type_name -> tunnel.v1.ToolCall
+	98,  // 100: tunnel.v1.ChatMessage.content_parts:type_name -> tunnel.v1.ContentPart
+	96,  // 101: tunnel.v1.ChatMessage.reasoning_blocks:type_name -> tunnel.v1.ReasoningBlock
+	99,  // 102: tunnel.v1.ContentPart.image_url:type_name -> tunnel.v1.ContentImageURL
+	100, // 103: tunnel.v1.ContentPart.input_audio:type_name -> tunnel.v1.ContentAudio
+	101, // 104: tunnel.v1.ContentPart.file:type_name -> tunnel.v1.ContentFile
+	103, // 105: tunnel.v1.ToolCall.function:type_name -> tunnel.v1.FunctionCall
+	105, // 106: tunnel.v1.Tool.function:type_name -> tunnel.v1.FunctionDefinition
+	107, // 107: tunnel.v1.ResponseFormat.json_schema:type_name -> tunnel.v1.JSONSchemaFormat
+	95,  // 108: tunnel.v1.ChatResponse.message:type_name -> tunnel.v1.ChatMessage
+	113, // 109: tunnel.v1.ChatResponse.usage:type_name -> tunnel.v1.Usage
+	146, // 110: tunnel.v1.ChatResponse.created_at:type_name -> google.protobuf.Timestamp
+	110, // 111: tunnel.v1.ChatEvent.delta:type_name -> tunnel.v1.ChatMessageDelta
+	113, // 112: tunnel.v1.ChatEvent.usage:type_name -> tunnel.v1.Usage
+	111, // 113: tunnel.v1.ChatMessageDelta.tool_calls:type_name -> tunnel.v1.ToolCallDelta
+	96,  // 114: tunnel.v1.ChatMessageDelta.reasoning_block:type_name -> tunnel.v1.ReasoningBlock
+	112, // 115: tunnel.v1.ToolCallDelta.function:type_name -> tunnel.v1.FunctionCallDelta
+	144, // 116: tunnel.v1.Usage.details:type_name -> tunnel.v1.Usage.DetailsEntry
+	145, // 117: tunnel.v1.Usage.attributes:type_name -> tunnel.v1.Usage.AttributesEntry
+	116, // 118: tunnel.v1.EmbeddingResponse.data:type_name -> tunnel.v1.Embedding
+	113, // 119: tunnel.v1.EmbeddingResponse.usage:type_name -> tunnel.v1.Usage
+	146, // 120: tunnel.v1.WorkflowRun.submitted_at:type_name -> google.protobuf.Timestamp
+	146, // 121: tunnel.v1.WorkflowEvent.received_at:type_name -> google.protobuf.Timestamp
+	146, // 122: tunnel.v1.WorkflowStatus.started_at:type_name -> google.protobuf.Timestamp
+	146, // 123: tunnel.v1.WorkflowStatus.finished_at:type_name -> google.protobuf.Timestamp
+	122, // 124: tunnel.v1.ArtifactList.artifacts:type_name -> tunnel.v1.ArtifactRef
+	13,  // 125: tunnel.v1.AudioTranscriptionRequest.task:type_name -> tunnel.v1.AudioTask
+	130, // 126: tunnel.v1.RerankResponse.results:type_name -> tunnel.v1.RerankResult
+	14,  // 127: tunnel.v1.RemoteProvidersReport.outcome:type_name -> tunnel.v1.RemoteProvidersOutcome
+	133, // 128: tunnel.v1.RemoteProvidersReport.runtimes:type_name -> tunnel.v1.RemoteRuntimeResult
+	15,  // 129: tunnel.v1.RemoteRuntimeResult.state:type_name -> tunnel.v1.RemoteRuntimeState
+	136, // 130: tunnel.v1.ImageGenerateEvent.meta:type_name -> tunnel.v1.ImageGenerateMeta
+	113, // 131: tunnel.v1.ImageGenerateMeta.usage:type_name -> tunnel.v1.Usage
+	91,  // 132: tunnel.v1.Discovery.CapabilitiesEntry.value:type_name -> tunnel.v1.CapabilityEvidence
+	91,  // 133: tunnel.v1.Model.CapabilitiesEntry.value:type_name -> tunnel.v1.CapabilityEvidence
+	55,  // 134: tunnel.v1.Tunnel.Control:input_type -> tunnel.v1.AgentControl
+	40,  // 135: tunnel.v1.Tunnel.Serve:input_type -> tunnel.v1.AgentFrame
+	16,  // 136: tunnel.v1.NodeIdentity.Register:input_type -> tunnel.v1.RegisterRequest
+	18,  // 137: tunnel.v1.NodeIdentity.RenewCertificate:input_type -> tunnel.v1.RenewRequest
+	68,  // 138: tunnel.v1.GatewayDirectory.Join:input_type -> tunnel.v1.JoinRequest
+	20,  // 139: tunnel.v1.TokenAdmin.MintToken:input_type -> tunnel.v1.MintTokenRequest
+	22,  // 140: tunnel.v1.TokenAdmin.RevokeToken:input_type -> tunnel.v1.RevokeTokenRequest
+	24,  // 141: tunnel.v1.TokenAdmin.DisableNode:input_type -> tunnel.v1.DisableNodeRequest
+	26,  // 142: tunnel.v1.TokenAdmin.EnableNode:input_type -> tunnel.v1.EnableNodeRequest
+	28,  // 143: tunnel.v1.TokenAdmin.DeleteNode:input_type -> tunnel.v1.DeleteNodeRequest
+	30,  // 144: tunnel.v1.TokenAdmin.ApproveNode:input_type -> tunnel.v1.ApproveNodeRequest
+	32,  // 145: tunnel.v1.TokenAdmin.SetMaintenance:input_type -> tunnel.v1.SetMaintenanceRequest
+	34,  // 146: tunnel.v1.TokenAdmin.ClearMaintenance:input_type -> tunnel.v1.ClearMaintenanceRequest
+	36,  // 147: tunnel.v1.TokenAdmin.ListNodeStates:input_type -> tunnel.v1.ListNodeStatesRequest
+	56,  // 148: tunnel.v1.Tunnel.Control:output_type -> tunnel.v1.GatewayControl
+	39,  // 149: tunnel.v1.Tunnel.Serve:output_type -> tunnel.v1.GatewayFrame
+	17,  // 150: tunnel.v1.NodeIdentity.Register:output_type -> tunnel.v1.RegisterResponse
+	19,  // 151: tunnel.v1.NodeIdentity.RenewCertificate:output_type -> tunnel.v1.RenewResponse
+	66,  // 152: tunnel.v1.GatewayDirectory.Join:output_type -> tunnel.v1.GatewayRoster
+	21,  // 153: tunnel.v1.TokenAdmin.MintToken:output_type -> tunnel.v1.MintTokenResponse
+	23,  // 154: tunnel.v1.TokenAdmin.RevokeToken:output_type -> tunnel.v1.RevokeTokenResponse
+	25,  // 155: tunnel.v1.TokenAdmin.DisableNode:output_type -> tunnel.v1.DisableNodeResponse
+	27,  // 156: tunnel.v1.TokenAdmin.EnableNode:output_type -> tunnel.v1.EnableNodeResponse
+	29,  // 157: tunnel.v1.TokenAdmin.DeleteNode:output_type -> tunnel.v1.DeleteNodeResponse
+	31,  // 158: tunnel.v1.TokenAdmin.ApproveNode:output_type -> tunnel.v1.ApproveNodeResponse
+	33,  // 159: tunnel.v1.TokenAdmin.SetMaintenance:output_type -> tunnel.v1.SetMaintenanceResponse
+	35,  // 160: tunnel.v1.TokenAdmin.ClearMaintenance:output_type -> tunnel.v1.ClearMaintenanceResponse
+	37,  // 161: tunnel.v1.TokenAdmin.ListNodeStates:output_type -> tunnel.v1.ListNodeStatesResponse
+	148, // [148:162] is the sub-list for method output_type
+	134, // [134:148] is the sub-list for method input_type
+	134, // [134:134] is the sub-list for extension type_name
+	134, // [134:134] is the sub-list for extension extendee
+	0,   // [0:134] is the sub-list for field type_name
 }
 
 func init() { file_api_proto_tunnel_v1_tunnel_proto_init() }
@@ -10327,7 +10407,7 @@ func file_api_proto_tunnel_v1_tunnel_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_proto_tunnel_v1_tunnel_proto_rawDesc), len(file_api_proto_tunnel_v1_tunnel_proto_rawDesc)),
-			NumEnums:      15,
+			NumEnums:      16,
 			NumMessages:   130,
 			NumExtensions: 0,
 			NumServices:   4,

@@ -22,6 +22,54 @@ deploy/upgrade.sh
 
 升级会重建 Gateway。Compose 给 Gateway 的 `stop_grace_period` 为 75 秒：Gateway 收到 SIGTERM 后先等进行中的请求结束，再关闭 Agent 隧道，每段最多 30 秒，空闲时立即退出。新容器开始监听并等 Agent 重新连上之前，单副本部署的新请求会短暂收到 502 或 503，客户端重试即可。
 
+## 跨地域隧道网络调优
+
+Agent 与 Gateway 分处不同地域时，隧道 RTT 常在 100–300ms，跨境链路还伴随丢包。请求体（Claude Code 一轮可达数 MB）由 Gateway 发往 Agent，Gateway 是发送方，以下调优以 Gateway 宿主机为主。
+
+**1. 拥塞控制改为 BBR（宿主机）。** CUBIC 遇丢包即窗口减半，长距离有损链路上吞吐会塌陷。新建的网络命名空间继承宿主机的拥塞控制算法，因此只需在宿主机设置，Gateway 容器随之生效：
+
+```bash
+sudo modprobe tcp_bbr
+echo tcp_bbr | sudo tee /etc/modules-load.d/bbr.conf
+sudo tee /etc/sysctl.d/90-aisw-tunnel.conf <<'EOF'
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+net.ipv4.tcp_slow_start_after_idle = 0
+EOF
+sudo sysctl --system
+sysctl net.ipv4.tcp_congestion_control   # 应输出 bbr
+```
+
+**2. 关闭空闲后慢启动。** 隧道在请求之间空闲，Linux 默认空闲后重置拥塞窗口，每个大请求都重新慢启动。该参数不继承宿主机，[docker-compose.yaml](docker-compose.yaml) 已在 Gateway 容器上设置 `net.ipv4.tcp_slow_start_after_idle=0`；上面的宿主机配置覆盖经 docker-proxy 在宿主机终结的连接。
+
+**3. 缓冲区。** 内核默认 `tcp_wmem`/`tcp_rmem` 上限为 4–6 MiB，足够覆盖 100 Mbps × 300ms 的 BDP。更高带宽时按 `带宽 × RTT` 调大 `net.ipv4.tcp_wmem`、`net.ipv4.tcp_rmem` 的第三个值以及 `net.core.wmem_max`、`net.core.rmem_max`。
+
+**4. Gateway 放置。** 链路为 用户 → Gateway → Agent →（CLI 运行时的上游 API）。Gateway 应放在质量最差那一段的近端：用户或 Agent 在中国大陆而上游在海外时，带优质回程线路的香港、日本节点通常优于美国节点。
+
+**5. 隧道自身已做的优化。** 大于 16 KiB 的请求 payload 由 Gateway 以 zstd 压缩后经隧道发送（Agent 在 Hello 中声明支持，旧版 Agent 收到原文）；流式响应不压缩，避免攒帧拖慢首字。调度器在同等条件下优先选择隧道 RTT 更低的节点。BULK 槽（产物上传下载）使用独立 TCP 连接，丢包重传不阻塞推理流。
+
+### 测量基线
+
+改动前后用同一组数字对比，不要只看 loopback 实测：
+
+- `tunnel_control_heartbeat_rtt_seconds`（Agent 指标）与 `tunnel_server_node_rtt_seconds`（Gateway 指标）：隧道 RTT。
+- `tunnel_server_stream_first_event_seconds` 与 Agent 侧 `tunnel_stream_first_event_seconds` 的差：隧道对首字的贡献。
+- `tunnel_server_frame_bytes{direction="outbound"}`：压缩后实际发出的请求帧大小。
+- `tunnel_reconnects_total`：链路是否频繁断开。
+
+没有真实跨地域环境时，在一台 **非生产** Linux 机器上用 netem 给隧道端口注入延迟与丢包，再让 Agent 连接它：
+
+```bash
+IFACE=eth0   # Agent 连接进来的网卡
+sudo tc qdisc add dev "$IFACE" root handle 1: prio
+sudo tc qdisc add dev "$IFACE" parent 1:3 handle 30: netem delay 100ms 20ms loss 1%
+sudo tc filter add dev "$IFACE" parent 1: protocol ip u32 match ip sport 8443 0xffff flowid 1:3
+# 测完删除
+sudo tc qdisc del dev "$IFACE" root
+```
+
+过滤器只作用于隧道端口（默认 8443）发出的包；单向 100ms 加上回程即约 200ms RTT。切勿在承载线上流量的网卡上执行。
+
 ## 服务日志文件
 
 Compose 自动为 Gateway、Registry、ControlPlane、Console 和 Studio 创建 `deploy/logs/<服务>/`。在 `/opt/AIServeWeave` 部署时，文件路径为 `/opt/AIServeWeave/deploy/logs/<服务>/<服务>.log`，例如 `logs/controlplane/controlplane.log`。

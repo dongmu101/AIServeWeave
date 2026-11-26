@@ -25,6 +25,7 @@ var allMetrics = []string{
 	tunnelserver.MetricControlStreams,
 	tunnelserver.MetricHeartbeatsTotal,
 	tunnelserver.MetricHeartbeatIntervalSeconds,
+	tunnelserver.MetricNodeRTTSeconds,
 	tunnelserver.MetricNodePressure,
 	tunnelserver.MetricSlotsTotal,
 	tunnelserver.MetricSlotFaultsTotal,
@@ -517,10 +518,22 @@ func TestRosterVersionMetric(t *testing.T) {
 func exerciseEveryMetric(t *testing.T) *metricstest.Collector {
 	t.Helper()
 	mx := metricstest.New()
-	h := newHarness(t, tunnelserver.Config{Metrics: mx})
+	h := newHarness(t, tunnelserver.Config{Metrics: mx, PingInterval: time.Hour})
 
 	h.srv.SetRoster(&tunnelv1.GatewayRoster{Version: 1})
 	c := h.connect("mac-mini-01")
+
+	// The roster, then the replica's first Ping; answering it records an RTT.
+	//
+	// 先是名册，然后是副本的首个 Ping；应答它就会记录一次 RTT。
+	var ping *tunnelv1.Ping
+	for ping == nil {
+		ping = c.expect(t).GetPing()
+	}
+	h.clock.Advance(40 * time.Millisecond)
+	c.send(t, &tunnelv1.AgentControl{Body: &tunnelv1.AgentControl_Pong{
+		Pong: &tunnelv1.Pong{SentUnixMs: ping.GetSentUnixMs()},
+	}})
 
 	// Two heartbeats, so the interval histogram has a predecessor to measure
 	// against.

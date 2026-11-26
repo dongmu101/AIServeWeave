@@ -77,6 +77,11 @@ type SchedNode struct {
 	// CLIUsageAt 是本副本按 Gateway 时钟收到 CLIUsage 的时刻。账户的 CheckedAt 是 Agent
 	// 的时钟，可能偏快；调度器取两者中较早者作为快照的获取时刻。
 	CLIUsageAt time.Time
+	// RTT is NodeInfo.RTT: this replica's smoothed round trip to the node,
+	// zero while unknown.
+	//
+	// RTT 即 NodeInfo.RTT：本副本到该节点的平滑往返时间，未知时为零。
+	RTT time.Duration
 }
 
 // AppendSchedNodes appends the scheduler's view of every node connected to
@@ -138,6 +143,7 @@ func (n *node) schedView(now time.Time, heartbeatTimeout time.Duration) SchedNod
 	v.Pressure = v.Live && n.hasLoad && n.load.Pressure
 	v.CLIUsage = n.cliUsage
 	v.CLIUsageAt = n.cliUsageAt
+	v.RTT = n.rttLocked()
 	st := n.static.Load()
 	n.mu.Unlock()
 	if st != nil {

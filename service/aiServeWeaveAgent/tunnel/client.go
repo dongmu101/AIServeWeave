@@ -265,6 +265,21 @@ type Transport interface {
 	Close() error
 }
 
+// BulkTransport is an optional Transport extension that opens bulk-class
+// Serve streams on a TCP connection of their own. HTTP/2 keeps a large
+// artifact transfer from starving token streams at the flow-control level,
+// but not at the TCP level: on a lossy cross-region link, one retransmission
+// on a shared connection stalls every stream on it. A Transport without it
+// carries bulk slots on the same connection as everything else.
+//
+// BulkTransport 是可选的 Transport 扩展，在独立的 TCP 连接上打开 bulk 类 Serve 流。
+// HTTP/2 在流控层面让大产物传输不至于饿死 token 流，但在 TCP 层面做不到：在有丢包的
+// 跨地域链路上，共享连接上的一次重传会卡住其上的所有流。未实现它的 Transport 让 bulk
+// 槽与其他流共用同一条连接。
+type BulkTransport interface {
+	ServeBulk(ctx context.Context) (ServeStream, error)
+}
+
 // SecretResolver turns an api_key_ref delivered by the control plane into the
 // credential itself. The control plane only ever names a secret, so a
 // compromised Gateway learns no credentials; how a name is resolved (file,
@@ -923,11 +938,19 @@ func setDefaultDuration(d *time.Duration, def time.Duration) {
 // gRPC transport
 // -----------------------------------------------------------------------
 
-// grpcTransport is the production Transport: one gRPC connection to one
-// replica, always mTLS, with HTTP/2 keepalive tuned for home routers.
+// grpcTransport is the production Transport: gRPC connections to one
+// replica, always mTLS, with HTTP/2 keepalive tuned for home routers. conn
+// carries Control and inference slots; bulkConn is a second TCP connection
+// for bulk slots only (see BulkTransport).
+//
+// grpcTransport 是生产用的 Transport：到一个副本的 gRPC 连接，始终 mTLS，HTTP/2
+// keepalive 按家用路由器调校。conn 承载 Control 与推理槽；bulkConn 是只给 bulk 槽用的
+// 第二条 TCP 连接（见 BulkTransport）。
 type grpcTransport struct {
-	conn   *grpc.ClientConn
-	client tunnelv1.TunnelClient
+	conn       *grpc.ClientConn
+	client     tunnelv1.TunnelClient
+	bulkConn   *grpc.ClientConn
+	bulkClient tunnelv1.TunnelClient
 }
 
 // NewGRPCTransport dials one Gateway replica with the node identity. The
@@ -945,7 +968,7 @@ func NewGRPCTransport(endpoint string, id *Identity, keepaliveInterval, keepaliv
 	setDefaultDuration(&keepaliveInterval, defaultKeepaliveInterval)
 	setDefaultDuration(&keepaliveTimeout, defaultKeepaliveTimeout)
 
-	conn, err := grpc.NewClient(endpoint,
+	opts := []grpc.DialOption{
 		grpc.WithTransportCredentials(credentials.NewTLS(id.TLSConfig())),
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{
 			Time:                keepaliveInterval,
@@ -957,9 +980,10 @@ func NewGRPCTransport(endpoint string, id *Identity, keepaliveInterval, keepaliv
 		// refuse it before any code here runs.
 		// 原生 Messages 请求内联在一个帧里，可以达到 Messages API 允许的大小；gRPC 默认的
 		// 4 MiB 会在这里的代码运行之前就拒绝它。
-		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(tunnelwire.MaxTunnelMessageBytes)))
-	if err != nil {
-		return nil, &runtime.RuntimeError{
+		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(tunnelwire.MaxTunnelMessageBytes)),
+	}
+	connError := func(err error) error {
+		return &runtime.RuntimeError{
 			Code:      runtime.ErrorConnection,
 			Operation: clientOperation,
 			Message:   "cannot create a tunnel client for " + endpoint,
@@ -967,7 +991,26 @@ func NewGRPCTransport(endpoint string, id *Identity, keepaliveInterval, keepaliv
 			Cause:     err,
 		}
 	}
-	return &grpcTransport{conn: conn, client: tunnelv1.NewTunnelClient(conn)}, nil
+	conn, err := grpc.NewClient(endpoint, opts...)
+	if err != nil {
+		return nil, connError(err)
+	}
+	// Each ClientConn owns its own TCP connection, so this one keeps bulk
+	// transfers' retransmissions off the inference streams. Both are lazy:
+	// the bulk connection is dialled when the first bulk slot opens.
+	// 每个 ClientConn 拥有自己的 TCP 连接，因此这一条让 bulk 传输的重传不落在推理流上。
+	// 两者都是惰性的：bulk 连接在第一个 bulk 槽打开时才拨号。
+	bulkConn, err := grpc.NewClient(endpoint, opts...)
+	if err != nil {
+		_ = conn.Close()
+		return nil, connError(err)
+	}
+	return &grpcTransport{
+		conn:       conn,
+		client:     tunnelv1.NewTunnelClient(conn),
+		bulkConn:   bulkConn,
+		bulkClient: tunnelv1.NewTunnelClient(bulkConn),
+	}, nil
 }
 
 func (t *grpcTransport) Control(ctx context.Context) (ControlStream, error) {
@@ -978,4 +1021,11 @@ func (t *grpcTransport) Serve(ctx context.Context) (ServeStream, error) {
 	return t.client.Serve(ctx)
 }
 
-func (t *grpcTransport) Close() error { return t.conn.Close() }
+// ServeBulk implements BulkTransport.
+func (t *grpcTransport) ServeBulk(ctx context.Context) (ServeStream, error) {
+	return t.bulkClient.Serve(ctx)
+}
+
+func (t *grpcTransport) Close() error {
+	return errors.Join(t.conn.Close(), t.bulkConn.Close())
+}
