@@ -194,7 +194,7 @@ go run ./service/aiServeWeaveGateway \
 
 | 守卫 | 路由 |
 | --- | --- |
-| 公开 | `POST /admin/v1/auth/login`、`POST /admin/v1/platform/auth/login`、只读 `GET /admin/v1/api-docs*`（仅已发布页面）；`Signup.Enabled` 时另有 `POST /admin/v1/auth/signup`（见「租户自助注册」）；`Billing.Enabled` 且配置了 Dodo 时另有 `POST /billing/v1/dodo/webhook`（靠 Standard Webhooks 签名而不是会话鉴权，见「计费与充值」）；`Billing.Enabled` 或 `AccountSales.Enabled` 时另有只读 `GET /billing/v1/catalog`（无需会话，返回上架充值包、模型售价（默认方案下，见「计费与充值 / 接口」）、当前可买的包月账号与上架的账号预售，只含名称与价格（账号为 `price_minor` + `currency` 法币月价，未设法币价格的旧商品不列出；预售另带 `kind`、`available` 与剩余名额数 `remaining`），不含 `dodo_product_id`、节点与租户信息；`Cache-Control: public, max-age=60`；只开账号包月时因无法结账，三个列表都为空） |
+| 公开 | `POST /admin/v1/auth/login`、`POST /admin/v1/platform/auth/login`、只读 `GET /admin/v1/api-docs*`（仅已发布页面）；`Signup.Enabled` 时另有 `POST /admin/v1/auth/signup`（见「租户自助注册」）；`Billing.Enabled` 且配置了 Dodo 时另有 `POST /billing/v1/dodo/webhook`（靠 Standard Webhooks 签名而不是会话鉴权，见「计费与充值」）；`Billing.Enabled` 时另有只读 `GET /billing/v1/plan-prices`（无需会话，全部价格方案的名称与售价，见「计费与充值 / 接口」）；`Billing.Enabled` 或 `AccountSales.Enabled` 时另有只读 `GET /billing/v1/catalog`（无需会话，返回上架充值包、模型售价（默认方案下，见「计费与充值 / 接口」）、当前可买的包月账号与上架的账号预售，只含名称与价格（账号为 `price_minor` + `currency` 法币月价，未设法币价格的旧商品不列出；预售另带 `kind`、`available` 与剩余名额数 `remaining`），不含 `dodo_product_id`、节点与租户信息；`Cache-Control: public, max-age=60`；只开账号包月时因无法结账，三个列表都为空） |
 | 会话（JWT，租户） | `/admin/v1/users`、`/admin/v1/apikeys`、`/admin/v1/audit`、`/admin/v1/tenants/current`、`/admin/v1/tenants/limits`、`/admin/v1/workflows`、`/admin/v1/jobs*`；`Billing.Enabled` 时另有全部 `/admin/v1/billing*`（含账号法币结账；结账、门户、退款只在配置 Dodo 时挂载，`/admin/v1/billing/alipay*` 只在 `Billing.Alipay.Enabled` 时挂载），`AccountSales.Enabled` 可独立开启账号、概览与账目读取 |
 | 会话（JWT，平台运维，STATUS.md 的 P01） | `/operator/v1/*`（机群清单只读 + 节点写路径 + 租户列表与模型授权；`Billing.Enabled` 时另有全部 `/operator/v1/billing/*`，`AccountSales.Enabled` 可独立开启账号、商户余额管理与账目读取），见「机群清单」「节点写路径」「模型授权」「计费与充值」各节 |
 | BootstrapToken | `POST /admin/v1/tenants`、`POST /admin/v1/platform/operators`（P01 引导创建平台运维账户，复用同一把密钥，理由见「平台运维身份」一节） |
@@ -1066,6 +1066,8 @@ Dodo 控制台里要把 webhook 指向 `<控制面地址>/billing/v1/dodo/webhoo
 | `GET /operator/v1/billing/orders`、`/ledger` | 平台会话 | 跨租户，可选 `tenant_id`；带 `tenant_id` 时账目响应带 `pending_usage` |
 
 旧的 `/operator/v1/billing/model-prices` 于 2026-11-16 移除。公开目录 `GET /billing/v1/catalog` 的模型价格改为默认方案下的售价：保留 `input_micro_per_mtok` / `output_micro_per_mtok`（基础档售价），另带 `items` 列出全部计量项与档位；没有任何单价的别名不列出。
+
+公开只读 `GET /billing/v1/plan-prices`（无需会话，仅 `Billing.Enabled` 时存在，否则 404）按原样列出全部价格方案：每项 `{id, name, default, prices}`，默认方案在前、其余按 id，`prices` 与目录的模型价格同形（路由别名在该方案下的售价，已含模型倍率、方案系数或方案固定售价；没有任何单价的别名不列出）。不含倍率、价目表参照与租户数。`updated_at`（UTC RFC 3339）取生效中定价版本的 `effective_at` 与官方价目表最后一次变化时间中较晚者，只发布新路由、不改价时它不变；`Cache-Control: public, max-age=60`。Console 的 Folkbench 价格接口 `GET /api/pricing` 把每个方案转换为一个分组。
 
 结账与门户两条路由会调用 Dodo，单独设了 `handler.BillingCallTimeout`（9 秒）的超时，低于 Console 默认 10 秒的上游超时；其余路由沿用服务默认的 3 秒。SDK 单次尝试 4 秒、最多重试 1 次，整体再受这条路由超时约束。超时可能留下一张永远 `pending` 的订单，或一个未被记录的 Dodo 客户，两者都不影响余额。
 

@@ -50,3 +50,35 @@ func getCatalog(ctx *svc.ServiceContext) http.HandlerFunc {
 		writeJSON(w, http.StatusOK, out)
 	}
 }
+
+// getPlanPrices handles GET /billing/v1/plan-prices. It is public like the
+// catalog: every price plan by name with the sale prices charging uses under
+// it, so a price-comparison feed can list each plan as a group. It shows no
+// rates, catalog references or tenants.
+//
+// getPlanPrices 处理 GET /billing/v1/plan-prices。它与目录一样公开：按名称列出每个价格
+// 方案及扣费在该方案下使用的售价，使比价数据源可以把每个方案列为一个分组。不展示倍率、
+// 价目表参照或租户。
+func getPlanPrices(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		result, err := ctx.Logic.PublicPlanPrices(r.Context())
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		out := types.PublicPlanPricesResponse{Plans: make([]types.PublicPlanPrices, len(result.Plans))}
+		if !result.UpdatedAt.IsZero() {
+			at := result.UpdatedAt
+			out.UpdatedAt = &at
+		}
+		for i, plan := range result.Plans {
+			prices := make([]types.CatalogPrice, len(plan.Prices))
+			for j, p := range plan.Prices {
+				prices[j] = catalogPrice(p)
+			}
+			out.Plans[i] = types.PublicPlanPrices{ID: plan.ID, Name: plan.Name, Default: plan.Default, Prices: prices}
+		}
+		w.Header().Set("Cache-Control", "public, max-age=60")
+		writeJSON(w, http.StatusOK, out)
+	}
+}

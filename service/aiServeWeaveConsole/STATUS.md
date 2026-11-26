@@ -557,6 +557,15 @@ Agent 接入页面新增默认不勾选的「共享给所有租户」，安装�
 
 任何人无需登录即可打开 `/pricing`，查看账号包月、点数充值包与模型单价。数据由服务端组件直接读取控制面公开的 `GET /billing/v1/catalog`（不带令牌，不经 `/api/admin/*` 白名单）；控制面未开启计费时显示「购买暂未开放」，目录已开启但无商品时显示「暂无在售内容」，读取失败时提示稍后重试。「购买」按钮是普通链接：有会话 Cookie 时直达 `/console/billing`，没有时先注册或登录，随后回到选中的计费标签；每次购买仍由控制面授权。`AISW_CONSOLE_SIGNUP_ENABLED` 开启时页头显示注册入口。页面覆盖根布局的 noindex，允许被索引。`proxy.ts` 的 matcher 不含 `/pricing`，天然公开。契约镜像为 `lib/console/billing.ts` 的 `parseCatalog`，八语言文案在 `pricing.*`。
 
+`GET /api/pricing` 以 Folkbench 价格格式（`schema_version` 1.1）公开各价格方案下的模型售价，无需会话，供比价站点审核与同步。数据来自控制面公开的 `GET /billing/v1/plan-prices`（不带令牌，不经 `/api/admin/*` 白名单），进程内缓存 30 秒；契约镜像与转换都在 `lib/console/folkbench.ts`。约定：
+- 价格方案按原样读取、不改存储，接口只做转换：每个方案是一个分组，`group_name` 为方案名称；多个方案同名时追加方案 id（如 `VIP (plan_xxx)`），保证「分组 × 模型」不重复。行按方案顺序（默认方案在前，其余按 id）、方案内按模型名排列。
+- `currency` 固定 `USD`（1 点 = 1 美元），`price_unit` 为 `per_1m_tokens`，单价 = 售价 `price_micro_per_m` / 1,000,000，已含模型倍率、方案系数或方案固定售价。
+- 每个字段按扣费的解析方式取默认服务等级、基础档的售价，没有时逐级回落到父计量项：未单设的缓存读/写单价等于输入单价，未单设的 1 小时缓存写入等于 5 分钟缓存写入。没有任何祖先单价的字段为 `null`。
+- 有长上下文档位时，`note` 写明阈值（如 `higher prices apply above 200000 input tokens`）；行内价格只是基础档。服务等级变体（priority/flex 等）不出现。
+- 既没有输入也没有输出 token 单价的模型、默认价别名 `*` 不列出；`enabled` 恒为 `true`（控制面只返回已路由且已定价的别名）。
+- `site_name` 取 `AISW_CONSOLE_LEGAL_SERVICE_NAME`，`site_domain` 取请求的 `Host`（不含端口）；`updated_at` 取控制面 `updated_at`，控制面未知时取当前时间。
+- 未开启支付计费时 404，读取失败时 503（不返回空列表）；成功响应 `Cache-Control: public, max-age=60`，带 `Access-Control-Allow-Origin: *`。
+
 法币标价合并后（2026-11-11），`/pricing` 的账号卡片按 `price_minor` + `currency` 显示法币月价，`parseCatalog` 拒绝零价或非三位大写币种；控制面只开账号包月、未开在线支付时目录不列账号。
 
 账号预售（2026-11-11）：平台计费页新增「账号预售」标签页，包含预售商品（类型、名称、币种、月价、Dodo 产品 ID、名额、上架；显示「待发货 x / 名额 y」）和「待发货订单」两块。待发货订单经 `fulfillment=awaiting` 分页读取，每行可以「分配账号」：对话框只列出同类型、不在商户自有节点、空闲或已属于该商户的库存，最终仍以控制面判断为准。也可以「退款」，填写原因后全额退款，这是 Console 首个运维退款入口。商户计费页在有预售时显示「账号预售」区块，售罄时禁用购买；订单表显示「已付款，待发货」，支付回跳确认的是预售订单时，提示账号将在数小时内分配。`/pricing` 增加预售区块。账号编辑器创建时带上 Agent 上报的类型，旧商品可以补填类型，下架时允许不填价格与产品。`ConfirmDialog` 新增可选的 `children` 与 `confirmDisabled`。契约镜像在 `lib/console/account-presales.ts`；新增 6 条白名单与 3 个错误类型，八语言文案齐备；所有写操作只发送一次。

@@ -276,6 +276,7 @@ Playwright 结果、失败截图与 trace 位于 `test-results/`，指定窄屏�
 | --- | --- |
 | `/` | 未登录时显示产品介绍首页（API、预付点数、独享包月）、价格入口与条款链接；已登录成员照旧跳转到概览页 |
 | `/pricing` | 公开价格目录（读取控制面 `GET /billing/v1/catalog`），各分区附说明，并注明购买须遵守服务条款与退款政策 |
+| `GET /api/pricing` | 公开 JSON：Folkbench 价格格式（schema 1.1），每个价格方案一个分组（读取控制面 `GET /billing/v1/plan-prices`），供比价站点同步；无需会话 |
 | `/terms`、`/privacy`、`/refund` | 服务条款、隐私政策、退款政策 |
 
 公开页头可进入 API 文档，首页也直达 `/pricing#models`。登录后概览提供创建 Key、配置客户端、复制首次请求示例和用量入口。从价格页购买会在注册或登录后回到对应计费标签。

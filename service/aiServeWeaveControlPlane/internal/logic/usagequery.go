@@ -248,10 +248,19 @@ func (s *Service) defaultPlanPrices(ctx context.Context) ([]EffectivePrice, erro
 	if err != nil {
 		return nil, err
 	}
-	now := s.clock.Now()
+	return s.publicPrices(ctx, snap, routed, "", s.clock.Now())
+}
+
+// publicPrices prices each routed alias under planID at the moment at, for a
+// public list: aliases nothing prices are left out rather than advertised as
+// free, and the catalog reference is dropped.
+//
+// publicPrices 按 planID 在 at 时刻为每个路由别名计价，供公开列表使用：没有任何单价的
+// 别名不列出，而不是宣传为免费，并去掉价目表参照。
+func (s *Service) publicPrices(ctx context.Context, snap *pricingSnapshot, routed []string, planID string, at time.Time) ([]EffectivePrice, error) {
 	out := []EffectivePrice{}
 	for _, alias := range routed {
-		price, err := s.effectivePrice(ctx, snap, alias, "", now)
+		price, err := s.effectivePrice(ctx, snap, alias, planID, at)
 		if err != nil {
 			return nil, err
 		}

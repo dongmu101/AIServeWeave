@@ -154,6 +154,10 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 		// 目录是公开的，访客登录前即可看到在售内容；它不暴露服务商 id 或节点目标。
 		server.AddRoutes([]rest.Route{
 			{Method: http.MethodGet, Path: "/billing/v1/catalog", Handler: instrumented(ctx.MetricsRegistry, "/billing/v1/catalog", getCatalog(ctx))},
+			// Every plan's sale prices, public for price-comparison feeds;
+			// 404 without payment billing.
+			// 全部方案的售价，公开供比价数据源读取；未开启支付计费时 404。
+			{Method: http.MethodGet, Path: "/billing/v1/plan-prices", Handler: instrumented(ctx.MetricsRegistry, "/billing/v1/plan-prices", getPlanPrices(ctx))},
 		})
 		server.AddRoutes([]rest.Route{
 			billingRoute(http.MethodGet, "/admin/v1/billing", requireSession, billingOverview(ctx)),
