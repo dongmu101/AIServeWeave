@@ -21,13 +21,19 @@ const (
 
 // Default bounds for the rate-limit cooldown, used whenever a Config leaves
 // RateLimitCooldown or MaxRateLimitCooldown at zero. The default applies when
-// the backend gave no reset time; the cap bounds a reset time that is far
-// away (a weekly subscription window), so one request an hour still finds out
-// whether the quota came back early — a plan upgrade, a manual reset.
+// the backend gave no reset time (doubling on each further such refusal from
+// a CLI subscription account, see limitWindow); the cap bounds a reset time
+// that is far away (a weekly subscription window), so one request an hour
+// still finds out whether the quota came back early — a plan upgrade, a
+// manual reset. For a CLI account that request reaches the Agent, which
+// answers it itself while it still knows the account is spent
+// (cliusage/guard.go), so the upstream is not asked.
 //
 // 限流冷却的默认边界，Config 的 RateLimitCooldown 或 MaxRateLimitCooldown 为零时使用。
-// 默认值用于后端没有给出重置时间的情况；上限约束遥远的重置时间（按周的订阅窗口），使得
-// 每小时仍有一次请求去确认额度是否提前恢复——套餐升级、手动重置。
+// 默认值用于后端没有给出重置时间的情况（CLI 订阅账户再次这样拒绝时逐次翻倍，见
+// limitWindow）；上限约束遥远的重置时间（按周的订阅窗口），使得每小时仍有一次请求去确认
+// 额度是否提前恢复——套餐升级、手动重置。对 CLI 账户，这次请求到达 Agent，Agent 只要还
+// 知道该账户已用完就自己作答（cliusage/guard.go），不会去问上游。
 const (
 	defaultRateLimitCooldown    = 30 * time.Second
 	defaultMaxRateLimitCooldown = time.Hour
@@ -73,6 +79,11 @@ type breakerState struct {
 	open                bool
 	openUntil           time.Time
 	limited             Cooldown
+	// limitStreak counts a CLI subscription account's refusals in a row
+	// that gave no reset time, for limitWindow; a success ends it.
+	// limitStreak 统计 CLI 订阅账户连续多少次拒绝没有给出重置时间，供 limitWindow 使用；
+	// 一次成功结束它。
+	limitStreak int
 }
 
 // breakerRegistry tracks one breakerState per Candidate. All access goes
@@ -167,16 +178,39 @@ func (r *breakerRegistry) limited(c Candidate, now time.Time) (time.Duration, bo
 }
 
 // limitWindow is how long a rate-limited candidate is set aside: the
-// backend's own RetryAfter when it gave one, otherwise limitCooldown, never
-// more than maxLimitCooldown.
+// backend's own RetryAfter when it gave one, otherwise limitCooldown doubled
+// for each refusal of streak past the first, never more than
+// maxLimitCooldown. Only a CLI subscription account builds a streak (see
+// record): its refusal without a reset is most likely a spent quota whose
+// reset could not be read, and asking again every limitCooldown would keep
+// sending the provider requests it can only refuse. Any other backend keeps
+// the flat limitCooldown, since its 429 is usually momentary load.
 //
 // limitWindow 是被限流的候选被搁置的时长：后端给了 RetryAfter 就用它，否则用
-// limitCooldown，且从不超过 maxLimitCooldown。
-func (r *breakerRegistry) limitWindow(retryAfter time.Duration) time.Duration {
+// limitCooldown，并在 streak 超过第一次之后每次翻倍，且从不超过 maxLimitCooldown。只有
+// CLI 订阅账户会累积 streak（见 record）：它不带重置时间的拒绝很可能是读不到重置时间的
+// 已用完额度，每隔 limitCooldown 再问一次，只会不断给服务商发去只能被拒绝的请求。其他后端
+// 保持固定的 limitCooldown，因为它们的 429 通常只是一时的负载。
+func (r *breakerRegistry) limitWindow(retryAfter time.Duration, streak int) time.Duration {
 	if retryAfter <= 0 {
 		retryAfter = r.limitCooldown
+		if streak > 1 {
+			const maxShift = 32 // more than enough to saturate past maxLimitCooldown
+			retryAfter = r.limitCooldown << min(streak-1, maxShift)
+			if retryAfter <= 0 {
+				retryAfter = r.maxLimitCooldown
+			}
+		}
 	}
 	return min(retryAfter, r.maxLimitCooldown)
+}
+
+// subscriptionKind reports whether kind is a CLI subscription account, whose
+// quota refusals limitWindow backs off from.
+//
+// subscriptionKind 报告 kind 是否为 CLI 订阅账户，limitWindow 会对其额度拒绝逐次退避。
+func subscriptionKind(kind runtime.Kind) bool {
+	return kind == runtime.KindClaude || kind == runtime.KindCodex
 }
 
 // eligible reports whether c may be tried right now. A candidate with no
@@ -246,7 +280,12 @@ func (r *breakerRegistry) record(c Candidate, err error, now time.Time) {
 		st.consecutiveFailures = 0
 		st.tripCount = 0
 		st.open = false
-		limited = r.limitWindow(retryAfter)
+		if retryAfter <= 0 && subscriptionKind(c.Kind) {
+			st.limitStreak++
+		} else {
+			st.limitStreak = 0
+		}
+		limited = r.limitWindow(retryAfter, st.limitStreak)
 		dropped = r.setLimitedLocked(c, Cooldown{Since: now, Until: now.Add(limited)})
 	} else if !breakerFailure(err) {
 		if st, ok := r.entries[c]; ok {
@@ -254,6 +293,9 @@ func (r *breakerRegistry) record(c Candidate, err error, now time.Time) {
 			st.consecutiveFailures = 0
 			st.tripCount = 0
 			st.open = false
+			if err == nil {
+				st.limitStreak = 0
+			}
 		}
 		// A success proves the quota is back, whatever the reset time said
 		// — on every replica, when cooldowns are shared.

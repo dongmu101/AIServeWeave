@@ -88,14 +88,14 @@ func (s *Scheduler) MessagesContinue(ctx context.Context, c Candidate, req runti
 		var first runtime.MessagesEvent
 		first, err = stream.Recv()
 		if err == nil || err == io.EOF {
-			s.breakers.record(c, nil, s.clock.Now())
+			s.record(c, nil)
 			s.metrics.Dispatch(c, nil)
 			s.logDispatchDecision(ctx, "messages_continue", c, nil)
 			return &prefetchStream[runtime.MessagesEvent]{first: first, hasFirst: err == nil, eof: err == io.EOF, underlying: stream}, nil
 		}
 		stream.Close()
 	}
-	s.breakers.record(c, err, s.clock.Now())
+	s.record(c, err)
 	s.metrics.Dispatch(c, err)
 	s.logDispatchDecision(ctx, "messages_continue", c, err)
 	return nil, err
@@ -163,7 +163,7 @@ func (s *Scheduler) attemptMessagesStart(ctx context.Context, req runtime.Messag
 			var first runtime.MessagesEvent
 			first, err = stream.Recv()
 			if err == nil || err == io.EOF {
-				s.breakers.record(c, nil, s.clock.Now())
+				s.record(c, nil)
 				s.metrics.Dispatch(c, nil)
 				s.logDispatchDecision(ctx, "messages", c, nil)
 				s.notePin(ctx, key, c)
@@ -171,7 +171,7 @@ func (s *Scheduler) attemptMessagesStart(ctx context.Context, req runtime.Messag
 			}
 			stream.Close()
 		}
-		s.breakers.record(c, err, s.clock.Now())
+		s.record(c, err)
 		s.metrics.Dispatch(c, err)
 		s.logDispatchDecision(ctx, "messages", c, err)
 		lastErr = err

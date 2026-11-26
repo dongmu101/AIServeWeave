@@ -1,3 +1,18 @@
+# CLI 订阅额度调度优化（2026-11-26）
+
+Gateway 调度 Claude Code / Codex 订阅账户时，从「只看已用比例」改为同时看距重置的时间，并让 Agent 的额度快照更快赶上实际用量。代码已交付，现有默认测试全部通过；新逻辑用一次性测试验证（未提交），默认测试套件尚未覆盖；**未在真实账户接近耗尽或临近重置的场景下验收**。
+
+- **Gateway**（`scheduler/quota.go`、`scheduler/quotarefusal.go`）：
+  - 新增「快到期」档（新 flag `-quota-expiring-percent`，默认 10%）：即将重置、还有用不完额度的账户在节点有空闲槽时先用；进行中的对话留在钉选账户上，不为此迁走。
+  - 「紧张」档只降级按均匀速度会在重置前用完的账户；紧张账户之间先留在会话钉选的账户上，其次优先剩余额度多的。
+  - CLI 账户答复 `rate_limited` 时，按快照推断拒绝它的窗口，账户级窗口一并冷却同账户的其他模型。
+  - 新增三个 `gateway_scheduler_quota_*` 指标。
+- **Agent**（`cliusage/`、`claudecode/`、`codexcli/`）：暂时性查询失败保留上一轮读数；有窗口达到 80% 时每分钟刷新（已用完的账户除外）；CLI 警告接近上限或拒绝时立即刷新。
+  - 已知账户用完（读数显示适用窗口到 100%，或 CLI 报告带重置时间的拒绝）时，回合在 Agent 本地答复 `rate_limited`，不启动 CLI、不联系服务商，直到重置或新读数显示恢复。
+- **Gateway** 另外：CLI 账户连续不带重置时间被拒时，限流冷却从 30s 逐次翻倍到至多 1h。
+
+升级须知：两侧各自生效，升级顺序不限；只升级 Gateway 时快照仍按 5 分钟刷新。新 flag 不设置即用默认值，`-quota-expiring-percent=-1` 可关闭快到期档。详见 [Gateway STATUS「按订阅额度主动降级」](service/aiServeWeaveGateway/STATUS.md#按订阅额度主动降级) 与 [Agent README「本地 CLI 账户额度」](service/aiServeWeaveAgent/README.md#本地-cli-账户额度)。
+
 # Studio 编排（2026-11-26）
 
 编排第一期从前到后都已交付：在 Studio 画布上编辑并保存（带校验与版本）→ 在 Gateway 上执行（真实调度与计费路径）→ 实时事件流 → 步骤与结果落库 → 运行视图与运行记录。

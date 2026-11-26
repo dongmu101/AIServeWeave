@@ -10,6 +10,7 @@
 package cliusagestatus
 
 import (
+	"strings"
 	"time"
 
 	"AIServeWeave/common/runtime"
@@ -33,6 +34,33 @@ type Account struct {
 	Kind      runtime.Kind // locally declared provider / 本地声明的供应方
 	Status    string       // pending, ready, unauthorized, unavailable or error / 待查询、可用、未登录、未提供或失败
 	Windows   []Window     // bounded upstream quota windows / 有界的上游额度窗口
-	CheckedAt time.Time    // time of the latest query attempt / 最近查询时间
+	CheckedAt time.Time    // when Status and Windows were read; a ready account whose later queries failed keeps its last success / Status 与 Windows 的读取时间；之后查询失败的 ready 账户保留上次成功的时间
 	Stale     bool         // cached data is older than two minutes / 缓存数据已超过两分钟
+}
+
+// Applies reports whether w limits requests for model on an account of kind.
+// Claude's five-hour and seven-day windows cover every model; its per-family
+// weekly windows cover only that family, so a spent Opus allowance says
+// nothing about Sonnet. Codex reports windows per metering bucket; only the
+// general "codex" bucket is known to cover every model, so other buckets
+// apply to none — acting on a guessed mapping would move or refuse traffic
+// for no reason. An empty model asks which windows limit every model.
+//
+// Applies 报告 w 是否限制 kind 账户上 model 的请求。Claude 的五小时与七天窗口覆盖所有
+// 模型；按模型系列划分的周窗口只覆盖该系列，因此 Opus 额度用完对 Sonnet 没有影响。Codex
+// 按计量桶上报窗口；只知道通用的 "codex" 桶覆盖所有模型，其他桶不适用于任何模型——依据
+// 猜测的映射行事，只会无谓地迁移或拒绝流量。model 为空时，询问的是限制所有模型的窗口。
+func (w Window) Applies(kind runtime.Kind, model string) bool {
+	if kind == runtime.KindCodex {
+		return w.Bucket == "" || w.Bucket == "codex"
+	}
+	switch w.Name {
+	case "five_hour", "seven_day":
+		return true
+	case "seven_day_sonnet":
+		return strings.Contains(strings.ToLower(model), "sonnet")
+	case "seven_day_opus":
+		return strings.Contains(strings.ToLower(model), "opus")
+	}
+	return false
 }

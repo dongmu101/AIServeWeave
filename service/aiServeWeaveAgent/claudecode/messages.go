@@ -361,6 +361,10 @@ type messagesSession struct {
 	// phases 为原生回合计时，原生回合从启动到退出独占其 CLI 进程；兼容会话的进程跨越多个
 	// 回合，为 nil。
 	phases *cliphase.Timeline
+	// quotaNotice and quotaRefused are the bridge's; see messagesBridge.
+	// quotaNotice 与 quotaRefused 取自 bridge，见 messagesBridge。
+	quotaNotice  func()
+	quotaRefused func(model string, resetsAt time.Time)
 }
 
 type messagesBridge struct {
@@ -390,6 +394,17 @@ type messagesBridge struct {
 	// so a replay is rejected even after its session ended. Guarded by mu.
 	// consumed 记录已投递结果的工具 ID 及其到期时间，会话结束后重放仍被拒绝。受 mu 保护。
 	consumed map[string]time.Time
+	// quotaNotice reports that the CLI warned of, or hit, its account's
+	// limit (runtime.QuotaGuard.Notice); nil does nothing.
+	// quotaNotice 报告 CLI 警告接近或已到账户上限（runtime.QuotaGuard.Notice）；
+	// 为 nil 时什么也不做。
+	quotaNotice func()
+	// quotaRefused records a refusal the CLI reported with its reset, for
+	// the model it covers ("" for the whole account; see quotaScope)
+	// (runtime.QuotaGuard.Refused); nil does nothing.
+	// quotaRefused 记录 CLI 报告的、带重置时刻的一次拒绝，以及它覆盖的模型（整个账户时
+	// 为 ""，见 quotaScope）（runtime.QuotaGuard.Refused）；为 nil 时什么也不做。
+	quotaRefused func(model string, resetsAt time.Time)
 }
 
 // Replay memory. It outlives the Gateway's own used marker so either side
@@ -801,7 +816,7 @@ func (b *messagesBridge) acquire(owner principal, req messagesRequest) (*message
 	}
 	ctx, cancelCause := context.WithCancelCause(context.Background())
 	cancel := func() { cancelCause(context.Canceled) }
-	s := &messagesSession{processor: b.processor, owner: owner, request: req, messages: req.Messages, ctx: ctx, cancel: cancel, cancelCause: cancelCause, done: make(chan struct{}), events: make(chan bridgeEvent), busy: true, pending: make(map[string]*pendingTool), changed: make(chan struct{}), activity: make(chan bool, 1)}
+	s := &messagesSession{processor: b.processor, quotaNotice: b.quotaNotice, quotaRefused: b.quotaRefused, owner: owner, request: req, messages: req.Messages, ctx: ctx, cancel: cancel, cancelCause: cancelCause, done: make(chan struct{}), events: make(chan bridgeEvent), busy: true, pending: make(map[string]*pendingTool), changed: make(chan struct{}), activity: make(chan bool, 1)}
 	if req.isNative() {
 		s.phases = cliphase.New(b.clock)
 		s.upstream = &upstreamCapture{phases: s.phases}

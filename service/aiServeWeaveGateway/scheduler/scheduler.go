@@ -97,11 +97,11 @@ type Scheduler struct {
 	// unavailableWait 是取默认值之后的 Config.UnavailableWait，见 unavailable.go。
 	unavailableWait time.Duration
 
-	// quotaLowPercent is Config.QuotaLowPercent after defaulting; zero or
-	// below disables the quotaLow tier (quota.go).
-	// quotaLowPercent 是取默认值之后的 Config.QuotaLowPercent；小于等于零时关闭 quotaLow
-	// 档位（quota.go）。
-	quotaLowPercent float64
+	// quota is Config.QuotaLowPercent and Config.QuotaExpiringPercent after
+	// defaulting (quota.go).
+	// quota 是取默认值之后的 Config.QuotaLowPercent 与 Config.QuotaExpiringPercent
+	// （quota.go）。
+	quota quotaPolicy
 
 	// sharedCooldowns is Config.SharedCooldowns, which RunSharedCooldowns
 	// keeps the breakers in step with; nil leaves cooldowns per replica
@@ -238,6 +238,17 @@ type Config struct {
 	// 某个尚未重置的窗口已到 100% 的账户总是最后尝试，与此值无关。
 	QuotaLowPercent float64
 
+	// QuotaExpiringPercent is the share of a quota window's length, counted
+	// back from its reset, within which an account still holding allowance
+	// it would not use at an even pace is tried before the others, since
+	// that allowance is lost at the reset (see quota.go). Zero uses
+	// defaultQuotaExpiringPercent (10); negative disables that tier.
+	//
+	// QuotaExpiringPercent 是从额度窗口重置时刻往前数、占窗口时长的比例：在这段时间内，
+	// 按均匀速度还会剩下用不完额度的账户先于其他账户尝试，因为这部分额度在重置时作废（见
+	// quota.go）。零值使用 defaultQuotaExpiringPercent（10）；负值关闭该档位。
+	QuotaExpiringPercent float64
+
 	// SharedCooldowns, when set, shares rate-limit cooldowns with every other
 	// replica using the same store, so an account one replica learns is spent
 	// is skipped by all of them. RunSharedCooldowns must be running for the
@@ -307,10 +318,15 @@ func New(server *tunnelserver.Server, cfg Config) *Scheduler {
 	}
 
 	s.chatQueue = cfg.ChatQueue
-	s.quotaLowPercent = cfg.QuotaLowPercent
-	if s.quotaLowPercent == 0 {
-		s.quotaLowPercent = defaultQuotaLowPercent
+	s.quota.lowPercent = cfg.QuotaLowPercent
+	if s.quota.lowPercent == 0 {
+		s.quota.lowPercent = defaultQuotaLowPercent
 	}
+	expiringPercent := cfg.QuotaExpiringPercent
+	if expiringPercent == 0 {
+		expiringPercent = defaultQuotaExpiringPercent
+	}
+	s.quota.expiringShare = min(expiringPercent, 100) / 100
 	s.sharedCooldowns = cfg.SharedCooldowns
 	if s.sharedCooldowns != nil {
 		s.breakers.shareCooldowns()
@@ -399,7 +415,7 @@ func (s *Scheduler) attemptChat(ctx context.Context, req runtime.ChatRequest) (r
 			continue
 		}
 		resp, err := s.server.Runtime(c.NodeID, c.RuntimeID).Chat(ctx, withModel(req, c.Model))
-		s.breakers.record(c, err, s.clock.Now())
+		s.record(c, err)
 		s.metrics.Dispatch(c, err)
 		s.logDispatchDecision(ctx, "chat", c, err)
 		if err == nil {
@@ -438,7 +454,7 @@ func (s *Scheduler) Embed(ctx context.Context, req runtime.EmbeddingRequest) (ru
 			continue
 		}
 		resp, err := s.server.Runtime(c.NodeID, c.RuntimeID).Embed(ctx, withEmbedModel(req, c.Model))
-		s.breakers.record(c, err, s.clock.Now())
+		s.record(c, err)
 		s.metrics.Dispatch(c, err)
 		s.logDispatchDecision(ctx, "embed", c, err)
 		if err == nil {
@@ -475,7 +491,7 @@ func (s *Scheduler) Rerank(ctx context.Context, req runtime.RerankRequest) (runt
 			continue
 		}
 		resp, err := s.server.Runtime(c.NodeID, c.RuntimeID).Rerank(ctx, withRerankModel(req, c.Model))
-		s.breakers.record(c, err, s.clock.Now())
+		s.record(c, err)
 		s.metrics.Dispatch(c, err)
 		s.logDispatchDecision(ctx, "rerank", c, err)
 		if err == nil {
@@ -552,7 +568,7 @@ func (s *Scheduler) Transcribe(ctx context.Context, c Candidate, req runtime.Aud
 		return runtime.AudioTranscriptionResponse{}, ErrNodeNotAllowed
 	}
 	resp, err := s.server.Runtime(c.NodeID, c.RuntimeID).Transcribe(ctx, req, audio)
-	s.breakers.record(c, err, s.clock.Now())
+	s.record(c, err)
 	s.metrics.Dispatch(c, err)
 	return resp, err
 }
@@ -612,7 +628,7 @@ func (s *Scheduler) attemptChatStream(ctx context.Context, req runtime.ChatReque
 		}
 		stream, err := s.server.Runtime(c.NodeID, c.RuntimeID).ChatStream(ctx, withModel(req, c.Model))
 		if err != nil {
-			s.breakers.record(c, err, s.clock.Now())
+			s.record(c, err)
 			s.metrics.Dispatch(c, err)
 			s.logDispatchDecision(ctx, "chat_stream", c, err)
 			lastErr = err
@@ -626,7 +642,7 @@ func (s *Scheduler) attemptChatStream(ctx context.Context, req runtime.ChatReque
 
 		first, err := stream.Recv()
 		if err == nil {
-			s.breakers.record(c, nil, s.clock.Now())
+			s.record(c, nil)
 			s.metrics.Dispatch(c, nil)
 			s.logDispatchDecision(ctx, "chat_stream", c, nil)
 			s.notePin(ctx, key, c)
@@ -636,12 +652,12 @@ func (s *Scheduler) attemptChatStream(ctx context.Context, req runtime.ChatReque
 		if err == io.EOF {
 			// A valid, empty response: nothing was produced, but nothing
 			// failed either. Do not retry a successful call.
-			s.breakers.record(c, nil, s.clock.Now())
+			s.record(c, nil)
 			s.metrics.Dispatch(c, nil)
 			s.logDispatchDecision(ctx, "chat_stream", c, nil)
 			return &prefetchStream[runtime.ChatEvent]{eof: true}, c, nil, false
 		}
-		s.breakers.record(c, err, s.clock.Now())
+		s.record(c, err)
 		s.metrics.Dispatch(c, err)
 		s.logDispatchDecision(ctx, "chat_stream", c, err)
 		lastErr = err
@@ -1041,6 +1057,9 @@ func (s *Scheduler) pickOn(ctx context.Context, view *nodeView, target routing.T
 
 	found := s.collect(ctx, view, target, eligible)
 	orderCandidates(found, policy, key, s.intn)
+	if len(found) > 0 && found[0].quotaKnown {
+		s.metrics.QuotaFirstChoice(found[0].quotaRank())
+	}
 
 	candidates := make([]Candidate, len(found))
 	for i, f := range found {
@@ -1117,17 +1136,19 @@ func (s *Scheduler) collect(ctx context.Context, view *nodeView, target routing.
 			if !s.breakers.eligible(candidate, now) {
 				continue
 			}
-			quota := accountQuota(node.CLIUsage, node.CLIUsageAt, snap.Descriptor.ID, snap.Descriptor.Kind, target.RuntimeModel, s.quotaLowPercent, now)
+			quota := accountQuota(node.CLIUsage, node.CLIUsageAt, snap.Descriptor.ID, snap.Descriptor.Kind, target.RuntimeModel, s.quota, now)
 			if quota.known {
 				s.breakers.applyQuota(candidate, quota, now)
 			}
 			found = append(found, scored{
-				Candidate: candidate,
-				idle:      idle,
-				queued:    snap.Health.QueueRunning + snap.Health.QueuePending,
-				inflight:  node.InflightRequests,
-				pressure:  node.Pressure,
-				quota:     quota.tier,
+				Candidate:  candidate,
+				idle:       idle,
+				queued:     snap.Health.QueueRunning + snap.Health.QueuePending,
+				inflight:   node.InflightRequests,
+				pressure:   node.Pressure,
+				quota:      quota.tier,
+				used:       quota.usedPercent(),
+				quotaKnown: quota.known,
 			})
 		}
 	}

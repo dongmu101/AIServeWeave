@@ -19,6 +19,15 @@ before upgrading; do not assume a `0.x` bump is safe by default.
 
 ### Added
 
+- CLI 订阅额度调度（Gateway + Agent）：
+  - Gateway 排序新增「快到期」档：窗口进入最后 `-quota-expiring-percent`（新 flag，默认 10%；负值关闭）的时间、按均匀速度还会剩下额度的账户，在节点有空闲槽、其他窗口没有明显超速时排在最前，先用掉重置时会作废的额度；进行中对话的钉选账户（额度充足、有空闲槽、无资源紧张）仍排在它之前，对话不会因此迁走。
+  - Gateway 在 CLI 账户答复 `rate_limited` 时，依据快照推断拒绝它的窗口，把该窗口覆盖的同账户其他模型一并冷却到同一时刻（按系列的窗口只覆盖同系列）；之后的快照显示未用完时立即解除。
+  - Gateway 新增指标 `gateway_scheduler_quota_first_choice_total{tier}`、`gateway_scheduler_quota_rate_limited_total{tier}`、`gateway_scheduler_quota_cooldown_spread_total`。
+  - Agent 额度监视在有窗口用到 80% 时每分钟刷新；Claude Code 的 `rate_limit_event`（`allowed_warning`/`rejected`）与 Codex 的额度失败触发立即刷新（受每分钟一批约束）。`runtime.Dependencies` 新增可选的 `Quota`（`runtime.QuotaGuard` 接口：`Notice`、`Refused`、`Hold`）。覆盖所有模型的窗口已用完的账户不按每分钟刷新。
+  - Agent 已知账户用完时在本地作答：Claude Code 的 Messages、Codex 的对话与生图在回合开始前询问额度监视器，用量读数显示适用窗口到 100%（重置尚未到来），或 CLI 报告了带重置时间的拒绝时，直接答复可重试的 `rate_limited`（`retry_after` 到重置为止），不启动 CLI、不向服务商发出只会被拒绝的请求；拒绝后至少 2 分钟的读数显示未用完时提前解除，最多搁置 8 天。开启额外用量的 Claude 账户到 100% 后同样被搁置。
+  - Gateway：CLI 订阅账户连续不带重置时间被拒时，限流冷却逐次翻倍（30s 起，至多 `-max-rate-limit-cooldown`），一次成功后复位；其他后端仍为固定时长。
+  - 升级顺序不限，两侧各自生效。见 [Gateway STATUS「按订阅额度主动降级」](service/aiServeWeaveGateway/STATUS.md#按订阅额度主动降级)。
+
 - Agent 本机 CLI 回合分段计时：
   - Claude 原生回合与 Codex 对话回合在结束日志中记录进程启动、CLI 就绪、模型请求发出、上游响应头、首个事件、结束、退出等阶段的耗时，以及上游连接等待、进程 CPU 与峰值内存。
   - Codex 新增 `Codex round finished` 日志；`/metrics` 新增 `agent_cli_phase_seconds`、`agent_cli_upstream_connect_seconds`、`agent_cli_process_cpu_seconds`、`agent_cli_process_max_rss_bytes`。
@@ -59,6 +68,9 @@ before upgrading; do not assume a `0.x` bump is safe by default.
 
 ### Changed
 
+- CLI 订阅额度调度行为变化：
+  - Gateway 的「紧张」档改为同时看距重置的时间：已用超过 `-quota-low-percent`，但剩余额度足以按均匀速度撑到重置的窗口不再降级（例如五小时窗口 92%、3 分钟后重置）。多个紧张账户之间，有空闲槽的优先，其次会话的钉选账户，再次已用比例低的优先（所有账户都紧张时，对话不会随各账户已用比例交叉而来回切换）。
+  - Agent 额度查询暂时失败时保留上一轮读数与查询时间（此前清空，Gateway 会把该账户当作额度充足）；未登录、未提供额度仍清空。
 - 减轻前端服务端的单次请求开销，为流量增长做准备：
   - Console 不再把当前语言的整份词典（约 250 KB）内联进每个 HTML 页面。`I18nProvider` 只接收语言，浏览器以带哈希、可长期缓存的静态 chunk 加载词典，服务端仍输出完整翻译的 HTML。`/login` 从 267 KB 降到约 20 KB。新增 `catalogue()`，每种语言共用同一个 promise。
   - Studio 的流式回答改为服务端原样转发 Gateway 的 SSE 字节，由浏览器里的 `StudioChatTransport` 翻译成 AI SDK UI 消息流，服务端不再逐个 token 解析和重新编码。截断、停止、拒绝的表现不变。

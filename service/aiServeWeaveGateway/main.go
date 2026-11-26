@@ -142,7 +142,9 @@ func run() error {
 	maxRateLimitCooldown := flag.Duration("max-rate-limit-cooldown", 0,
 		"cap on how long one rate_limited answer sets a candidate aside, however far away its reported reset is; zero uses scheduler's built-in default (1h); a CLI account whose Agent-reported quota still shows the window spent is extended in steps of this size up to the reset, and released early once a later quota report shows it back")
 	quotaLowPercent := flag.Float64("quota-low-percent", 0,
-		"used percentage of any applicable window at which a CLI subscription account (Claude Code, Codex) is tried after accounts with more quota left, from the quota each Agent reports every few minutes; an account at 100% of a window that has not reset is always tried last; zero uses scheduler's built-in default (90), negative turns the low tier off; accounts are only reordered, never skipped")
+		"used percentage of any applicable window at which a CLI subscription account (Claude Code, Codex) is tried after accounts with more quota left, from the quota each Agent reports; a window whose remaining share of quota still covers its remaining share of time until the reset is not counted as low; an account at 100% of a window that has not reset is always tried last; zero uses scheduler's built-in default (90), negative turns the low tier off; accounts are only reordered, never skipped")
+	quotaExpiringPercent := flag.Float64("quota-expiring-percent", 0,
+		"share of a quota window's length, counted back from its reset, within which a CLI subscription account still holding quota it would not use at an even pace is tried before the others, since that quota is lost at the reset; only while its node has an idle slot and no other applicable window is being used well ahead of its pace; zero uses scheduler's built-in default (10), negative turns the expiring tier off; accounts are only reordered, never skipped")
 	sharedCooldownInterval := flag.Duration("shared-cooldown-interval", scheduler.DefaultSharedCooldownInterval,
 		"with -redis-addr, how often this replica pulls the rate-limit cooldowns every replica shares, so an account one replica learns is spent is skipped by all; this replica's own cooldowns are written at once; zero keeps cooldowns per replica")
 	sessionPinTTL := flag.Duration("session-pin-ttl", scheduler.DefaultSessionPinTTL,
@@ -487,6 +489,7 @@ func run() error {
 		ChatQueue:            chatQueue,
 		UnavailableWait:      *modelUnavailableWait,
 		QuotaLowPercent:      *quotaLowPercent,
+		QuotaExpiringPercent: *quotaExpiringPercent,
 		SharedCooldowns:      sharedCooldowns,
 		SessionPins:          sessionPins,
 		SessionPinTTL:        *sessionPinTTL,

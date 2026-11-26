@@ -60,14 +60,14 @@ func (s *Scheduler) GenerateImage(ctx context.Context, req runtime.ImageRequest)
 				err = &runtime.RuntimeError{Code: runtime.ErrorProtocol, RuntimeID: c.RuntimeID, Message: "image stream ended before metadata"}
 			}
 			if err == nil {
-				s.breakers.record(c, nil, s.clock.Now())
+				s.record(c, nil)
 				s.metrics.Dispatch(c, nil)
 				s.logDispatchDecision(ctx, "image_generate", c, nil)
 				return *first.Meta, stream, c, nil
 			}
 			_ = stream.Close()
 		}
-		s.breakers.record(c, err, s.clock.Now())
+		s.record(c, err)
 		s.metrics.Dispatch(c, err)
 		s.logDispatchDecision(ctx, "image_generate", c, err)
 		lastErr = err

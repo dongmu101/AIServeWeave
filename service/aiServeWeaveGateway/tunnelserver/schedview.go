@@ -105,6 +105,22 @@ func (s *Server) AppendSchedNodes(dst []SchedNode) []SchedNode {
 	return dst
 }
 
+// SchedNode returns the scheduler's view of one node, with the same sharing
+// rules as AppendSchedNodes, or false when this replica holds no tunnel to
+// it. It is for the scheduler's occasional per-node questions (an account
+// that just answered rate_limited), not the per-request walk.
+//
+// SchedNode 返回一个节点的调度视图，共享规则与 AppendSchedNodes 相同；本副本没有通往它的
+// 隧道时返回 false。它用于调度器偶尔针对单个节点的查询（某个账户刚答复了 rate_limited），
+// 而不是每个请求的遍历。
+func (s *Server) SchedNode(nodeID string) (SchedNode, bool) {
+	n, ok := s.lookup(nodeID)
+	if !ok {
+		return SchedNode{}, false
+	}
+	return n.schedView(s.clock.Now(), s.cfg.HeartbeatTimeout), true
+}
+
 // schedView builds n's SchedNode. Its dynamic fields are read under n.mu in a
 // single short critical section; the static part comes from the published
 // n.static.

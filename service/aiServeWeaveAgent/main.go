@@ -277,6 +277,17 @@ func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmO
 	metricsServer := startMetricsEndpoint(logger, metricsRegistry, metricsAddr)
 
 	deps := newDependencies(logger, metricsRegistry)
+	// The quota monitor exists before any runtime and is every CLI
+	// runtime's quota guard: a runtime asks it before each turn whether the
+	// account is already known to refuse, answering locally instead of
+	// sending the upstream a request it can only refuse, and tells it about
+	// the CLI's warnings and refusals (cliusage/guard.go).
+	//
+	// 额度监视器先于任何运行时存在，并作为每个 CLI 运行时的额度守卫：运行时在每个回合之前
+	// 询问它账户是否已知会拒绝，若是则在本地作答，而不是把只会被拒绝的请求发给上游；并把
+	// CLI 的警告与拒绝告诉它（cliusage/guard.go）。
+	cliUsage := newCLIUsageMonitor(declaredRuntimes, deps.Clock)
+	deps.Quota = cliUsage
 	// Node-wide admission samples the host from startup, so the first
 	// heartbeat already carries a load figure and the gate is armed before
 	// any request can arrive.
@@ -351,7 +362,6 @@ func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmO
 		case <-finished:
 		}
 	})
-	cliUsage := newCLIUsageMonitor(declaredRuntimes, deps.Clock)
 	usage := &usageRefresher{monitor: cliUsage, local: local, start: func() {
 		if opts.enabled() {
 			go cliUsage.Run(ctx, cliUsageRefreshInterval)

@@ -59,6 +59,9 @@ func (r *Runtime) GenerateImage(parent context.Context, req runtime.ImageRequest
 	if strings.TrimSpace(req.Prompt) == "" || len(req.Prompt) > runtime.MaxImagePromptBytes || !utf8.ValidString(req.Prompt) {
 		return nil, r.wrap("image_generate", ErrProtocol)
 	}
+	if wait, held := r.deps.QuotaHold(r.cfg.ID, req.Model); held {
+		return nil, r.quotaHeld("image_generate", wait)
+	}
 	release, err := r.limiter.Acquire()
 	if err != nil {
 		return nil, err

@@ -21,7 +21,10 @@ import (
 //
 // A pin is only a preference inside the same ranking session affinity already
 // uses: a pinned candidate with no idle slot, under quota or resource pressure,
-// cooling or broken still yields exactly as a first choice would.
+// cooling or broken still yields exactly as a first choice would. It does hold
+// against another account whose allowance is about to expire, and inside the
+// low-quota tier it comes before quota left, so a conversation does not move
+// for either (orderRank, compareInTier).
 //
 // 本文件让一段对话留在上一次服务它的账户上。
 //
@@ -32,7 +35,8 @@ import (
 // 自己出问题。
 //
 // 钉选只是会话亲和已有排序中的一个偏好：被钉选的候选没有空闲槽、额度或资源紧张、
-// 正在冷却或已熔断时，与首选一样照常让位。
+// 正在冷却或已熔断时，与首选一样照常让位。但它不为额度即将作废的其他账户让位，在额度
+// 紧张档内也排在剩余额度之前，因此对话不会因这两者迁走（orderRank、compareInTier）。
 
 // SessionPin is the candidate that last served a session, and when that was
 // recorded.

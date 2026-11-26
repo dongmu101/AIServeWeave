@@ -487,10 +487,34 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 			RateLimitInfo        struct {
 				Status   string `json:"status"`
 				ResetsAt int64  `json:"resetsAt"`
+				// RateLimitType names the limit the event is about, such as
+				// five_hour or seven_day_opus (see quotaScope).
+				// RateLimitType 指明事件所关于的限额，例如 five_hour 或 seven_day_opus（见 quotaScope）。
+				RateLimitType string `json:"rateLimitType"`
 			} `json:"rate_limit_info"`
 		}
 		if json.Unmarshal(line, &envelope) != nil {
 			return nil, protocolError("invalid_json")
+		}
+		// A warning that the account nears its limit, or a refusal, asks the
+		// quota monitor to refresh now, wherever in the round it arrives, so
+		// the Gateway's ordering catches up before the next periodic pass.
+		// 账户接近上限的警告或拒绝，无论出现在回合的哪个位置，都请求额度监视立即刷新，
+		// 让 Gateway 的排序在下一次定时刷新之前赶上。
+		if envelope.Type == "rate_limit_event" && s.quotaNotice != nil {
+			switch envelope.RateLimitInfo.Status {
+			case "allowed_warning", "rejected":
+				s.quotaNotice()
+			}
+		}
+		// A refusal with its reset holds the account, for the models the
+		// refusing limit covers, until then: the next turn is answered here
+		// instead of being sent to an upstream that can only refuse it.
+		// 带重置时刻的拒绝会把账户（就拒绝它的限额所覆盖的模型而言）搁置到那一刻：下一个
+		// 回合在本地作答，而不是发给只能拒绝它的上游。
+		if envelope.Type == "rate_limit_event" && envelope.RateLimitInfo.Status == "rejected" &&
+			envelope.RateLimitInfo.ResetsAt > 0 && s.quotaRefused != nil {
+			s.quotaRefused(quotaScope(envelope.RateLimitInfo.RateLimitType, s.request.Model), time.Unix(envelope.RateLimitInfo.ResetsAt, 0))
 		}
 		// Notifications may surround the result. They must not enter inference
 		// output or invalidate an already successful result. Quota events before

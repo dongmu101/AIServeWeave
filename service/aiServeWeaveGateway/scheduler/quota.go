@@ -2,7 +2,7 @@ package scheduler
 
 import (
 	"log/slog"
-	"strings"
+	"math"
 	"time"
 
 	"AIServeWeave/common/cliusagestatus"
@@ -15,7 +15,10 @@ import (
 // the reactive half: it learns that an account is spent from a rate_limited
 // answer. This is the proactive half: it reads the quota snapshot every Agent
 // reports (cli_usage, refreshed every few minutes) and demotes an account that
-// is close to, or at, the end of a window.
+// is close to, or at, the end of a window. It also weighs time: an account
+// whose window resets soon with allowance it will not use is tried first,
+// since that allowance is lost at the reset, and one near its limit but about
+// to reset is not demoted.
 //
 // Demotion only reorders. The snapshot is untrusted Agent input and minutes
 // old, so an account it calls spent is tried last, never skipped: when every
@@ -25,34 +28,104 @@ import (
 // 本文件按剩余额度给 CLI 订阅账户排序，让请求在原本要用的账户用完之前就换到另一个
 // 账户，而不是失败一次之后才换。breaker.go 里的冷却是被动的一半：它从 rate_limited
 // 应答得知账户已用完。这里是主动的一半：读取每个 Agent 上报的额度快照（cli_usage，每隔
-// 几分钟刷新），把接近或已到窗口上限的账户降级。
+// 几分钟刷新），把接近或已到窗口上限的账户降级。它同时考虑时间：窗口即将重置、且还有用不完
+// 额度的账户先尝试，因为这部分额度在重置时作废；接近上限但马上就重置的账户不降级。
 //
 // 降级只调整顺序。快照是不受信任的 Agent 输入，且有几分钟的延迟，因此被它判为用完的
 // 账户排到最后尝试，而不是被跳过：其他候选都失败时，请求仍会到达它，由它自己的应答
 // 做决定。
 
 // quotaTier is how close a candidate's account is to its quota limit. Larger
-// is worse; every ordering policy tries a lower tier first.
+// is worse; every ordering policy tries a lower tier first (see quotaRank and
+// orderRank). The zero value is quotaOK, which is also what an account with
+// no usable snapshot ranks as.
 //
-// quotaTier 表示候选账户距额度上限有多近。数值越大越差；所有排序策略都先尝试较低档位。
-type quotaTier uint8
+// quotaTier 表示候选账户距额度上限有多近。数值越大越差；所有排序策略都先尝试较低档位
+// （见 quotaRank 与 orderRank）。零值是 quotaOK，没有可用快照的账户也按它排序。
+type quotaTier int8
 
 const (
-	quotaOK quotaTier = iota
+	// quotaExpiring: a window that applies to the request resets soon with
+	// allowance left that, at an even pace, would go unused, and no other
+	// window that applies is being used up well ahead of its pace. Such an
+	// account is tried first: what it does not spend before the reset is
+	// lost, while every other account keeps what it does not spend now. A
+	// conversation's pinned account still comes before it (orderRank), so a
+	// conversation in progress is not moved off its prompt cache.
+	// quotaExpiring：某个适用于本请求的窗口即将重置，按均匀速度它还会剩下用不完的额度，
+	// 且其他适用的窗口都没有明显快于均匀速度地消耗。这样的账户先尝试：它在重置前没用掉
+	// 的额度会作废，而其他账户此刻没用掉的额度仍然留着。对话的被钉选账户仍排在它之前
+	// （orderRank），因此进行中的对话不会被迁离其提示缓存。
+	quotaExpiring quotaTier = -1
+	quotaOK       quotaTier = 0
 	// quotaLow: some window that applies to the request is at or above the
-	// low-water percentage.
-	// quotaLow：某个适用于本请求的窗口达到或超过低水位百分比。
-	quotaLow
+	// low-water percentage and, at an even pace, would run out before it
+	// resets. One that resets soon enough for its remainder to last is not
+	// low: it is about to come back anyway.
+	// quotaLow：某个适用于本请求的窗口达到或超过低水位百分比，且按均匀速度会在重置前
+	// 用完。剩余额度足以撑到重置的窗口不算紧张：它马上就会恢复。
+	quotaLow quotaTier = 1
 	// quotaSpent: some window that applies to the request is at 100% and has
 	// not reset yet.
 	// quotaSpent：某个适用于本请求的窗口已到 100% 且尚未重置。
-	quotaSpent
+	quotaSpent quotaTier = 2
 )
+
+// String names the tier for metric labels.
+//
+// String 为指标标签给出档位名称。
+func (t quotaTier) String() string {
+	switch t {
+	case quotaExpiring:
+		return "expiring"
+	case quotaLow:
+		return "low"
+	case quotaSpent:
+		return "spent"
+	}
+	return "ok"
+}
 
 // defaultQuotaLowPercent is Config.QuotaLowPercent's default.
 //
 // defaultQuotaLowPercent 是 Config.QuotaLowPercent 的默认值。
 const defaultQuotaLowPercent = 90
+
+// defaultQuotaExpiringPercent is Config.QuotaExpiringPercent's default: the
+// last tenth of a window, half an hour of a five-hour window and about 17
+// hours of a weekly one.
+//
+// defaultQuotaExpiringPercent 是 Config.QuotaExpiringPercent 的默认值：窗口的最后十分
+// 之一，即五小时窗口的最后半小时、周窗口的最后约 17 小时。
+const defaultQuotaExpiringPercent = 10
+
+// quotaPaceMargin is how far, as a share of a window's allowance, its usage
+// must be off an even pace to count: an expiring window needs this much more
+// left than its share of time, and another window this much less to keep the
+// account from quotaExpiring. An account slightly ahead of pace early in the
+// week is normal and must not hold back an expiring five-hour window.
+//
+// quotaPaceMargin 是窗口用量需要偏离均匀速度多少（按额度份额计）才算数：即将重置的窗口
+// 剩余额度须比剩余时间份额多出这么多；其他窗口须比剩余时间份额少这么多，才会阻止账户成为
+// quotaExpiring。一周开头略快于均匀速度是常态，不应拦住一个即将重置的五小时窗口。
+const quotaPaceMargin = 0.1
+
+// maxWindowMinutes bounds a reported window length; anything longer is
+// treated as unknown rather than trusted into the arithmetic.
+//
+// maxWindowMinutes 限定上报的窗口时长；更长的值按未知处理，而不是被信任地代入计算。
+const maxWindowMinutes = 366 * 24 * 60
+
+// quotaPolicy is the configured thresholds accountQuota judges by, as
+// Scheduler keeps them after defaulting. lowPercent <= 0 disables quotaLow;
+// expiringShare <= 0 disables quotaExpiring.
+//
+// quotaPolicy 是 accountQuota 据以判断的已配置阈值，即 Scheduler 取默认值之后保存的
+// 值。lowPercent <= 0 关闭 quotaLow；expiringShare <= 0 关闭 quotaExpiring。
+type quotaPolicy struct {
+	lowPercent    float64
+	expiringShare float64
+}
 
 // maxQuotaSnapshotAge bounds how old a snapshot may be and still rank its
 // account. The Agent refreshes every five minutes; one that stopped refreshing
@@ -73,23 +146,43 @@ const quotaStatusReady = "ready"
 // false when there is nothing to go on — no snapshot, one that is not ready or
 // too old — and every other field is then zero. spentUntil is the latest reset
 // among the windows that make the candidate quotaSpent; checkedAt is when the
-// Agent took the snapshot.
+// Agent took the snapshot; used is the highest used percentage among the
+// windows that apply, which orders accounts inside quotaLow.
 //
 // quotaVerdict 是一份额度快照对一个候选的结论。没有可依据的信息时——没有快照、快照
 // 未就绪或过旧——known 为 false，其余字段都是零值。spentUntil 是使候选成为 quotaSpent
-// 的那些窗口中最晚的重置时刻；checkedAt 是 Agent 获取快照的时刻。
+// 的那些窗口中最晚的重置时刻；checkedAt 是 Agent 获取快照的时刻；used 是适用窗口中最高
+// 的已用百分比，用于 quotaLow 档内排序。
 type quotaVerdict struct {
 	known      bool
 	tier       quotaTier
 	spentUntil time.Time
 	checkedAt  time.Time
+	used       float64
+}
+
+// usedPercent is v.used as the small integer scored keeps, 0 to 100.
+//
+// usedPercent 是 scored 保存的 v.used 小整数形式，取值 0 到 100。
+func (v quotaVerdict) usedPercent() uint8 {
+	return uint8(min(max(v.used, 0), 100))
 }
 
 // accountQuota judges the account behind one (runtime, model) candidate on a
 // node from that node's quota snapshot. An account with no snapshot, a
 // snapshot that is not ready or too old ranks quotaOK and is not known;
-// unknown is never treated as spent. lowPercent <= 0 disables the quotaLow
-// tier.
+// unknown is never treated as spent.
+//
+// Pace compares, for each window, the share of its allowance left with the
+// share of its length left. Less allowance than time means it is being used
+// faster than an even pace that would last exactly until the reset; more
+// means some of it will go unused. A window whose length is unknown has no
+// pace: it can make an account low by the threshold alone, and keeps it from
+// quotaExpiring.
+//
+// 速度比较的是每个窗口剩余的额度份额与剩余的时间份额。额度少于时间，说明它比「恰好用到
+// 重置」的均匀速度消耗得更快；额度多于时间，说明有一部分会用不完。时长未知的窗口没有
+// 速度可言：它只凭阈值就能让账户成为紧张，并阻止账户成为 quotaExpiring。
 //
 // receivedAt is when the Gateway received the report. The snapshot counts as
 // taken at the earlier of that and the Agent's CheckedAt: an Agent clock
@@ -99,46 +192,115 @@ type quotaVerdict struct {
 //
 // accountQuota 依据节点的额度快照，判断该节点上一个 (运行时, 模型) 候选背后的账户。
 // 没有快照、快照未就绪或过旧时定为 quotaOK 且 known 为 false：未知从不被当作用完。
-// lowPercent <= 0 时关闭 quotaLow 档位。
 //
 // receivedAt 是 Gateway 收到上报的时刻。快照的获取时刻取它与 Agent 的 CheckedAt 中
 // 较早者：偏快的 Agent 时钟不能让一份旧快照显得比一次拒绝更新（reconcileQuota），而
 // 重连时重发的上报仍带着旧的 CheckedAt。
-func accountQuota(accounts []cliusagestatus.Account, receivedAt time.Time, runtimeID string, kind runtime.Kind, model string, lowPercent float64, now time.Time) quotaVerdict {
-	if kind != runtime.KindClaude && kind != runtime.KindCodex {
+func accountQuota(accounts []cliusagestatus.Account, receivedAt time.Time, runtimeID string, kind runtime.Kind, model string, policy quotaPolicy, now time.Time) quotaVerdict {
+	account, checkedAt, ok := freshQuotaAccount(accounts, receivedAt, runtimeID, kind, now)
+	if !ok {
 		return quotaVerdict{}
+	}
+	v := quotaVerdict{known: true, checkedAt: checkedAt}
+	// expiring: some window resets soon with allowance it will not use.
+	// steady: no window is being used well ahead of its pace.
+	// expiring：某个窗口即将重置且有用不完的额度。steady：没有窗口明显快于其速度。
+	expiring, steady := false, true
+	for i := range account.Windows {
+		w := &account.Windows[i]
+		if !liveWindow(kind, w, model, now) {
+			continue
+		}
+		used := max(w.UsedPercent, 0)
+		v.used = max(v.used, used)
+		// left and timeLeft are the shares of the allowance and of the
+		// window still to come; timeLeft is negative when the length is
+		// unknown.
+		// left 与 timeLeft 是尚余的额度份额与时间份额；时长未知时 timeLeft 为负。
+		left := max(0, 100-used) / 100
+		timeLeft := -1.0
+		if d := windowDuration(kind, w); d > 0 {
+			timeLeft = min(1, float64(w.ResetsAt.Sub(now))/float64(d))
+		}
+		switch {
+		case used >= 100:
+			v.tier = quotaSpent
+			if w.ResetsAt.After(v.spentUntil) {
+				v.spentUntil = w.ResetsAt
+			}
+		case policy.lowPercent > 0 && used >= policy.lowPercent && (timeLeft < 0 || left < timeLeft) && v.tier < quotaLow:
+			v.tier = quotaLow
+		}
+		switch {
+		case policy.expiringShare > 0 && timeLeft >= 0 && timeLeft <= policy.expiringShare && left > timeLeft+quotaPaceMargin:
+			expiring = true
+		case timeLeft < 0 || left < timeLeft-quotaPaceMargin:
+			steady = false
+		}
+	}
+	if v.tier == quotaOK && expiring && steady {
+		v.tier = quotaExpiring
+	}
+	return v
+}
+
+// freshQuotaAccount returns the account behind runtimeID when its snapshot is
+// ready and young enough to act on, with the time it counts as taken: the
+// earlier of the Agent's CheckedAt and receivedAt (see accountQuota).
+//
+// freshQuotaAccount 在快照已就绪且足够新、可以据以行动时，返回 runtimeID 背后的账户，
+// 以及该快照视作获取的时刻：Agent 的 CheckedAt 与 receivedAt 中较早者（见 accountQuota）。
+func freshQuotaAccount(accounts []cliusagestatus.Account, receivedAt time.Time, runtimeID string, kind runtime.Kind, now time.Time) (*cliusagestatus.Account, time.Time, bool) {
+	if kind != runtime.KindClaude && kind != runtime.KindCodex {
+		return nil, time.Time{}, false
 	}
 	account, ok := findQuotaAccount(accounts, runtimeID, kind)
 	if !ok || account.Status != quotaStatusReady || account.CheckedAt.IsZero() {
-		return quotaVerdict{}
+		return nil, time.Time{}, false
 	}
 	checkedAt := account.CheckedAt
 	if !receivedAt.IsZero() && receivedAt.Before(checkedAt) {
 		checkedAt = receivedAt
 	}
 	if now.Sub(checkedAt) > maxQuotaSnapshotAge {
-		return quotaVerdict{}
+		return nil, time.Time{}, false
 	}
-	v := quotaVerdict{known: true, checkedAt: checkedAt}
-	for i := range account.Windows {
-		w := &account.Windows[i]
-		// A window past its reset time says nothing about now: whatever it
-		// had used is gone.
-		// 已过重置时间的窗口对此刻没有意义：它用掉的额度已经清零。
-		if w.ResetsAt.IsZero() || !now.Before(w.ResetsAt) || !windowApplies(kind, w, model) {
-			continue
-		}
-		switch {
-		case w.UsedPercent >= 100:
-			v.tier = quotaSpent
-			if w.ResetsAt.After(v.spentUntil) {
-				v.spentUntil = w.ResetsAt
-			}
-		case lowPercent > 0 && w.UsedPercent >= lowPercent && v.tier < quotaLow:
-			v.tier = quotaLow
+	return account, checkedAt, true
+}
+
+// liveWindow reports whether w limits requests for model right now: it
+// applies to the model, has not reset, and carries a finite figure.
+//
+// liveWindow 报告 w 此刻是否限制 model 的请求：它适用于该模型、尚未重置，且数字是有限数。
+func liveWindow(kind runtime.Kind, w *cliusagestatus.Window, model string, now time.Time) bool {
+	// A window past its reset time says nothing about now: whatever it had
+	// used is gone. A figure that is not a finite number is untrusted input
+	// gone wrong, not a measurement.
+	// 已过重置时间的窗口对此刻没有意义：它用掉的额度已经清零。不是有限数的数字是出错的
+	// 不受信任输入，而不是测量值。
+	return !w.ResetsAt.IsZero() && now.Before(w.ResetsAt) && w.Applies(kind, model) &&
+		!math.IsNaN(w.UsedPercent) && !math.IsInf(w.UsedPercent, 0)
+}
+
+// windowDuration is how long w runs from one reset to the next: what the
+// Agent reported, or, for Claude's windows, which carry no length, what
+// their names say. Zero means unknown.
+//
+// windowDuration 是 w 从一次重置到下一次的时长：取 Agent 上报的值；Claude 的窗口不带
+// 时长，按窗口名确定。零表示未知。
+func windowDuration(kind runtime.Kind, w *cliusagestatus.Window) time.Duration {
+	if w.DurationMinutes > 0 && w.DurationMinutes <= maxWindowMinutes {
+		return time.Duration(w.DurationMinutes) * time.Minute
+	}
+	if kind == runtime.KindClaude {
+		switch w.Name {
+		case "five_hour":
+			return 5 * time.Hour
+		case "seven_day", "seven_day_sonnet", "seven_day_opus":
+			return 7 * 24 * time.Hour
 		}
 	}
-	return v
+	return 0
 }
 
 // findQuotaAccount returns the account reported for runtimeID. An Agent that
@@ -162,33 +324,6 @@ func findQuotaAccount(accounts []cliusagestatus.Account, runtimeID string, kind 
 		}
 	}
 	return legacy, legacy != nil
-}
-
-// windowApplies reports whether a quota window limits requests for model.
-// Claude's five-hour and seven-day windows cover every model; its per-family
-// weekly windows cover only that family, so a spent Opus allowance does not
-// demote the account for Sonnet. Codex reports windows per metering bucket;
-// only the general "codex" bucket is known to cover every model, so other
-// buckets are not used — a demotion based on a guessed mapping would move
-// traffic for no reason.
-//
-// windowApplies 报告某个额度窗口是否限制 model 的请求。Claude 的五小时与七天窗口覆盖
-// 所有模型；按模型系列划分的周窗口只覆盖该系列，因此 Opus 额度用完不会让该账户在
-// Sonnet 上降级。Codex 按计量桶上报窗口；只知道通用的 "codex" 桶覆盖所有模型，其他桶
-// 不使用——基于猜测的映射来降级，只会让流量无谓地迁移。
-func windowApplies(kind runtime.Kind, w *cliusagestatus.Window, model string) bool {
-	if kind == runtime.KindCodex {
-		return w.Bucket == "" || w.Bucket == "codex"
-	}
-	switch w.Name {
-	case "five_hour", "seven_day":
-		return true
-	case "seven_day_sonnet":
-		return strings.Contains(strings.ToLower(model), "sonnet")
-	case "seven_day_opus":
-		return strings.Contains(strings.ToLower(model), "opus")
-	}
-	return false
 }
 
 // quotaAction is what reconcileQuota did to a cooldown, for the caller to log

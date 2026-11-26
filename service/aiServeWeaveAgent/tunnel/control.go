@@ -621,13 +621,14 @@ func (s *controlSession) forceReportAgentUpgrade() error {
 // reportCLIUsage sends a CLIUsageReport when the cached quota has changed since
 // the last one sent (or force is true) — reportModelPull's counterpart for the
 // CLI subscription quota. The wire form leaves out the flags derived from the
-// moment of reading, so an idle quota encodes identically poll after poll and
-// is sent only when a query actually changed something.
+// moment of reading, so heartbeats between two refreshes encode identically
+// and send nothing; each successful query carries a new CheckedAt and is sent
+// once, while a failed one keeps the last reading and so sends nothing.
 //
 // reportCLIUsage 在缓存的额度自上次发送后发生变化（或 force 为 true）时发送一次
 // CLIUsageReport——是 reportModelPull 在 CLI 订阅额度上的对应物。线上形式不含取决于
-// 读取时刻的派生标志，因此额度没动时每次轮询的编码完全相同，只有真正有查询结果变化时
-// 才会发送。
+// 读取时刻的派生标志，因此两次刷新之间的心跳编码完全相同、不发送；每次成功的查询带着新的
+// CheckedAt，发送一次；失败的查询保留上一轮读数，因此也不发送。
 func (s *controlSession) reportCLIUsage(force bool) error {
 	source := s.client.cfg.CLIUsage
 	if source == nil {

@@ -234,9 +234,36 @@ func (r *Runtime) wrap(operation string, err error) error {
 		var quota *quotaError
 		if errors.As(err, &quota) && !quota.resetsAt.IsZero() {
 			rtErr.RetryAfter = max(quota.resetsAt.Sub(r.deps.Clock.Now()), 0)
+			// Codex's limits are the account's (its general metering bucket
+			// covers every model), so the whole account is held until the
+			// reset rather than asked again (see quotaHeld).
+			// Codex 的限额属于整个账户（其通用计量桶覆盖所有模型），因此整个账户被搁置到
+			// 重置，而不是再去询问（见 quotaHeld）。
+			r.deps.QuotaRefused(r.cfg.ID, "", quota.resetsAt)
 		}
+		// The refusal is news the reported quota snapshot should carry now,
+		// not at the next periodic pass.
+		// 这次拒绝应该立即反映到上报的额度快照中，而不是等下一次定时刷新。
+		r.deps.NoticeQuota(r.cfg.ID)
 	}
 	return rtErr
+}
+
+// quotaHeld answers a turn the account is known to refuse until its quota
+// may be back, wait from now (runtime.QuotaGuard.Hold), the way wrap answers
+// the CLI's own refusal — a retryable rate_limited whose RetryAfter runs to
+// the reset — without starting the CLI.
+//
+// quotaHeld 回答一个已知会被账户拒绝的回合（额度可能在 wait 之后恢复，见
+// runtime.QuotaGuard.Hold），方式与 wrap 回答 CLI 自己的拒绝相同——一个可重试、RetryAfter
+// 指向重置时刻的 rate_limited——而不启动 CLI。
+func (r *Runtime) quotaHeld(operation string, wait time.Duration) error {
+	if r.deps.Logger != nil {
+		r.deps.Logger.Info("Codex turn held: the account's quota is spent; not starting the CLI",
+			"runtime_id", r.cfg.ID, "operation", operation, "retry_after", wait)
+	}
+	return &runtime.RuntimeError{Code: runtime.ErrorRateLimited, RuntimeID: r.cfg.ID, Kind: runtime.KindCodex, Operation: operation,
+		Message: "Codex operation failed: " + string(runtime.ErrorRateLimited), Retryable: true, RetryAfter: wait}
 }
 
 // inspect reads the model catalog and whether the account may generate
@@ -615,6 +642,9 @@ func (r *Runtime) ChatStream(parent context.Context, req runtime.ChatRequest) (r
 		return nil, r.wrap("chat_stream", err)
 	}
 	input.effort, input.summary = r.reasoningFor(req.Model, req.Reasoning)
+	if wait, held := r.deps.QuotaHold(r.cfg.ID, req.Model); held {
+		return nil, r.quotaHeld("chat_stream", wait)
+	}
 	if req.MaxTokens != nil && r.deps.Logger != nil {
 		r.deps.Logger.Warn("Codex compatibility mode: output token limit is not enforced / Codex 兼容模式：输出 token 上限不生效")
 	}

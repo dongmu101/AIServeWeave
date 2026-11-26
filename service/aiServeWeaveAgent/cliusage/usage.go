@@ -58,13 +58,38 @@ type Monitor struct {
 	running     bool // a Run loop is active / 有一个 Run 循环正在运行
 	lastAttempt time.Time
 	accounts    []Account
+	// nudges wakes the Run loop early; see Nudge. One pending nudge is
+	// enough, so it is buffered by one and a full buffer drops the send.
+	// nudges 提前唤醒 Run 循环，见 Nudge。一个待处理的唤醒就够了，因此缓冲为一，
+	// 缓冲已满时直接丢弃。
+	nudges chan struct{}
+	// holds are the refusals Refused recorded (guard.go). Guarded by mu.
+	// holds 是 Refused 记录的拒绝（guard.go）。受 mu 保护。
+	holds []quotaHold
 }
+
+// HotPercent is the used percentage at which Run refreshes every
+// HotInterval instead of the interval it was given: near a limit the
+// Gateway's ordering needs current figures, and an account can go from here
+// to spent within one slow interval. A usage query runs no inference.
+//
+// HotPercent 是 Run 改为每 HotInterval 刷新一次（而不是调用方给定的间隔）的已用百分比：
+// 接近上限时 Gateway 的排序需要最新数字，而账户从这里到用完可能用不了一个慢间隔。用量
+// 查询不执行推理。
+const HotPercent = 80
+
+// HotInterval is Run's interval while an account is at HotPercent or above.
+// It equals the one-batch-per-minute floor, the fastest Refresh will go.
+//
+// HotInterval 是有账户达到 HotPercent 时 Run 的间隔。它等于「每分钟一批」的下限，也就是
+// Refresh 能达到的最快频率。
+const HotInterval = time.Minute
 
 // NewMonitor selects at most one provider for each declared runtime of a
 // supported local CLI kind.
 // NewMonitor 为每个受支持本地 CLI 种类的已声明运行时最多选取一个查询来源。
 func NewMonitor(clock runtime.Clock, providers []Provider) *Monitor {
-	m := &Monitor{clock: clock}
+	m := &Monitor{clock: clock, nudges: make(chan struct{}, 1)}
 	m.providers, m.accounts = selectProviders(providers, nil, nil)
 	return m
 }
@@ -85,6 +110,7 @@ func (m *Monitor) Replace(providers []Provider) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.providers, m.accounts = selectProviders(providers, m.providers, m.accounts)
+	m.pruneHoldsLocked()
 	return len(m.providers) > 0 && !m.running
 }
 
@@ -142,13 +168,15 @@ func (m *Monitor) Snapshot() []Account {
 
 // Run refreshes the cache once immediately and then every interval until ctx
 // is cancelled, so the tunnel has a current snapshot to report even when
-// nobody is looking at the local settings page. Each pass still goes through
-// Refresh and so keeps its one-batch-per-minute bound. Run returns at once when
-// no provider is declared.
+// nobody is looking at the local settings page. While an account is at
+// HotPercent the interval drops to HotInterval, and a Nudge refreshes early.
+// Each pass still goes through Refresh and so keeps its one-batch-per-minute
+// bound. Run returns at once when no provider is declared.
 //
 // Run 立即刷新一次缓存，此后每隔 interval 刷新一次，直到 ctx 被取消，这样即使没有
-// 人在看本地设置页，隧道也有一份最新快照可以上报。每一轮仍经过 Refresh，因此继续
-// 受「每分钟一批」的限制。没有声明任何来源时，Run 立即返回。
+// 人在看本地设置页，隧道也有一份最新快照可以上报。有账户达到 HotPercent 时间隔缩短为
+// HotInterval，Nudge 会让刷新提前。每一轮仍经过 Refresh，因此继续受「每分钟一批」的
+// 限制。没有声明任何来源时，Run 立即返回。
 //
 // At most one Run loop is active at a time; a second call while one runs
 // returns at once.
@@ -164,13 +192,94 @@ func (m *Monitor) Run(ctx context.Context, interval time.Duration) {
 	defer func() { m.mu.Lock(); m.running = false; m.mu.Unlock() }()
 	for {
 		m.Refresh(ctx)
-		timer, stop := m.clock.NewTimer(interval)
-		select {
-		case <-timer:
-		case <-ctx.Done():
-			stop()
+		if !m.wait(ctx, m.nextInterval(interval)) {
 			return
 		}
+	}
+}
+
+// Nudge asks the Run loop to refresh now rather than at its next interval,
+// as soon as the one-batch-per-minute floor allows. A runtime calls it when
+// its CLI says the account is near or at a limit, so the snapshot the tunnel
+// reports catches up within about a minute instead of a whole interval. It
+// never blocks, and does nothing without a Run loop.
+//
+// Nudge 请求 Run 循环立即刷新，而不是等到下一个间隔；仍受「每分钟一批」的下限约束。运行时
+// 在 CLI 表示账户接近或已到上限时调用它，让隧道上报的快照在一分钟左右赶上，而不是等一整个
+// 间隔。它从不阻塞；没有 Run 循环时什么也不做。
+func (m *Monitor) Nudge() {
+	select {
+	case m.nudges <- struct{}{}:
+	default:
+	}
+}
+
+// nextInterval is interval, or HotInterval when that is shorter and some
+// ready account has a window that has not reset at HotPercent or above but
+// below 100%. An account with a spent window covering every model does not
+// count: it can serve nothing until that reset, so its figures cannot move,
+// and asking the upstream every minute would only add load (the reset is
+// already known, and Hold lets go at it).
+//
+// nextInterval 返回 interval；若 HotInterval 更短，且有 ready 账户的某个尚未重置的窗口
+// 达到 HotPercent 但低于 100%，则返回 HotInterval。有覆盖所有模型的窗口已用完的账户不算：
+// 它在重置前什么也服务不了，数字不会变化，每分钟问一次上游只会增加负担（重置时刻已经
+// 知道，Hold 届时会放行）。
+func (m *Monitor) nextInterval(interval time.Duration) time.Duration {
+	if interval <= HotInterval {
+		return interval
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := m.clock.Now()
+	for i := range m.accounts {
+		account := &m.accounts[i]
+		if account.Status != "ready" {
+			continue
+		}
+		if _, frozen := spentUntil(account, "", now); frozen {
+			continue
+		}
+		for _, w := range account.Windows {
+			if w.UsedPercent >= HotPercent && w.UsedPercent < 100 && now.Before(w.ResetsAt) {
+				return HotInterval
+			}
+		}
+	}
+	return interval
+}
+
+// wait blocks for d, or until a Nudge and then the rest of the per-minute
+// floor, and reports false once ctx ends.
+//
+// wait 阻塞 d；或者等到一次 Nudge，再等完每分钟下限的剩余部分。ctx 结束时返回 false。
+func (m *Monitor) wait(ctx context.Context, d time.Duration) bool {
+	timer, stop := m.clock.NewTimer(d)
+	select {
+	case <-timer:
+		return true
+	case <-m.nudges:
+		stop()
+	case <-ctx.Done():
+		stop()
+		return false
+	}
+	var rest time.Duration
+	m.mu.Lock()
+	if !m.lastAttempt.IsZero() {
+		rest = time.Minute - m.clock.Now().Sub(m.lastAttempt)
+	}
+	m.mu.Unlock()
+	if rest <= 0 {
+		return true
+	}
+	timer, stop = m.clock.NewTimer(rest)
+	select {
+	case <-timer:
+		return true
+	case <-ctx.Done():
+		stop()
+		return false
 	}
 }
 
@@ -213,10 +322,24 @@ func (m *Monitor) Refresh(ctx context.Context) {
 			// dropped or moved to another login is discarded.
 			// 按 key 与 Source 而不是下标匹配：查询期间 Replace 可能已改变来源集合，已移除
 			// 或已换到另一份登录的运行时的结果直接丢弃。
+			//
+			// A failed query keeps the figures last read, with their own
+			// CheckedAt, so they age instead of vanishing: Stale here, and
+			// too old for the Gateway to rank by after its snapshot age
+			// bound. An account without figures counts as having quota to
+			// spare, and one timed-out query must not turn a nearly spent
+			// account into that. A definite answer (unauthorized,
+			// unavailable) still replaces them.
+			// 查询失败时保留上次读到的数字及其 CheckedAt，让它们自然变旧而不是消失：本地显示
+			// 为 Stale，超过 Gateway 的快照年龄上限后不再参与排序。没有数字的账户被当作额度
+			// 充足，一次查询超时不能把快用完的账户变成那样。明确的答复（未登录、未提供）仍会
+			// 替换它们。
 			m.mu.Lock()
 			for i, current := range m.providers {
 				if current.key() == p.key() && current.Source == p.Source {
-					m.accounts[i] = account
+					if account.Status != "error" || m.accounts[i].Status != "ready" {
+						m.accounts[i] = account
+					}
 					break
 				}
 			}

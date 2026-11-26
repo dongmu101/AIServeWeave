@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"time"
 
 	"AIServeWeave/common/idgen"
 	"AIServeWeave/common/runtime"
@@ -34,6 +35,11 @@ type Runtime struct {
 	// metrics receives each native round's phase timings; nil records nothing.
 	// metrics 接收每个原生回合的阶段耗时；为 nil 时不记录。
 	metrics runtime.Metrics
+	// quota is the Dependencies whose QuotaGuard Messages asks before each
+	// turn (QuotaHold); without a guard nothing is held.
+	// quota 是 Messages 在每个回合之前询问其 QuotaGuard 的 Dependencies（QuotaHold）；
+	// 没有守卫时不搁置任何东西。
+	quota runtime.Dependencies
 }
 
 var _ runtime.MessagesRuntime = (*Runtime)(nil)
@@ -69,6 +75,11 @@ func NewFactoryWithAttachments(executable string, processor *attachments.Process
 			bridge.processor = processor
 		}
 		bridge.capacity = cfg.MaxConcurrent
+		if deps.Quota != nil {
+			id := cfg.ID
+			bridge.quotaNotice = func() { deps.NoticeQuota(id) }
+			bridge.quotaRefused = func(model string, resetsAt time.Time) { deps.QuotaRefused(id, model, resetsAt) }
+		}
 		bridge.env = withAccountDir(probeEnv(os.Environ()), cfg.AccountDir)
 		if !cfg.DisableSharedUpstream {
 			bridge.pool = newUpstreamPool()
@@ -77,7 +88,7 @@ func NewFactoryWithAttachments(executable string, processor *attachments.Process
 		if logger == nil {
 			logger = slog.Default()
 		}
-		return &Runtime{cfg: cfg, bridge: bridge, root: root, cancel: cancel, logger: logger, metrics: deps.Metrics}, nil
+		return &Runtime{cfg: cfg, bridge: bridge, root: root, cancel: cancel, logger: logger, metrics: deps.Metrics, quota: deps}, nil
 	}
 }
 
@@ -263,6 +274,9 @@ func (r *Runtime) Messages(parent context.Context, req runtime.MessagesRequest) 
 	if parsed.validate(req.Model) != nil {
 		return nil, r.rejectMessages(runtime.ErrorCapability, "unsupported_request_config", nil)
 	}
+	if wait, held := r.quota.QuotaHold(r.cfg.ID, req.Model); held {
+		return nil, r.quotaHeld(wait)
+	}
 	parsed.cliModel = req.Model
 	s, err := r.bridge.acquire(principal{req.TenantID, req.KeyID}, parsed)
 	if err != nil {
@@ -429,6 +443,20 @@ func (r *Runtime) roundError(err error) error {
 		rtErr.RetryAfter = max(quota.resetsAt.Sub(r.bridge.clock.Now()), 0)
 	}
 	return rtErr
+}
+
+// quotaHeld answers a turn the account is known to refuse until its quota
+// may be back, wait from now, the same way the CLI's own refusal is answered
+// (a retryable rate_limited whose RetryAfter runs to the reset), without
+// starting the CLI.
+//
+// quotaHeld 回答一个已知会被账户拒绝的回合（额度可能在 wait 之后恢复），方式与 CLI 自己
+// 的拒绝相同（一个可重试、RetryAfter 指向重置时刻的 rate_limited），而不启动 CLI。
+func (r *Runtime) quotaHeld(wait time.Duration) error {
+	r.logger.Info("Claude Messages turn held: the account's quota is spent; not starting the CLI",
+		"runtime_id", r.cfg.ID, "retry_after", wait)
+	return &runtime.RuntimeError{Code: runtime.ErrorRateLimited, RuntimeID: r.cfg.ID, Kind: runtime.KindClaude, Operation: "messages",
+		Message: "Claude Messages operation failed: " + string(runtime.ErrorRateLimited), Retryable: true, RetryAfter: wait}
 }
 
 // Recv returns one native event with no prefetch queue.

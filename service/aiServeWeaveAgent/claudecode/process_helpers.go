@@ -53,6 +53,25 @@ type quotaError struct {
 func (e *quotaError) Error() string { return errQuotaExhausted.Error() }
 func (e *quotaError) Unwrap() error { return errQuotaExhausted }
 
+// quotaScope is the model a refusal of limit covers, for
+// runtime.QuotaGuard.Refused: "" when the limit is the whole account's — the
+// five-hour and seven-day windows, and the extra-usage allowance that only
+// applies once those are spent — and model itself for a per-family window or
+// a limit this Agent does not know, so an unknown name never holds models it
+// may not cover.
+//
+// quotaScope 是对 limit 的一次拒绝所覆盖的模型，供 runtime.QuotaGuard.Refused 使用：限额
+// 属于整个账户时为 ""——五小时与七天窗口，以及只在它们用完后才生效的额外用量——按模型
+// 系列划分的窗口或本 Agent 不认识的限额则为 model 本身，因此陌生的名称从不搁置它可能并不
+// 覆盖的模型。
+func quotaScope(limit, model string) string {
+	switch limit {
+	case "five_hour", "seven_day", "overage":
+		return ""
+	}
+	return model
+}
+
 // cliStopGrace is how long a canceled inference CLI has to handle SIGTERM
 // before its process group is killed. Claude Code 2.1.326 exits about 0.55 s
 // after SIGTERM, so this rarely runs out; it lets a CLI canceled while

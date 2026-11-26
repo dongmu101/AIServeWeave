@@ -26,6 +26,9 @@ var schedulerMetrics = []string{
 	scheduler.MetricCandidates,
 	scheduler.MetricBreakerOpen,
 	scheduler.MetricBreakerTripsTotal,
+	scheduler.MetricQuotaFirstChoiceTotal,
+	scheduler.MetricQuotaRateLimitedTotal,
+	scheduler.MetricQuotaCooldownSpreadTotal,
 }
 
 func TestSchedulerDescriptionsCoverEveryMetric(t *testing.T) {
@@ -82,6 +85,7 @@ func TestSchedulerMetricsCarryNoModelLabel(t *testing.T) {
 		scheduler.LabelRuntimeID:  true,
 		scheduler.LabelResult:     true,
 		scheduler.LabelCapability: true,
+		scheduler.LabelTier:       true,
 	}
 	for _, s := range mx.All() {
 		for key, value := range s.Labels {

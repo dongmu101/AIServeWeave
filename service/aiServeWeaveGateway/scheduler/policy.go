@@ -132,11 +132,89 @@ type scored struct {
 	// quota 表示候选的 CLI 订阅账户距额度上限有多近（quota.go）。它排在 pressure 之前：
 	// 资源紧张的节点仍可能服务，而额度用完的账户一定会拒绝。与 pressure 一样只调整顺序。
 	quota quotaTier
+	// used is the account's highest used percentage among the windows that
+	// apply (quotaVerdict.used), which orders candidates inside quotaLow;
+	// quotaKnown is quotaVerdict.known.
+	// used 是账户在适用窗口中最高的已用百分比（quotaVerdict.used），用于 quotaLow 档内
+	// 排序；quotaKnown 即 quotaVerdict.known。
+	used       uint8
+	quotaKnown bool
+	// pinned marks the account that last served the request's session
+	// (samePinAccount with affinity.pin). Only PolicyPrefixHash sets it,
+	// which is the policy every request with a session key is ordered by.
+	// pinned 标记上一次服务该请求所属会话的账户（与 affinity.pin 满足 samePinAccount）。
+	// 只有 PolicyPrefixHash 设置它，而带会话 key 的请求都按这一策略排序。
+	pinned bool
 }
 
-// lessLoaded is the least-load comparator: more quota left first, then no
-// resource pressure, then more idle slots, then lower queue occupancy, then
-// fewer in-flight requests.
+// quotaRank is the quota tier s counts as. quotaExpiring counts only while
+// the node has an idle slot: trying a full node first buys nothing but a
+// backpressure answer.
+//
+// quotaRank 是 s 所算作的额度档位。quotaExpiring 只在节点有空闲槽时才算数：先试一个
+// 已满的节点，换来的只是一次背压应答。
+func (s *scored) quotaRank() quotaTier {
+	if s.quota == quotaExpiring && s.idle <= 0 {
+		return quotaOK
+	}
+	return s.quota
+}
+
+// orderRank is the tier s is ordered by: quotaRank, except that a pinned
+// account in quotaOK with an idle slot and no resource pressure ranks with
+// quotaExpiring, ahead of the accounts that are there on their own (the
+// prefix-hash order inside that tier puts the pin first). A conversation in
+// progress thus stays where its prompt cache is; expiring allowance goes to
+// new conversations, requests without a session key, and conversations whose
+// own account has to be left anyway. A pinned account that is low, spent,
+// full or pressured is not promoted and yields as before.
+//
+// orderRank 是 s 据以排序的档位：即 quotaRank，但额度充足、有空闲槽且无资源紧张的被钉选
+// 账户与 quotaExpiring 同档，并排在凭自身进入该档的账户之前（该档内的前缀哈希顺序把钉选
+// 排在最前）。因此进行中的对话留在其提示缓存所在之处；快到期的额度由新对话、不带会话 key
+// 的请求、以及本就必须离开原账户的对话用掉。额度紧张、用完、已满或资源紧张的被钉选账户
+// 不提升，照旧让位。
+func (s *scored) orderRank() quotaTier {
+	if s.pinned && s.quota == quotaOK && s.idle > 0 && !s.pressure {
+		return quotaExpiring
+	}
+	return s.quotaRank()
+}
+
+// compareInTier orders two candidates of the same orderRank by what that
+// tier cares about: inside quotaLow, one with an idle slot first, then the
+// session's pinned account unless its node is under resource pressure (a pin
+// yields to pressure in every tier), then the one with more quota left. The
+// pin comes before quota left so that, with every account low, a
+// conversation does not hop back and forth each time the accounts' used
+// percentages cross. It returns 0 for every other tier.
+//
+// compareInTier 按档位关心的因素给同一 orderRank 的两个候选排序：quotaLow 档内先有空闲槽
+// 的，再会话的被钉选账户（其节点资源紧张时除外：钉选在每个档位都为资源紧张让位），再剩余
+// 额度多的。钉选排在剩余额度之前，这样所有账户都紧张时，对话不会在各账户已用百分比每次
+// 交叉时来回跳。其他档位返回 0。
+func compareInTier(a, b *scored, rank quotaTier) int {
+	if rank != quotaLow {
+		return 0
+	}
+	if (a.idle > 0) != (b.idle > 0) {
+		if a.idle > 0 {
+			return -1
+		}
+		return 1
+	}
+	if pa, pb := a.pinned && !a.pressure, b.pinned && !b.pressure; pa != pb {
+		if pa {
+			return -1
+		}
+		return 1
+	}
+	return int(a.used) - int(b.used)
+}
+
+// lessLoaded is the least-load comparator: lower quota tier first (orderRank,
+// then compareInTier), then no resource pressure, then more idle slots, then
+// lower queue occupancy, then fewer in-flight requests.
 //
 // queued (STATUS.md's P2 realtime-utilization signal) breaks ties inside an
 // idle tier, before inflight: idle is a software slot count that a
@@ -147,8 +225,8 @@ type scored struct {
 // 0 for every runtime kind that does not report it, which sorts the same as
 // "confirmed empty" — never a penalty for not reporting.
 //
-// lessLoaded 是最少负载比较器：剩余额度多的优先，其次无资源紧张的，再次空闲槽多的，
-// 然后队列占用低的，最后在途请求少的。
+// lessLoaded 是最少负载比较器：额度档位低的优先（orderRank，再 compareInTier），其次无
+// 资源紧张的，再次空闲槽多的，然后队列占用低的，最后在途请求少的。
 //
 // queued（STATUS.md P2 的实时利用率信号）在同一个 idle 档位内、排在 inflight 之前
 // 打破平局：idle 是一个软件层面的槽位计数，像 ComfyUI 这种同一时间只跑一个任务的后端
@@ -157,8 +235,12 @@ type scored struct {
 // 记录了原因），所以单靠 idle 无法区分这样两个候选。对不上报该信号的运行时种类它恒为
 // 0，排序上等同于"确认空闲"——不上报这件事本身从不被当作惩罚。
 func lessLoaded(a, b scored) bool {
-	if a.quota != b.quota {
-		return a.quota < b.quota
+	ra, rb := a.orderRank(), b.orderRank()
+	if ra != rb {
+		return ra < rb
+	}
+	if c := compareInTier(&a, &b, ra); c != 0 {
+		return c < 0
 	}
 	if a.pressure != b.pressure {
 		return !a.pressure
@@ -239,11 +321,11 @@ func stableSort(found []scored, less func(a, b *scored) bool) {
 // 拒绝笔误，再到达这里。
 func orderCandidates(found []scored, policy Policy, key affinity, intn func(int) int) {
 	stableSort(found, func(a, b *scored) bool { return lessLoaded(*a, *b) })
-	// lessLoaded already puts candidates low on quota or under resource
-	// pressure last; the reorderings below may move one forward again, so
-	// they put it back, keeping relative order as retry fallbacks.
-	// lessLoaded 已经把额度紧张或资源紧张的候选排在最后；下面的重排可能把它提前，因此再
-	// 放回去，并保持相对顺序作为重试回退。
+	// lessLoaded already orders candidates by quota tier and puts those under
+	// resource pressure last; the reorderings below may undo that, so
+	// demoteLast restores it, keeping relative order as retry fallbacks.
+	// lessLoaded 已经按额度档位排序，并把资源紧张的候选排在最后；下面的重排可能打乱这一点，
+	// 因此由 demoteLast 恢复，并保持相对顺序作为重试回退。
 	if policy != PolicyLeastLoad {
 		defer demoteLast(found)
 	}
@@ -279,9 +361,10 @@ func orderCandidates(found []scored, policy Policy, key affinity, intn func(int)
 			ranks[f.Candidate] = rendezvousScore(key.hash, f.Candidate)
 		}
 		if key.pinned {
-			for _, f := range found {
-				if samePinAccount(f.Candidate, key.pin) {
-					ranks[f.Candidate] = math.MaxUint64
+			for i := range found {
+				if samePinAccount(found[i].Candidate, key.pin) {
+					ranks[found[i].Candidate] = math.MaxUint64
+					found[i].pinned = true
 				}
 			}
 		}
@@ -302,19 +385,31 @@ func orderCandidates(found []scored, policy Policy, key affinity, intn func(int)
 	}
 }
 
-// demoteLast stably moves candidates low on quota, then those under resource
-// pressure, behind the rest, in place and without allocating. With neither,
-// the common case, it is one scan.
+// demoteLast stably reorders candidates by quota tier and then resource
+// pressure, in place and without allocating: low or spent quota, then
+// pressure, move behind the rest, and an account whose expiring allowance
+// would otherwise be lost moves ahead, unless the session's pinned account
+// holds its place (orderRank). Inside a tier the order that came in is kept,
+// except where compareInTier ranks. With no tier and no pressure, the common
+// case, it is one scan: a pinned account then already leads every candidate
+// with an idle slot, which is all orderRank would promote it over.
 //
-// demoteLast 把额度紧张、其次资源紧张的候选稳定地、原地且无分配地移到其余候选之后。
-// 两者都没有时（常见情形）只做一次扫描。
+// demoteLast 按额度档位、再按资源紧张，稳定地、原地且无分配地重排候选：额度紧张或用完、
+// 其次资源紧张的移到其余候选之后；即将作废的额度所在的账户移到前面，除非会话的被钉选账户
+// 守住它的位置（orderRank）。档内保持传入的顺序，compareInTier 排序的情形除外。没有档位
+// 也没有资源紧张时（常见情形）只做一次扫描：此时被钉选账户已经排在所有有空闲槽的候选
+// 之前，而 orderRank 也只会把它提到这些候选之前。
 func demoteLast(found []scored) {
 	if !slices.ContainsFunc(found, func(s scored) bool { return s.pressure || s.quota != quotaOK }) {
 		return
 	}
 	slices.SortStableFunc(found, func(a, b scored) int {
-		if a.quota != b.quota {
-			return int(a.quota) - int(b.quota)
+		ra, rb := a.orderRank(), b.orderRank()
+		if ra != rb {
+			return int(ra) - int(rb)
+		}
+		if c := compareInTier(&a, &b, ra); c != 0 {
+			return c
 		}
 		switch {
 		case a.pressure == b.pressure:

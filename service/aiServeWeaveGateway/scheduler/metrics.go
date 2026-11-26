@@ -74,6 +74,33 @@ const (
 	// MetricBreakerTripsTotal 统计熔断跳闸次数。区分「反复抖动」与「持续损坏」的是
 	// 它的斜率，而不是那个量表。
 	MetricBreakerTripsTotal = "gateway_scheduler_breaker_trips_total"
+	// MetricQuotaFirstChoiceTotal counts orderings inside one routing target
+	// whose first candidate is a CLI subscription account with a usable
+	// quota snapshot, by the tier it was ordered by (quota.go). A rising
+	// low or spent share means the fleet is running out of accounts with
+	// quota to spare; expiring shows allowance about to reset being used.
+	//
+	// MetricQuotaFirstChoiceTotal 统计在一个路由 target 内排序、且首位候选是带可用额度
+	// 快照的 CLI 订阅账户的次数，按其排序所依据的档位（quota.go）分类。low 或 spent 占比
+	// 上升，说明集群里额度充足的账户正在耗尽；expiring 表示即将重置的额度正在被用掉。
+	MetricQuotaFirstChoiceTotal = "gateway_scheduler_quota_first_choice_total"
+	// MetricQuotaRateLimitedTotal counts rate_limited answers from CLI
+	// subscription accounts, by the tier the account's snapshot gave it at
+	// that moment, or unknown without a usable snapshot. Refusals at ok or
+	// expiring mean the snapshots lag the accounts; at spent, the fleet had
+	// nowhere else to send the request.
+	//
+	// MetricQuotaRateLimitedTotal 统计 CLI 订阅账户答复的 rate_limited，按账户快照此刻
+	// 给它的档位分类，没有可用快照时为 unknown。在 ok 或 expiring 档被拒，说明快照落后于
+	// 账户的实际用量；在 spent 档被拒，说明集群已无处可派。
+	MetricQuotaRateLimitedTotal = "gateway_scheduler_quota_rate_limited_total"
+	// MetricQuotaCooldownSpreadTotal counts the other models of an account
+	// set aside because the quota window that refused one of them covers
+	// them too (quotarefusal.go).
+	//
+	// MetricQuotaCooldownSpreadTotal 统计因拒绝某个模型的额度窗口同样覆盖账户其他模型、
+	// 而被一并搁置的模型数（quotarefusal.go）。
+	MetricQuotaCooldownSpreadTotal = "gateway_scheduler_quota_cooldown_spread_total"
 )
 
 // Label keys. The set is closed, and deliberately holds no key for the model.
@@ -84,6 +111,27 @@ const (
 	LabelRuntimeID  = "runtime_id"
 	LabelResult     = "result"
 	LabelCapability = "capability"
+	// LabelTier is a quota tier: expiring, ok, low or spent, plus unknown on
+	// MetricQuotaRateLimitedTotal.
+	// LabelTier 是额度档位：expiring、ok、low 或 spent；MetricQuotaRateLimitedTotal 另有
+	// unknown。
+	LabelTier = "tier"
+)
+
+// quotaTierLabels holds one read-only label set per tier value, so counting
+// on the selection path builds no map. quotaUnknownLabels is the unknown one.
+//
+// quotaTierLabels 为每个档位保存一份只读标签集，使选择路径上的计数不必构造 map。
+// quotaUnknownLabels 是 unknown 那一份。
+var (
+	quotaTierLabels = map[quotaTier]map[string]string{
+		quotaExpiring: {LabelTier: quotaExpiring.String()},
+		quotaOK:       {LabelTier: quotaOK.String()},
+		quotaLow:      {LabelTier: quotaLow.String()},
+		quotaSpent:    {LabelTier: quotaSpent.String()},
+	}
+	quotaUnknownLabels = map[string]string{LabelTier: "unknown"}
+	noLabels           = map[string]string{}
 )
 
 // Descriptions is this package's metric catalogue, for a service to hand to
@@ -116,6 +164,18 @@ func Descriptions() metrics.Descriptions {
 		MetricBreakerTripsTotal: {
 			Kind: metrics.KindCounter,
 			Help: "Circuit breaker trips, by candidate.",
+		},
+		MetricQuotaFirstChoiceTotal: {
+			Kind: metrics.KindCounter,
+			Help: "Orderings inside one routing target whose first candidate is a CLI subscription account with a usable quota snapshot, by quota tier.",
+		},
+		MetricQuotaRateLimitedTotal: {
+			Kind: metrics.KindCounter,
+			Help: "rate_limited answers from CLI subscription accounts, by the quota tier the account's snapshot gave at that moment.",
+		},
+		MetricQuotaCooldownSpreadTotal: {
+			Kind: metrics.KindCounter,
+			Help: "Other models of a CLI subscription account set aside because the quota window that refused one model covers them too.",
 		},
 	}
 }
@@ -193,6 +253,36 @@ func (r *recorder) BreakerOpen(c Candidate, open bool) {
 // BreakerTrip 计一次跳闸。
 func (r *recorder) BreakerTrip(c Candidate) {
 	r.sink.Counter(MetricBreakerTripsTotal, candidateLabels(c)).Add(1)
+}
+
+// QuotaFirstChoice counts one ordering whose first candidate is a CLI
+// account ordered at tier.
+//
+// QuotaFirstChoice 计一次首位候选是按 tier 排序的 CLI 账户的排序。
+func (r *recorder) QuotaFirstChoice(tier quotaTier) {
+	if labels, ok := quotaTierLabels[tier]; ok {
+		r.sink.Counter(MetricQuotaFirstChoiceTotal, labels).Add(1)
+	}
+}
+
+// QuotaRateLimited counts one CLI account refusal by v's tier, or unknown.
+//
+// QuotaRateLimited 按 v 的档位（或 unknown）计一次 CLI 账户的拒绝。
+func (r *recorder) QuotaRateLimited(v quotaVerdict) {
+	labels := quotaUnknownLabels
+	if v.known {
+		if l, ok := quotaTierLabels[v.tier]; ok {
+			labels = l
+		}
+	}
+	r.sink.Counter(MetricQuotaRateLimitedTotal, labels).Add(1)
+}
+
+// QuotaCooldownSpread counts n models set aside alongside a refused one.
+//
+// QuotaCooldownSpread 计 n 个随被拒绝模型一并搁置的模型。
+func (r *recorder) QuotaCooldownSpread(n int) {
+	r.sink.Counter(MetricQuotaCooldownSpreadTotal, noLabels).Add(float64(n))
 }
 
 // discardMetrics is the sink used when no metrics backend is configured.
