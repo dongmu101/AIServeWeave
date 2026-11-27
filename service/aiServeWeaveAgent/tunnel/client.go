@@ -168,6 +168,36 @@ const (
 	defaultKeepaliveTimeout   = 10 * time.Second
 )
 
+// HTTP/2 flow-control windows the Agent advertises for what the Gateway sends
+// it. Request payloads flow Gateway → Agent, and a Claude Code turn resends its
+// whole context: 0.1–4 MB is routine. With gRPC's 64 KiB starting window the
+// Gateway stops after the first 64 KiB of each payload and waits a round trip
+// for WINDOW_UPDATE; on a ~350 ms cross-region link that measured about
+// +0.45 s for every request above 64 KiB. A stream window as large as the
+// biggest tunnel frame lets any payload leave in one flight.
+//
+// They are credit, not buffers: memory is only used by bytes the Gateway
+// actually sends, and gRPC already holds a whole message (up to
+// MaxTunnelMessageBytes) before delivering it, so the per-message peak is
+// unchanged. The connection window covers two such payloads in flight at
+// once. Fixing them disables gRPC's BDP estimator, whose ceiling (16 MiB) is
+// below these anyway.
+//
+// Agent 为 Gateway 发来的数据通告的 HTTP/2 流控窗口。请求 payload 从 Gateway 流向
+// Agent，Claude Code 每一轮都重发完整上下文，0.1–4 MB 很常见。gRPC 默认起始窗口 64 KiB
+// 时，Gateway 每个 payload 发完前 64 KiB 就要停下，等一个往返的 WINDOW_UPDATE；在约
+// 350 ms 的跨地域链路上，实测每个超过 64 KiB 的请求多出约 0.45 s。流窗口与最大隧道帧
+// 一样大，任何 payload 都能一次发完。
+//
+// 窗口是额度而不是缓冲：只有 Gateway 实际发来的字节才占内存，而 gRPC 本就要攒齐整条
+// 消息（最大 MaxTunnelMessageBytes）才交付，单条消息的内存峰值不变。连接窗口容纳两个
+// 同时在途的这种 payload。固定窗口会关闭 gRPC 的 BDP 估算，而它的上限（16 MiB）本就
+// 低于这里的值。
+const (
+	tunnelStreamWindow = int32(tunnelwire.MaxTunnelMessageBytes)
+	tunnelConnWindow   = 2 * tunnelStreamWindow
+)
+
 // State is one tunnel's connection state. Each replica has its own; the
 // aggregate view of a node lives in manager.go, and metrics.go (阶段 7) maps
 // these to the numeric `tunnel_connection_state` series.
@@ -968,20 +998,7 @@ func NewGRPCTransport(endpoint string, id *Identity, keepaliveInterval, keepaliv
 	setDefaultDuration(&keepaliveInterval, defaultKeepaliveInterval)
 	setDefaultDuration(&keepaliveTimeout, defaultKeepaliveTimeout)
 
-	opts := []grpc.DialOption{
-		grpc.WithTransportCredentials(credentials.NewTLS(id.TLSConfig())),
-		grpc.WithKeepaliveParams(keepalive.ClientParameters{
-			Time:                keepaliveInterval,
-			Timeout:             keepaliveTimeout,
-			PermitWithoutStream: true,
-		}),
-		// A native Messages request arrives inline in one frame and may be
-		// as large as the Messages API allows; gRPC's 4 MiB default would
-		// refuse it before any code here runs.
-		// 原生 Messages 请求内联在一个帧里，可以达到 Messages API 允许的大小；gRPC 默认的
-		// 4 MiB 会在这里的代码运行之前就拒绝它。
-		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(tunnelwire.MaxTunnelMessageBytes)),
-	}
+	opts := tunnelDialOptions(credentials.NewTLS(id.TLSConfig()), keepaliveInterval, keepaliveTimeout)
 	connError := func(err error) error {
 		return &runtime.RuntimeError{
 			Code:      runtime.ErrorConnection,
@@ -1011,6 +1028,32 @@ func NewGRPCTransport(endpoint string, id *Identity, keepaliveInterval, keepaliv
 		bulkConn:   bulkConn,
 		bulkClient: tunnelv1.NewTunnelClient(bulkConn),
 	}, nil
+}
+
+// tunnelDialOptions are the options both of a transport's connections dial
+// with; only the credentials differ between production and tests.
+//
+// tunnelDialOptions 是 transport 两条连接共用的拨号选项；生产与测试之间只有凭据不同。
+func tunnelDialOptions(creds credentials.TransportCredentials, keepaliveInterval, keepaliveTimeout time.Duration) []grpc.DialOption {
+	return []grpc.DialOption{
+		grpc.WithTransportCredentials(creds),
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:                keepaliveInterval,
+			Timeout:             keepaliveTimeout,
+			PermitWithoutStream: true,
+		}),
+		// A native Messages request arrives inline in one frame and may be
+		// as large as the Messages API allows; gRPC's 4 MiB default would
+		// refuse it before any code here runs.
+		// 原生 Messages 请求内联在一个帧里，可以达到 Messages API 允许的大小；gRPC 默认的
+		// 4 MiB 会在这里的代码运行之前就拒绝它。
+		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(tunnelwire.MaxTunnelMessageBytes)),
+		// See tunnelStreamWindow: a payload goes out in one flight instead
+		// of stalling on WINDOW_UPDATE round trips.
+		// 见 tunnelStreamWindow：payload 一次发完，而不是卡在等 WINDOW_UPDATE 的往返上。
+		grpc.WithStaticStreamWindowSize(tunnelStreamWindow),
+		grpc.WithStaticConnWindowSize(tunnelConnWindow),
+	}
 }
 
 func (t *grpcTransport) Control(ctx context.Context) (ControlStream, error) {

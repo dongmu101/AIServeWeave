@@ -312,6 +312,14 @@ payload 统一使用 protobuf 消息，与 `runtime` 包的 Go 类型一一对�
 - **解码上限不是新限制。** Agent 解码输出上限为 `MaxTunnelMessageBytes`：原文 payload 本就过不了这个 gRPC 消息上限，以前能送达的现在仍能送达，恶意帧也无法膨胀成无界内存。损坏的帧或未知编码以 `protocol_error` 结束该请求。
 - **只压请求，不压响应。** 流式响应帧很小，压缩器攒块会拖慢首字；`DataChunk` 请求体（模板、上传文件、音频）也不压缩。
 
+### HTTP/2 流控窗口
+
+Agent 拨号时为 Gateway 发来的数据通告固定的 HTTP/2 窗口（`client.go` 的 `tunnelStreamWindow` / `tunnelConnWindow`）：每个流的窗口等于 `MaxTunnelMessageBytes`，连接窗口为它的两倍，主连接与 bulk 连接相同。gRPC 默认起始窗口只有 64 KiB，Gateway 每发完 64 KiB 就要等一个往返的 `WINDOW_UPDATE`，跨地域时大请求要多付好几个往返才能送到 Agent。
+
+- **实测（2026-11-27）。** 日本的 Agent 节点到 Gateway 往返约 350 ms，未压缩的请求 payload 超过 64 KiB 后，从 Gateway 派发到 Agent 开始处理的 p50 从 0.36 s 升到 0.8–1.0 s，2–4 MB 时到 1.7 s，4 MB 以上到 3.2 s，与连接是否空闲无关。在每个方向加 50 ms 延迟的回环链路上，默认窗口送达 1 MiB 要 7 个往返、4 MiB 要 13 个；固定窗口下 1 KiB 到 32 MiB 都在一个往返左右完成。
+- **窗口是额度，不是缓冲。** 只有 Gateway 实际发来的字节才占内存，gRPC 本就要攒齐整条消息才交付，单条消息的内存峰值不变。固定窗口会关闭 gRPC 的 BDP 估算，它的上限（16 MiB）本就低于这里的值。
+- **只需升级 Agent。** 窗口由接收方通告，Gateway 与协议都不变；与 payload 压缩相互独立，两者可以叠加。
+
 **流式事件严禁聚合。** `CHAT_STREAM` 每收到一个 `ChatEvent` 就 `Send` 一帧；Gateway 每收到一帧就 flush。这条规则是 TTFT 的唯一保障，任何"攒够 N 条再发"的优化都必须先证明不影响首字延迟。
 
 ### 控制面帧
