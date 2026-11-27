@@ -220,13 +220,13 @@ func run() error {
 	artifactStorageS3Prefix := flag.String("artifact-storage-s3-prefix", "", "key prefix for -artifact-storage=s3, so one bucket can be shared across purposes or environments")
 	artifactStorageS3PathStyle := flag.Bool("artifact-storage-s3-path-style", false,
 		"use path-style addressing for -artifact-storage=s3; required by most non-AWS S3-compatible servers (MinIO, Ceph RGW)")
-	artifactStorageS3AccessKeyIDFile := flag.String("artifact-storage-s3-access-key-id-file", "", "path to a file holding the S3 access key id for -artifact-storage=s3")
-	artifactStorageS3SecretAccessKeyFile := flag.String("artifact-storage-s3-secret-access-key-file", "", "path to a file holding the S3 secret access key for -artifact-storage=s3")
+	artifactStorageS3AccessKeyIDFile := flag.String("artifact-storage-s3-access-key-id-file", "", "path to a file holding the S3 access key id for -artifact-storage=s3; when empty, read from AISW_ARTIFACT_STORAGE_S3_ACCESS_KEY_ID")
+	artifactStorageS3SecretAccessKeyFile := flag.String("artifact-storage-s3-secret-access-key-file", "", "path to a file holding the S3 secret access key for -artifact-storage=s3; when empty, read from AISW_ARTIFACT_STORAGE_S3_SECRET_ACCESS_KEY")
 	artifactStorageWebDAVURL := flag.String("artifact-storage-webdav-url", "",
 		"WebDAV server root for -artifact-storage=webdav, e.g. https://nas.example.internal/webdav — the protocol most home/office NAS boxes expose even without an S3 gateway")
 	artifactStorageWebDAVDir := flag.String("artifact-storage-webdav-dir", "", "path prefix under -artifact-storage-webdav-url, so one WebDAV share can be split across purposes or environments")
-	artifactStorageWebDAVUsernameFile := flag.String("artifact-storage-webdav-username-file", "", "path to a file holding the WebDAV username for -artifact-storage=webdav")
-	artifactStorageWebDAVPasswordFile := flag.String("artifact-storage-webdav-password-file", "", "path to a file holding the WebDAV password for -artifact-storage=webdav")
+	artifactStorageWebDAVUsernameFile := flag.String("artifact-storage-webdav-username-file", "", "path to a file holding the WebDAV username for -artifact-storage=webdav; when empty, read from AISW_ARTIFACT_STORAGE_WEBDAV_USERNAME")
+	artifactStorageWebDAVPasswordFile := flag.String("artifact-storage-webdav-password-file", "", "path to a file holding the WebDAV password for -artifact-storage=webdav; when empty, read from AISW_ARTIFACT_STORAGE_WEBDAV_PASSWORD")
 	artifactCopyTimeout := flag.Duration("artifact-copy-timeout", 0,
 		"bound on one artifact's node-to-storage byte copy; zero uses httpapi.DefaultArtifactCopyTimeout, sized for moving real file bytes rather than a JSON round trip")
 	artifactCleanupInterval := flag.Duration("artifact-cleanup-interval", 0,
@@ -1309,6 +1309,30 @@ func loadSecretFile(path string) (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
+// The environment variables the deployment's artifact storage credentials
+// are read from when their -xxx-file flag is not given.
+//
+// 部署存储凭据在没有给出对应 -xxx-file flag 时读取的环境变量。
+const (
+	artifactStorageS3AccessKeyIDEnv     = "AISW_ARTIFACT_STORAGE_S3_ACCESS_KEY_ID"
+	artifactStorageS3SecretAccessKeyEnv = "AISW_ARTIFACT_STORAGE_S3_SECRET_ACCESS_KEY"
+	artifactStorageWebDAVUsernameEnv    = "AISW_ARTIFACT_STORAGE_WEBDAV_USERNAME"
+	artifactStorageWebDAVPasswordEnv    = "AISW_ARTIFACT_STORAGE_WEBDAV_PASSWORD"
+)
+
+// artifactStorageSecret reads one storage credential from path when it is
+// given, else from the environment variable env, trimmed of surrounding
+// whitespace either way.
+//
+// artifactStorageSecret 给了 path 时从文件读取一项存储凭据，否则从环境变量 env 读取；两种
+// 情况都去掉首尾空白。
+func artifactStorageSecret(path, env string) (string, error) {
+	if path != "" {
+		return loadSecretFile(path)
+	}
+	return strings.TrimSpace(os.Getenv(env)), nil
+}
+
 // buildArtifactStorage constructs the objectstore.Backend STATUS.md's P04
 // artifact persistence uses, from -artifact-storage and its per-backend
 // flags. kind == "" disables it — httpapi.Config.ArtifactStorage stays nil,
@@ -1316,10 +1340,11 @@ func loadSecretFile(path string) (string, error) {
 // the same nil-degrades pattern every other optional dependency in this file
 // follows.
 //
-// Secrets (the S3 key pair, the WebDAV credentials) are read from files via
-// loadSecretFile rather than accepted as flag values themselves, matching
-// this file's existing -xxx-file convention (see -registry-join-token-file):
-// a flag value is visible in a process listing, a secret must not be.
+// Secrets (the S3 key pair, the WebDAV credentials) are never flag values
+// themselves, since a flag value is visible in a process listing. Each is
+// read from its -xxx-file flag when one is given (this file's convention,
+// see -registry-join-token-file), else from its environment variable
+// (artifactStorageSecretEnv), as this file's other tokens are.
 //
 // buildArtifactStorage 依据 -artifact-storage 及其各后端子参数，构造
 // STATUS.md P04 产物持久化所用的 objectstore.Backend。kind 为空时关闭它——
@@ -1327,9 +1352,10 @@ func loadSecretFile(path string) (string, error) {
 // 方式与 P04 之前完全一致——与本文件里其余每一个可选依赖遵循的是同一种
 // 「为 nil 时退化」模式。
 //
-// 密钥（S3 的一对 key、WebDAV 凭据）经由 loadSecretFile 从文件读取，而不是
-// 直接作为 flag 值接受，与本文件既有的 -xxx-file 约定一致（参见
-// -registry-join-token-file）：flag 值在进程列表里可见，密钥不能。
+// 密钥（S3 的一对 key、WebDAV 凭据）从不直接作为 flag 值，因为 flag 值在进程列表里
+// 可见。给了对应的 -xxx-file 时从文件读取（本文件的约定，参见
+// -registry-join-token-file），否则与本文件的其他令牌一样从环境变量读取
+// （artifactStorageSecretEnv）。
 func buildArtifactStorage(kind, localDir,
 	s3Endpoint, s3Region, s3Bucket, s3Prefix string, s3PathStyle bool, s3AccessKeyIDFile, s3SecretAccessKeyFile string,
 	webdavURL, webdavDir, webdavUsernameFile, webdavPasswordFile string,
@@ -1342,11 +1368,11 @@ func buildArtifactStorage(kind, localDir,
 	case "local":
 		cfg.Local = objectstore.LocalConfig{Dir: localDir}
 	case "s3":
-		accessKeyID, err := loadSecretFile(s3AccessKeyIDFile)
+		accessKeyID, err := artifactStorageSecret(s3AccessKeyIDFile, artifactStorageS3AccessKeyIDEnv)
 		if err != nil {
 			return nil, err
 		}
-		secretAccessKey, err := loadSecretFile(s3SecretAccessKeyFile)
+		secretAccessKey, err := artifactStorageSecret(s3SecretAccessKeyFile, artifactStorageS3SecretAccessKeyEnv)
 		if err != nil {
 			return nil, err
 		}
@@ -1360,11 +1386,11 @@ func buildArtifactStorage(kind, localDir,
 			SecretAccessKey: secretAccessKey,
 		}
 	case "webdav":
-		username, err := loadSecretFile(webdavUsernameFile)
+		username, err := artifactStorageSecret(webdavUsernameFile, artifactStorageWebDAVUsernameEnv)
 		if err != nil {
 			return nil, err
 		}
-		password, err := loadSecretFile(webdavPasswordFile)
+		password, err := artifactStorageSecret(webdavPasswordFile, artifactStorageWebDAVPasswordEnv)
 		if err != nil {
 			return nil, err
 		}

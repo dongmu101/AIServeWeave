@@ -6,7 +6,9 @@
 - **控制面**：新表 `tenant_storage`（base `0021`）；`GET`/`PUT`/`DELETE /admin/v1/storage`（owner/admin），保存前做连通性检查；凭据以 AES-256-GCM 加密保存，接口从不返回密钥；两个供 Gateway 使用的内部接口。新配置 `TenantStorage.MasterKey`/`MasterKeyFile`/`AllowPrivateEndpoints`。见 [ControlPlane STATUS](service/aiServeWeaveControlPlane/STATUS.md#租户自有对象存储2026-11-27)。
 - **Gateway**：写入只写租户当前的存储，读不到租户设置时写入失败而不回退到部署存储；读取依次尝试租户存储、部署存储，job 产物再从节点实时拉取。每小时按租户保留期清理。没有新 flag，设置了 `-control-plane-addr` 即生效。
 - **Console**：`/console/settings` 新增「对象存储」卡片。见 [Console STATUS](service/aiServeWeaveConsole/STATUS.md)。
-- **部署**：`deploy/controlplane.example.yaml` 新增 `TenantStorage` 块，`deploy/.env.example` 与 `docker-compose.yaml` 新增 `AISW_TENANT_STORAGE_MASTER_KEY`（留空即关闭，安装脚本不自动生成）。
+- **部署**：
+  - `deploy/controlplane.example.yaml` 新增 `TenantStorage` 块；`deploy/.env.example` 与 `docker-compose.yaml` 新增 `AISW_TENANT_STORAGE_MASTER_KEY`（留空即关闭，安装脚本不自动生成）。
+  - 部署存储也可以在 `.env` 里开启：`AISW_ARTIFACT_STORAGE=s3|webdav` 加对应参数与凭据，留空即关闭。凭据经环境变量传给 Gateway，不出现在进程参数里。见 [deploy README「对象存储」](deploy/README.md#对象存储)。
 
 升级须知：
 - 先迁移并升级控制面，再升级 Gateway 与 Console。顺序反过来不会出错：Gateway 把旧控制面的 404 当作「未配置」。

@@ -660,6 +660,20 @@ services:
       # verified with the control plane using AISW_CONTROL_PLANE_TOKEN.
       # 为下面的 Studio 服务挂载 /studio/v1；会话令牌经控制面校验，凭 AISW_CONTROL_PLANE_TOKEN。
       - -studio
+      # The deployment's own artifact storage (job artifacts, Studio files of
+      # tenants without their own storage), off while AISW_ARTIFACT_STORAGE is
+      # empty; s3 or webdav, see deploy/.env.example. Credentials go through
+      # the environment below, never a flag.
+      # 部署存储（job 产物、未配置自有存储的租户的 Studio 文件）。AISW_ARTIFACT_STORAGE
+      # 留空即关闭；取 s3 或 webdav，见 deploy/.env.example。凭据走下面的环境变量，不走 flag。
+      - -artifact-storage=${AISW_ARTIFACT_STORAGE:-}
+      - -artifact-storage-s3-endpoint=${AISW_ARTIFACT_STORAGE_S3_ENDPOINT:-}
+      - -artifact-storage-s3-region=${AISW_ARTIFACT_STORAGE_S3_REGION:-}
+      - -artifact-storage-s3-bucket=${AISW_ARTIFACT_STORAGE_S3_BUCKET:-}
+      - -artifact-storage-s3-prefix=${AISW_ARTIFACT_STORAGE_S3_PREFIX:-}
+      - -artifact-storage-s3-path-style=${AISW_ARTIFACT_STORAGE_S3_PATH_STYLE:-false}
+      - -artifact-storage-webdav-url=${AISW_ARTIFACT_STORAGE_WEBDAV_URL:-}
+      - -artifact-storage-webdav-dir=${AISW_ARTIFACT_STORAGE_WEBDAV_DIR:-}
       - -redis-addr=redis:6379
       # 跨副本队列（默认关闭），都依赖上面的 Redis；这里的 Redis 没有 maxmemory，等同于
       # noeviction，队列状态不会被淘汰。所有副本升级后再打开，见 Gateway STATUS「工作流 Job
@@ -744,6 +758,12 @@ services:
       AISW_GATEWAY_MODEL_PULL_TOKEN: ${AISW_GATEWAY_MODEL_PULL_TOKEN:?set it in deploy/.env — openssl rand -base64 32}
       AISW_GATEWAY_COMFYUI_MANAGED_TOKEN: ${AISW_GATEWAY_COMFYUI_MANAGED_TOKEN:?set it in deploy/.env — openssl rand -base64 32}
       AISW_GATEWAY_REMOTE_PROVIDERS_TOKEN: ${AISW_GATEWAY_REMOTE_PROVIDERS_TOKEN:-}
+      # Deployment artifact storage credentials, read only when
+      # -artifact-storage is s3 or webdav. 部署存储凭据，只在 -artifact-storage 为 s3 或 webdav 时读取。
+      AISW_ARTIFACT_STORAGE_S3_ACCESS_KEY_ID: ${AISW_ARTIFACT_STORAGE_S3_ACCESS_KEY_ID:-}
+      AISW_ARTIFACT_STORAGE_S3_SECRET_ACCESS_KEY: ${AISW_ARTIFACT_STORAGE_S3_SECRET_ACCESS_KEY:-}
+      AISW_ARTIFACT_STORAGE_WEBDAV_USERNAME: ${AISW_ARTIFACT_STORAGE_WEBDAV_USERNAME:-}
+      AISW_ARTIFACT_STORAGE_WEBDAV_PASSWORD: ${AISW_ARTIFACT_STORAGE_WEBDAV_PASSWORD:-}
     volumes:
       # 只读挂载：Gateway 出示这些材料，从不写它们。私钥是 0600，而两个镜像用的是
       # 同一个 uid，因此读得到。

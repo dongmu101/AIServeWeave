@@ -87,6 +87,31 @@ grep -F '<请求 ID>' logs/gateway/*.log*
 
 同步 `docker-compose.yaml` 和 `service-logs.sh` 后，在部署目录运行 `docker compose up -d --no-build --pull never`，用现有镜像按配置重建容器。部署目录里的文件从启用后开始记录。旧容器现存日志可在重建前用 `docker compose logs` 导出。
 
+## 对象存储
+
+文件有两类去处，都在 `deploy/.env` 里开启，留空即关闭：
+
+- **部署存储**：由 `AISW_ARTIFACT_STORAGE` 开启，取 `s3` 或 `webdav`。存放 job 产物，以及未配置自有存储的租户的 Studio 文件。不开启时产物只能从节点实时拉取，Studio 也无法为这些租户保存推理生图与上传的文件。
+- **租户自有存储**：由 `AISW_TENANT_STORAGE_MASTER_KEY` 开启，还需要把 `controlplane.example.yaml` 的 `TenantStorage` 块加进 `controlplane.yaml`。之后租户的 owner/admin 可以在 Console 为本租户填写自己的 S3 或 WebDAV。租户的 Access Key 在 Console 里填写，不写进 `.env`。
+
+以 Cloudflare R2 作为部署存储为例：
+
+```bash
+AISW_ARTIFACT_STORAGE=s3
+AISW_ARTIFACT_STORAGE_S3_ENDPOINT=https://<账户 ID>.r2.cloudflarestorage.com
+AISW_ARTIFACT_STORAGE_S3_REGION=auto
+AISW_ARTIFACT_STORAGE_S3_BUCKET=<bucket>
+AISW_ARTIFACT_STORAGE_S3_PREFIX=platform
+AISW_ARTIFACT_STORAGE_S3_PATH_STYLE=true
+AISW_ARTIFACT_STORAGE_S3_ACCESS_KEY_ID=<R2 访问密钥 ID>
+AISW_ARTIFACT_STORAGE_S3_SECRET_ACCESS_KEY=<R2 机密访问密钥>
+```
+
+- 修改后执行 `docker compose up -d gateway`。
+- 凭据只经环境变量传给 Gateway，不出现在进程参数里。`deploy/.env` 请设为 `chmod 600`。
+- 保留期用 Gateway 的 `-artifact-retention`、`-artifact-preview-retention` 与 `-studio-artifact-retention` 调整，默认值见 `gateway -h`。
+- 部署存储与租户存储可以用同一个 bucket 下的不同 prefix，但建议分开 bucket 与 token。
+
 ## 公开站点与计费检查
 
 - 7x 的公开 Console 入口为 `https://www.open7x.com`。从公网检查 `/`、`/signup`、`/console/docs/clients` 和 `/pricing`，再对照源站 Console 与 HTTPS 反向代理的响应。源站返回 200 无法证明公网 DNS 与 TLS 正常。

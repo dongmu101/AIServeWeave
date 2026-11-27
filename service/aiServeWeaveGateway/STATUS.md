@@ -178,7 +178,9 @@ go run ./service/aiServeWeaveGateway -comfyui-managed-addr 127.0.0.1:8093 ...
 - **保留期清理**（`httpapi/tenantstorage_cleanup.go`）：每小时向控制面分页取设了保留期的租户，在其存储的 `<租户>/` 与 `studio/<租户>/` 两个前缀下删除修改时间超过 `retention_days` 的对象；保留期为 0 的租户从不扫描。每轮以间隔为期限，构建失败或列举失败的租户跳过到下一轮，Gateway 关闭时中止进行中的扫描。`-studio-artifact-retention` 与 artifactcleanup 只作用于部署存储。
 - **控制面客户端**（`controlplaneclient/tenantstorage.go`）：`TenantStorageClient` 读取 `GET /internal/v1/tenants/:id/storage` 与 `GET /internal/v1/tenant-storage/retained`。404 视为旧版控制面（未配置、空列表），不认识的 kind 视为读不到设置。
 
-升级须知：先升级控制面再升级 Gateway；顺序反过来时 Gateway 把 404 当作未配置，行为与以前相同。
+- **部署存储改由 `.env` 开启**：`deploy/docker-compose.yaml` 把 `-artifact-storage` 及其 s3/webdav 参数接到 `AISW_ARTIFACT_STORAGE*`（留空即关闭）。没有给出对应的 `-…-file` flag 时，`main.go` 从 `AISW_ARTIFACT_STORAGE_S3_ACCESS_KEY_ID`、`AISW_ARTIFACT_STORAGE_S3_SECRET_ACCESS_KEY`、`AISW_ARTIFACT_STORAGE_WEBDAV_USERNAME`、`AISW_ARTIFACT_STORAGE_WEBDAV_PASSWORD` 读取凭据；给了文件时文件优先，读不到文件仍是启动错误。见 [deploy README「对象存储」](../../deploy/README.md#对象存储)。
+
+升级须知：先升级控制面再升级 Gateway；顺序反过来时 Gateway 把 404 当作未配置，行为与以前相同。已有部署要开启部署存储，需要同步新的 `docker-compose.yaml` 并在 `.env` 填写 `AISW_ARTIFACT_STORAGE*`。
 
 验证：objectstore、httpapi、controlplaneclient、Gateway 根包、flowdef 与 flow 的默认测试通过。临时用例（已删除）覆盖：
 - 受限地址段的 29 个边界地址（含 IPv4 映射）、18 种端点写法、拨号拦截 IP 与 localhost、环境代理不生效。
