@@ -8,6 +8,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
@@ -77,6 +78,10 @@ type upstreamRecord struct {
 type upstreamCapture struct {
 	mu   sync.Mutex
 	last *upstreamRecord
+	// startupHits counts the start-up requests answered from the runtime's
+	// startupCache.
+	// startupHits 统计由运行时 startupCache 答复的启动请求数。
+	startupHits atomic.Int64
 	// phases receives when the model request reached the proxy, its wait for
 	// an upstream connection and its response headers; nil records nothing.
 	// phases 接收模型请求到达代理的时刻、它等待上游连接的时间以及响应头到达的时刻；为 nil 时不记录。
@@ -292,14 +297,23 @@ type upstreamPool struct {
 	mu        sync.Mutex
 	conns     map[net.Conn]bool
 	closed    bool
+	// startup reuses start-up answers across rounds; nil when turned off.
+	// startup 在各回合之间复用启动请求的答复；关闭时为 nil。
+	startup *startupCache
 }
 
 // upstreamPoolIdle is how long an idle shared connection is kept.
 // upstreamPoolIdle 是共用连接空闲时保留的时长。
 const upstreamPoolIdle = 90 * time.Second
 
-func newUpstreamPool() *upstreamPool {
-	return &upstreamPool{conns: make(map[net.Conn]bool)}
+// newUpstreamPool returns a pool; cacheStartup also gives it a startupCache.
+// newUpstreamPool 返回连接池；cacheStartup 为 true 时同时为它配一个 startupCache。
+func newUpstreamPool(cacheStartup bool) *upstreamPool {
+	p := &upstreamPool{conns: make(map[net.Conn]bool)}
+	if cacheStartup {
+		p.startup = newStartupCache()
+	}
+	return p
 }
 
 // roundTripper returns the shared transport, built on first use with route
@@ -351,6 +365,7 @@ func (p *upstreamPool) close() {
 	if p == nil {
 		return
 	}
+	p.startup.close()
 	p.mu.Lock()
 	p.closed = true
 	conns := p.conns
@@ -789,6 +804,16 @@ func (p *upstreamProxy) forward(w http.ResponseWriter, r *http.Request, target *
 		}
 		body = io.MultiReader(bytes.NewReader(head), r.Body)
 	}
+	// startup is set, with its key, for a start-up request the runtime's
+	// cache handles.
+	// 对运行时缓存处理的启动请求，设置 startup 及其键。
+	var startup *startupCache
+	var startupKeyHash [sha256.Size]byte
+	if !messages && shared != nil && replayable && p.shared.startup != nil {
+		if key, ok := startupKey(r, kept); ok {
+			startup, startupKeyHash = p.shared.startup, key
+		}
+	}
 	if messages {
 		head, err := io.ReadAll(io.LimitReader(r.Body, maxCapturedRequestBytes+1))
 		if err != nil {
@@ -874,6 +899,14 @@ func (p *upstreamProxy) forward(w http.ResponseWriter, r *http.Request, target *
 	if primary {
 		out = p.capture.timeConnect(out)
 	}
+	if startup != nil {
+		if entry, ok := startup.lookup(startupKeyHash); ok {
+			startup.refresh(startupKeyHash, shared, out.Method, target, out.Host, out.Header.Clone(), kept)
+			p.capture.startupHits.Add(1)
+			entry.serve(w)
+			return
+		}
+	}
 	resend := func() io.ReadCloser {
 		if r.ContentLength == 0 {
 			return http.NoBody
@@ -937,6 +970,15 @@ func (p *upstreamProxy) forward(w http.ResponseWriter, r *http.Request, target *
 			}}
 		}
 	}
+	var recorder *startupRecorder
+	if startup != nil {
+		if cacheableStartupStatus(response.StatusCode) {
+			recorder = &startupRecorder{}
+			reader = io.TeeReader(reader, recorder)
+		} else {
+			startup.store(startupKeyHash, response.StatusCode, nil, nil)
+		}
+	}
 	controller := http.NewResponseController(w)
 	buffer := make([]byte, 32<<10)
 	for {
@@ -948,6 +990,11 @@ func (p *upstreamProxy) forward(w http.ResponseWriter, r *http.Request, target *
 			_ = controller.Flush()
 		}
 		if err != nil {
+			// Only a whole answer is kept.
+			// 只保存完整的答复。
+			if err == io.EOF && recorder != nil && !recorder.over {
+				startup.store(startupKeyHash, response.StatusCode, response.Header, recorder.buffer.Bytes())
+			}
 			break
 		}
 	}

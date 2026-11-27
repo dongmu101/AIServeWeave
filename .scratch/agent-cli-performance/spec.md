@@ -163,7 +163,7 @@ Status: ready-for-agent
 
 - 按会话保留 Codex 线程以恢复提示缓存亲和性的改造（视测量结论另立规格）。
 - 让一个常驻 CLI 或 app-server 进程同时服务多个请求或多个租户。
-- 在每进程代理里缓存 Claude 的启动请求答复（组织策略、远程设置、功能开关）。这会改变策略生效的及时性，需要单独决策，见「补充说明」。
+- 在每进程代理里缓存 Claude 的启动请求答复（组织策略、远程设置、功能开关）。这会改变策略生效的及时性，需要单独决策，见「补充说明」。（2026-11-27 已决定纳入并实施，见 Comments「启动请求缓存」。）
 - 关闭遥测与功能开关拉取（`DISABLE_TELEMETRY`、`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`）。safeguards 路径须先在真实主机上复验。
 - 可配置的 CLI 可执行文件路径（固定 CLI 版本的后续项）。
 - 用真实账户复验 Codex 新关闭的宿主工具（`TestLiveCallerToolRoundTrip`）。
@@ -231,3 +231,9 @@ Claude 各阶段（ms，p50 / p95）：
 
    第 2–8 轮平均：经 Agent 29.7%，直连 98.7%；合计（按 token）26.1% 对 88.9%。经 Agent 的命中忽有忽无，符合「每个请求新线程、缓存 key 不稳定」的推断（偶尔命中像是服务端按前缀碰巧命中，未直接观察缓存 key）。29.7% 恰在 30% 门槛附近，样本只有一遍，也没有同条件的 Claude 原生对照，所以暂不另立规格；若要立项，先多跑几遍并补 Claude 原生对照。直连多出的约 1.5 万输入 token 是 Codex 默认系统提示与内置工具，只影响绝对量，不影响各自占比。
 5. **用响应头更新 Claude 账户额度：`wontfix`。** 额度查询固定每账户每 5 分钟一次（`main_usage.go` 的 `cliUsageRefreshInterval`），两个账户合计约 24 次/小时；monitor「每分钟最多一批」的下限也把它封顶在约 60 次/小时，达不到每节点每小时 ≥ 60 个的门槛。
+
+### 2026-11-27 启动请求缓存（已实施）
+
+- 用户决定纳入（原列在「不在范围内」）：命中即答并后台刷新，超过 10 分钟未刷新成功的答复不用；功能开关请求缓存，键里去掉 `attributes.sessionId`；`policy_limits` 不理会其 `Cache-Control: no-cache`。
+- 离线探测更正「补充说明」：CLI 2.1.330（API key 登录）只有 `policy_limits` 与功能开关求值阻塞模型请求，二者先后发出；`settings`、`bootstrap`、`penguin_mode` 不阻塞。各给上游加 300 ms 延迟时，到模型请求发出分别增加约 360 ms 和 340 ms，两者都加约 600 ms。
+- 本机回环加 300 ms 延迟：到模型请求发出约 890 ms → 第 2 回合起约 200 ms（每回合命中 2 次）。生产用 OAuth 登录，请求集合可能不同，部署后看 `startup_cache_hits` 与 `request_sent_ms` 复测。

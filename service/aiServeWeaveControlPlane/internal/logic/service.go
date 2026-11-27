@@ -367,19 +367,35 @@ func (a Actor) canManageKeys() bool {
 	return a.Role == model.RoleOwner || a.Role == model.RoleAdmin
 }
 
+// DefaultTenantLimits is the quota a tenant created through CreateTenant
+// starts with. config.SignupConf's defaults carry the same numbers, so a
+// bootstrap tenant and a self-registered one start alike unless the operator
+// configures sign-up otherwise.
+//
+// DefaultTenantLimits 是经 CreateTenant 创建的租户的起步配额。config.SignupConf 的
+// 默认值与它相同，因此除非运维另行配置注册，引导租户与自助注册的租户起步一致。
+var DefaultTenantLimits = quota.Limits{
+	RequestsPerMinute: 1200,
+	TokensPerMinute:   100000000,
+	MaxConcurrent:     50,
+}
+
 // CreateTenant creates a tenant together with its first owner, in that order,
 // because a tenant with no owner is a row nobody can ever sign in to
 // administer.
 //
 // This is the bootstrap path: it is the one operation with no Actor, and the
 // service exposes it only to an operator holding the bootstrap token — see the
-// handler layer. Its audit record names the system as the actor.
+// handler layer. Its audit record names the system as the actor. The tenant
+// starts with DefaultTenantLimits; an owner or admin can change them
+// afterwards.
 //
 // CreateTenant 创建一个租户及其第一个 owner，且顺序如此，因为一个没有 owner 的租户
 // 是一行永远没人能登录进去管理的记录。
 //
 // 这是引导路径：它是唯一没有 Actor 的操作，服务只对持有 bootstrap token 的运维开放
-// 它——见 handler 层。它的审计记录以系统作为行为人。
+// 它——见 handler 层。它的审计记录以系统作为行为人。租户以 DefaultTenantLimits 起步，
+// 之后 owner 或 admin 可以修改。
 func (s *Service) CreateTenant(ctx context.Context, name, ownerEmail, ownerPassword, ip string) (model.Tenant, model.User, error) {
 	name = strings.TrimSpace(name)
 	ownerEmail = normalizeEmail(ownerEmail)
@@ -396,7 +412,7 @@ func (s *Service) CreateTenant(ctx context.Context, name, ownerEmail, ownerPassw
 		return model.Tenant{}, model.User{}, err
 	}
 
-	tenant, owner, err := s.createTenantWithOwner(ctx, name, ownerEmail, ownerPassword, quota.Limits{}, false)
+	tenant, owner, err := s.createTenantWithOwner(ctx, name, ownerEmail, ownerPassword, DefaultTenantLimits, false)
 	if err != nil {
 		return model.Tenant{}, model.User{}, err
 	}

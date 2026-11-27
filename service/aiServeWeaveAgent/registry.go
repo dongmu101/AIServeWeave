@@ -150,11 +150,11 @@ func needsLocalDeclaration(kind runtime.Kind) bool { return kind.IsLocalCLI() ||
 func newReloadableRegistry(local *localDeclarations) (runtime.Registry, error) {
 	registry := runtime.NewRegistry()
 	// localOnly admits only IDs declared locally with the same kind, and
-	// always takes the account directory and the upstream sharing switch from
-	// that declaration: they are local only, so a configuration pushed by a
-	// Gateway can neither set nor change them.
-	// localOnly 只接受在本地以相同种类声明过的 ID，并始终从该声明取账户目录与上游连接
-	// 共用开关：它们仅限本地，Gateway 下发的配置既不能设置也不能改动。
+	// always takes the account directory, the upstream sharing switch and the
+	// start-up cache switch from that declaration: they are local only, so a
+	// configuration pushed by a Gateway can neither set nor change them.
+	// localOnly 只接受在本地以相同种类声明过的 ID，并始终从该声明取账户目录、上游连接
+	// 共用开关与启动请求缓存开关：它们仅限本地，Gateway 下发的配置既不能设置也不能改动。
 	localOnly := func(build runtime.Factory) runtime.Factory {
 		return func(cfg runtime.Config, deps runtime.Dependencies) (runtime.Runtime, error) {
 			own, ok := local.get(cfg.ID)
@@ -164,6 +164,7 @@ func newReloadableRegistry(local *localDeclarations) (runtime.Registry, error) {
 			}
 			cfg.AccountDir = own.AccountDir
 			cfg.DisableSharedUpstream = own.DisableSharedUpstream
+			cfg.DisableStartupCache = own.DisableStartupCache
 			return build(cfg, deps)
 		}
 	}

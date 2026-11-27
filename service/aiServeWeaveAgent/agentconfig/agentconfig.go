@@ -334,6 +334,19 @@ type RuntimeConfig struct {
 	// 连接；nil 与 true 表示共用，false 使每个 CLI 进程重新各自建立连接。其他种类忽略它。
 	// 设置页面没有这个字段；从页面保存时保留文件里已有的值。
 	ShareUpstreamConnections *bool `yaml:"share_upstream_connections,omitempty"`
+	// CacheStartupRequests, for a claude runtime, controls whether the
+	// answers to the requests a CLI waits on before its model request
+	// (policy_limits and the feature-flag evaluation) are reused across
+	// rounds; nil and true reuse them, false sends every one upstream again.
+	// It needs shared connections, so share_upstream_connections: false also
+	// turns it off. Other kinds ignore it. The setup page has no field for it;
+	// a save from the page keeps whatever the file already says.
+	//
+	// CacheStartupRequests 控制 claude 运行时是否在各回合之间复用 CLI 发模型请求前
+	// 必须等待的那几个请求（policy_limits 与功能开关求值）的答复；nil 与 true 表示复用，
+	// false 使每个请求重新发往上游。它依赖共用连接，share_upstream_connections: false
+	// 也会关闭它。其他种类忽略它。设置页面没有这个字段；从页面保存时保留文件里已有的值。
+	CacheStartupRequests *bool `yaml:"cache_startup_requests,omitempty"`
 }
 
 // MaxProbeTimeout caps RuntimeConfig.ProbeTimeout. A probe holds the
@@ -495,6 +508,9 @@ func Save(path string, cfg *Config) error {
 		}
 		if rc.ShareUpstreamConnections != nil {
 			entry["share_upstream_connections"] = *rc.ShareUpstreamConnections
+		}
+		if rc.CacheStartupRequests != nil {
+			entry["cache_startup_requests"] = *rc.CacheStartupRequests
 		}
 		runtimes[i] = entry
 	}

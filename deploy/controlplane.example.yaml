@@ -222,9 +222,9 @@ Middlewares:
 Signup:
   Enabled: true
   MaxPerHour: 10
-  RequestsPerMinute: 0   # 0 = 不限制
-  TokensPerMinute: 0     # 0 = 不限制
-  MaxConcurrent: 4
+  RequestsPerMinute: 1200   # 0 = 不限制
+  TokensPerMinute: 100000000   # 0 = 不限制
+  MaxConcurrent: 50
 
 # 商户自有节点：默认开启。商户的 owner/admin 可在 Console「我的节点」生成接入包，把自己的
 # 机器接成只供本商户使用的节点，跑在上面的请求不扣点数。两个地址写进接入包，须与 Registry、

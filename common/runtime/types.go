@@ -207,6 +207,17 @@ type Config struct {
 	// DisableSharedUpstream 关闭 claude 运行时各回合共用的 api.anthropic.com 连接池，
 	// 使每个 CLI 进程重新各自建立上游连接。其他种类忽略它。仅限本地，从不通过隧道接收。
 	DisableSharedUpstream bool
+	// DisableStartupCache turns off, for a claude runtime, the reuse across
+	// rounds of the answers to the start-up requests a CLI waits on before
+	// its model request (policy_limits and the feature-flag evaluation). The
+	// cache rides on the shared connection pool, so DisableSharedUpstream
+	// turns it off too. Other kinds ignore it. Local only; it is never
+	// accepted over the tunnel.
+	//
+	// DisableStartupCache 关闭 claude 运行时在各回合之间复用 CLI 发模型请求前必须等待的
+	// 启动请求（policy_limits 与功能开关求值）答复。缓存依附于共用连接池，因此
+	// DisableSharedUpstream 也会关闭它。其他种类忽略它。仅限本地，从不通过隧道接收。
+	DisableStartupCache bool
 }
 
 // The fallback reasoning parsers Config.ReasoningParser may name.

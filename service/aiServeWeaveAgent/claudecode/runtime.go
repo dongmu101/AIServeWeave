@@ -82,7 +82,7 @@ func NewFactoryWithAttachments(executable string, processor *attachments.Process
 		}
 		bridge.env = withAccountDir(probeEnv(os.Environ()), cfg.AccountDir)
 		if !cfg.DisableSharedUpstream {
-			bridge.pool = newUpstreamPool()
+			bridge.pool = newUpstreamPool(!cfg.DisableStartupCache)
 		}
 		logger := deps.Logger
 		if logger == nil {
@@ -331,6 +331,11 @@ func (r *Runtime) Messages(parent context.Context, req runtime.MessagesRequest) 
 		// Phase timings are recorded only for native rounds (see messagesSession.phases).
 		// 只有原生回合记录阶段耗时（见 messagesSession.phases）。
 		finished = append(finished, s.phases.LogAttrs()...)
+		if s.upstream != nil {
+			if hits := s.upstream.startupHits.Load(); hits > 0 {
+				finished = append(finished, "startup_cache_hits", hits)
+			}
+		}
 		s.phases.Observe(r.metrics, r.cfg.ID, runtime.KindClaude)
 		r.logger.Info("Claude Messages round finished", finished...)
 		s.mu.Lock()

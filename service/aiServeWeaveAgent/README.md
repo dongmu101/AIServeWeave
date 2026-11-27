@@ -165,6 +165,17 @@ runtimes:
 
 该字段只在本地配置生效，Gateway 下发的配置不能设置或改动它；其他种类忽略它。设置页面不展示该字段，但保存时按 id 与 kind 保留；修改后热重载即生效（运行时会被替换）。
 
+### 启动请求缓存
+
+每个回合的 CLI 都是新进程，发模型请求之前要先等 `GET /api/claude_code/policy_limits` 和功能开关求值 `POST /api/eval/…` 的答复（两者先后发出）。`kind: claude` 运行时默认在各回合之间复用这两个答复：命中时立即答复 CLI，同时在后台把同一请求发往上游刷新缓存；超过 10 分钟没刷新成功的答复不再使用，退回同步请求。因此组织策略或功能开关的变更通常在下一个回合生效，最迟 10 分钟。细节见 [claudecode README](claudecode/README.md#启动请求缓存)。出问题时可按运行时关闭：
+
+```yaml
+runtimes:
+  - {id: claude-code-local, kind: claude, cache_startup_requests: false}
+```
+
+缓存依附于共用连接池，`share_upstream_connections: false` 也会关闭它。本地专用、热重载、设置页面保留等规则与 `share_upstream_connections` 相同。回合结束日志 `Claude Messages round finished` 带 `startup_cache_hits`（有命中时才出现）。
+
 ## 本地 CLI 账户额度
 
 正常运行的 Agent 在本地配置页面（`-config-ui-addr`）的「推理后端」中显示「CLI 账户额度」。只查询本地声明的 `kind: codex` / `kind: claude`（配置文件声明的，以及 Agent 自动发现并注册的 `codex-local`；后者不会因热重载而被移出），每个运行时一行（名称后附运行时 ID）；声明了不同 `account_dir` 的运行时各自查询自己的账户（见[同一 CLI 的多个账户](#同一-cli-的多个账户)）。仅配置模式尚未启动运行时，不执行账户查询。

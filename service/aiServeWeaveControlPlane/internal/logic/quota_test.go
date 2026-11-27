@@ -81,7 +81,7 @@ func TestVerifyKeyHashCarriesTheTenantsLimits(t *testing.T) {
 	}
 }
 
-func TestVerifyKeyHashDefaultsToUnlimited(t *testing.T) {
+func TestVerifyKeyHashDefaultsToBootstrapLimits(t *testing.T) {
 	f := newFixture(t)
 	created := f.mustCreateKey(f.ownerAt, "test")
 
@@ -89,12 +89,12 @@ func TestVerifyKeyHashDefaultsToUnlimited(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VerifyKeyHash() error = %v, want nil", err)
 	}
-	// A tenant nobody configured limits for must not start being rejected the
-	// day this feature ships.
+	// A tenant nobody configured limits for carries the quota CreateTenant
+	// gave it.
 	//
-	// 一个没人为它配置过限制的租户，不能在本功能上线那天开始被拒绝。
-	if !got.Limits.Unlimited() {
-		t.Errorf("Limits = %+v, want unlimited for an unconfigured tenant", got.Limits)
+	// 一个没人为它配置过限制的租户，带着 CreateTenant 给它的起步配额。
+	if got.Limits != logic.DefaultTenantLimits {
+		t.Errorf("Limits = %+v, want %+v for an unconfigured tenant", got.Limits, logic.DefaultTenantLimits)
 	}
 }
 
