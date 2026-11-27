@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>Open7X · AI 中转站（浅色版）</title>
+  <!-- 底板：--accent #FEF9C2 浅黄 -->
+  <rect width="512" height="512" rx="115" fill="#FEF9C2"/>
+  <rect x="1" y="1" width="510" height="510" rx="114" fill="none" stroke="#D9C77A" stroke-width="2"/>
+  <!-- 符号：--accent-foreground #894B00 深琥珀 -->
+  <g fill="none" stroke="#894B00" stroke-width="44" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M136 150H318"/>
+    <path d="M341 192 212 388"/>
+    <path d="M368 200V388"/>
+  </g>
+  <circle cx="368" cy="150" r="36" fill="none" stroke="#894B00" stroke-width="28"/>
+</svg>
