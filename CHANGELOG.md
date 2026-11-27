@@ -19,6 +19,8 @@ before upgrading; do not assume a `0.x` bump is safe by default.
 
 ### Added
 
+- Studio 编排新增「图像生成」（`image_generation`）与「ComfyUI 模板」（`comfyui_template`）节点，运行产出的图片与文件可在运行视图中查看与下载。Gateway 新增 `GET /studio/v1/image-models`、`GET /studio/v1/workflow-templates`、`GET /studio/v1/runs/{id}/artifacts/{artifact_id}`。产物字段只能作为输出 ref 的全部内容被引用（新问题码 `artifact_reference`）。推理生图节点需要 Gateway 配置 `-artifact-storage`。升级顺序：先控制面，再 Gateway 与 Studio。见 [STATUS.md](STATUS.md#studio-编排第二期节点2026-11-27)。
+
 - 跨地域隧道优化（Gateway + Agent，升级顺序不限，任一侧为旧版时对应项不生效）：
   - 大于 16 KiB 的请求 payload 由 Gateway 以 zstd 压缩后发往 Agent（`Ready.payload_encodings` / `RequestHeaders.payload_encoding`，均为新增字段；只对声明支持的槽压缩，流式响应不压缩）。见 [tunnel README「payload 压缩」](service/aiServeWeaveAgent/tunnel/README.md#payload-压缩)。
   - Gateway 每 15s 经 Control 流 Ping 测量各节点链路 RTT（新指标 `tunnel_server_node_rtt_seconds`，`tunnelserver.Config.PingInterval`）；调度器在负载完全相同的候选之间优先选 RTT 档位更低的节点。

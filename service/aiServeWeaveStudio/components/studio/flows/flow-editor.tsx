@@ -30,9 +30,12 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import type { StudioModel } from "@/lib/studio/contract";
 import {
   addNode,
+  artifactReferenceIssues,
+  catalogWarnings,
   connect,
   EDITABLE_TYPES,
   llmConfig,
+  mergeIssues,
   moveNode,
   removeEdges,
   removeNodes,
@@ -40,6 +43,7 @@ import {
   toCanvasEdges,
   unavailableModels,
 } from "@/lib/studio/flow-graph";
+import { parseImageModels, parseWorkflowTemplates, type FlowCatalog, type ImageModelCatalog, type WorkflowTemplate } from "@/lib/studio/flow-catalog";
 import { issueText, parseFlow, parseRun, type Flow, type FlowDefinition, type FlowIssue, type NodeType } from "@/lib/studio/flows";
 import { flowFile } from "@/lib/studio/run-inputs";
 
@@ -53,16 +57,30 @@ import { flowFile } from "@/lib/studio/run-inputs";
  * 视图。保存时连同加载时的版本号一起发送整份定义，因此期间在别处的保存会使本次保存被拒绝，
  * 而不是被覆盖。
  */
-export function FlowEditor({ flow, models, modelsError }: { flow: Flow; models: StudioModel[]; modelsError: string }) {
+export function FlowEditor(props: EditorProps) {
   return (
     <ReactFlowProvider>
-      <Editor flow={flow} models={models} modelsError={modelsError} />
+      <Editor {...props} />
     </ReactFlowProvider>
   );
 }
 
+interface EditorProps {
+  flow: Flow;
+  models: StudioModel[];
+  modelsError: string;
+  /** null when the list failed to load / 加载失败时为 null */
+  imageModels: ImageModelCatalog | null;
+  templates: WorkflowTemplate[] | null;
+  catalogError: string;
+}
+
 function fingerprint(name: string, def: FlowDefinition): string {
   return JSON.stringify([name.trim(), serialize(def)]);
+}
+
+function warningText(issue: FlowIssue | undefined): string {
+  return issue ? issueText(issue) : "";
 }
 
 function download(name: string, text: string) {
@@ -74,7 +92,7 @@ function download(name: string, text: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-function Editor({ flow, models, modelsError }: { flow: Flow; models: StudioModel[]; modelsError: string }) {
+function Editor({ flow, models, modelsError, imageModels: initialImageModels, templates: initialTemplates, catalogError }: EditorProps) {
   const router = useRouter();
   const reactFlow = useReactFlow();
   const hydrated = useHydrated();
@@ -90,14 +108,23 @@ function Editor({ flow, models, modelsError }: { flow: Flow; models: StudioModel
   const [busy, setBusy] = React.useState<"save" | "run" | null>(null);
   const [runOpen, setRunOpen] = React.useState(false);
   const [runErrors, setRunErrors] = React.useState<Record<string, string>>({});
+  const [catalog, setCatalog] = React.useState<FlowCatalog>({ imageModels: initialImageModels, templates: initialTemplates });
   const dirty = fingerprint(name, def) !== saved;
 
-  const warnings = React.useMemo(() => (models.length > 0 ? unavailableModels(def, models.map((m) => m.id)) : []), [def, models]);
+  const warningsFor = React.useCallback(
+    (from: FlowCatalog) => [...(models.length > 0 ? unavailableModels(def, models.map((m) => m.id)) : []), ...catalogWarnings(def, from)],
+    [def, models]
+  );
+  const warnings = React.useMemo(() => warningsFor(catalog), [warningsFor, catalog]);
+  // Server issues plus the ones the editor can see itself, such as an artifact
+  // referenced where only an output may.
+  // 服务端的问题，加上编辑器自己能看出的，例如在只有输出才能引用产物的地方引用了产物。
+  const shownIssues = React.useMemo(() => mergeIssues(def, issues, artifactReferenceIssues(def)), [def, issues]);
   const issueCount = React.useMemo(() => {
     const counts: Record<string, number> = {};
-    for (const issue of issues) counts[issue.node] = (counts[issue.node] ?? 0) + 1;
+    for (const issue of shownIssues) counts[issue.node] = (counts[issue.node] ?? 0) + 1;
     return counts;
-  }, [issues]);
+  }, [shownIssues]);
 
   // The canvas measures each node once it renders and needs those sizes
   // back; everything else about a node comes from the definition.
@@ -112,7 +139,7 @@ function Editor({ flow, models, modelsError }: { flow: Flow; models: StudioModel
         selected: node.id === selected,
         deletable: node.type !== "input" && node.type !== "output",
         measured: measured[node.id],
-        data: { node, definition: def, issues: issueCount[node.id] ?? 0, warning: warnings.some((w) => w.node === node.id) },
+        data: { node, definition: def, issues: issueCount[node.id] ?? 0, warning: warningText(warnings.find((w) => w.node === node.id)) },
       })),
     [def, selected, issueCount, warnings, measured]
   );
@@ -178,7 +205,8 @@ function Editor({ flow, models, modelsError }: { flow: Flow; models: StudioModel
     const center = box ? reactFlow.screenToFlowPosition({ x: box.left + box.width / 2, y: box.top + box.height / 2 }) : { x: 0, y: 0 };
     const offset = (def.nodes.length % 5) * 24;
     const model = [...def.nodes].reverse().map((n) => (n.type === "llm" ? llmConfig(n).model : "")).find((m) => m !== "") ?? models[0]?.id ?? "";
-    const added = addNode(def, type, { x: center.x - 112 + offset, y: center.y - 40 + offset }, model);
+    const imageModel = catalog.imageModels && !catalog.imageModels.defaultAvailable ? (catalog.imageModels.models[0]?.id ?? "") : "";
+    const added = addNode(def, type, { x: center.x - 112 + offset, y: center.y - 40 + offset }, model, imageModel);
     setDef(added.def);
     setSelected(added.id);
   }
@@ -207,11 +235,27 @@ function Editor({ flow, models, modelsError }: { flow: Flow; models: StudioModel
     return true;
   }
 
+  /** refreshCatalog reads the catalogs again, so a template unpublished since
+   * the page loaded is caught before a run; a list that cannot be read keeps
+   * what the editor had.
+   * refreshCatalog 重新读取目录，这样页面加载后被取消发布的模板能在运行前被发现；读不到的
+   * 列表保留编辑器已有的内容。 */
+  async function refreshCatalog(): Promise<FlowCatalog> {
+    const [imageModels, templates] = await Promise.all([
+      studioCall("GET", "image-models", undefined, parseImageModels),
+      studioCall("GET", "workflow-templates", undefined, parseWorkflowTemplates),
+    ]);
+    const next: FlowCatalog = { imageModels: imageModels.ok ? imageModels.data : catalog.imageModels, templates: templates.ok ? templates.data : catalog.templates };
+    setCatalog(next);
+    return next;
+  }
+
   async function openRun() {
     if (dirty && !(await save())) return;
-    if (warnings.length > 0) {
-      toast.error("有节点的模型当前不可用，请先更换。");
-      setSelected(warnings[0].node);
+    const blocked = warningsFor(await refreshCatalog());
+    if (blocked.length > 0) {
+      toast.error("有节点暂时无法运行（模型或模板不可用、必填项未设置），请先处理。");
+      setSelected(blocked[0].node);
       return;
     }
     setRunErrors({});
@@ -235,10 +279,10 @@ function Editor({ flow, models, modelsError }: { flow: Flow; models: StudioModel
       setRunErrors(errors);
       return;
     }
-    if (result.code === "model_unavailable" && result.issues.length > 0) {
+    if ((result.code === "model_unavailable" || result.code === "template_unavailable" || result.code === "image_generation_unavailable") && result.issues.length > 0) {
       setRunOpen(false);
       setIssues(result.issues);
-      toast.error("有节点的模型当前不可用，已在画布上标出。");
+      toast.error("有节点的模型或模板当前不可用，已在画布上标出。");
       return;
     }
     setRunErrors({ "": failureText(result.code) });
@@ -288,8 +332,9 @@ function Editor({ flow, models, modelsError }: { flow: Flow; models: StudioModel
     return () => window.removeEventListener("beforeunload", onLeave);
   }, [dirty]);
 
-  const selectedIssues = selected ? issues.filter((issue) => issue.node === selected) : [];
-  const flowIssues = issues.filter((issue) => !issue.node || !def.nodes.some((n) => n.id === issue.node));
+  const selectedIssues = selected ? shownIssues.filter((issue) => issue.node === selected) : [];
+  const selectedWarnings = selected ? warnings.filter((issue) => issue.node === selected) : [];
+  const flowIssues = shownIssues.filter((issue) => !issue.node || !def.nodes.some((n) => n.id === issue.node));
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -337,7 +382,7 @@ function Editor({ flow, models, modelsError }: { flow: Flow; models: StudioModel
       </header>
 
       <div className="flex min-h-0 flex-1 max-md:flex-col">
-        <nav aria-label="添加节点" className="flex shrink-0 gap-1 border-b p-2 md:w-24 md:flex-col md:border-r md:border-b-0">
+        <nav aria-label="添加节点" className="flex shrink-0 gap-1 overflow-auto border-b p-2 md:w-28 md:flex-col md:border-r md:border-b-0">
           {EDITABLE_TYPES.map((type) => (
             <button key={type} type="button" onClick={() => add(type)} title={`添加${NODE_KIND[type].label}节点`} aria-label={`添加${NODE_KIND[type].label}节点`}
               className="flex items-center gap-2 whitespace-nowrap rounded-lg px-2 py-1.5 text-xs hover:bg-muted md:flex-col md:gap-1 md:py-2">
@@ -379,7 +424,9 @@ function Editor({ flow, models, modelsError }: { flow: Flow; models: StudioModel
               def={def}
               nodeId={selected}
               models={models}
+              catalog={catalog}
               issues={selectedIssues}
+              warnings={selectedWarnings}
               onChange={setDef}
               onDelete={(id) => {
                 setDef(removeNodes(def, [id]));
@@ -387,7 +434,7 @@ function Editor({ flow, models, modelsError }: { flow: Flow; models: StudioModel
               }}
             />
           ) : (
-            <Overview def={def} issues={issues} flowIssues={flowIssues} warnings={warnings} modelsError={modelsError} onSelect={setSelected} />
+            <Overview def={def} issues={shownIssues} flowIssues={flowIssues} warnings={warnings} modelsError={modelsError} catalogError={catalogError} onSelect={setSelected} />
           )}
         </aside>
       </div>
@@ -405,6 +452,7 @@ function Overview({
   flowIssues,
   warnings,
   modelsError,
+  catalogError,
   onSelect,
 }: {
   def: FlowDefinition;
@@ -412,6 +460,7 @@ function Overview({
   flowIssues: FlowIssue[];
   warnings: FlowIssue[];
   modelsError: string;
+  catalogError: string;
   onSelect: (id: string) => void;
 }) {
   const label = (id: string) => def.nodes.find((n) => n.id === id)?.label || id;
@@ -424,9 +473,10 @@ function Overview({
         </p>
       </div>
       {modelsError ? <p className="text-xs text-amber-600">模型列表加载失败：{modelsError}</p> : null}
+      {catalogError ? <p className="text-xs text-amber-600">{catalogError}。</p> : null}
       {issues.length > 0 ? (
         <div className="grid gap-1.5">
-          <p className="font-medium text-destructive">保存时发现 {issues.length} 个问题</p>
+          <p className="font-medium text-destructive">发现 {issues.length} 个问题</p>
           <ul className="grid gap-1">
             {flowIssues.map((issue, i) => (
               <li key={`f${i}`} className="text-xs text-destructive">{issueText(issue)}</li>
@@ -446,7 +496,7 @@ function Overview({
           {warnings.map((warning) => (
             <button key={warning.node} type="button" onClick={() => onSelect(warning.node)} className="flex items-center gap-1.5 text-left text-xs text-amber-600 hover:underline">
               <TriangleAlertIcon className="size-3.5 shrink-0" />
-              {label(warning.node)} 的模型当前不可用
+              {label(warning.node)}：{issueText(warning)}
             </button>
           ))}
         </div>
@@ -455,6 +505,7 @@ function Overview({
         <p>从左侧添加节点，从节点右侧的圆点拖到另一个节点即可连线。</p>
         <p>选中节点后在这里编辑；选中节点或连线后按 Delete 删除。</p>
         <p>在提示词里点「插入变量」引用输入或上游节点的结果。</p>
+        <p>图像生成与 ComfyUI 模板产出的图片或文件，只能在输出节点的结果字段里整个引用。</p>
         <p>按 ⌘S / Ctrl+S 保存，每次保存都会生成新版本。</p>
       </div>
     </div>

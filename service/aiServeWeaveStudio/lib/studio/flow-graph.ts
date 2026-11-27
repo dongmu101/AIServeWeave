@@ -1,10 +1,15 @@
+import { artifactFieldShape } from "./artifacts.ts";
+import type { FlowCatalog } from "./flow-catalog.ts";
+import { templateRefs } from "./flow-template.ts";
 import type {
   Branch,
+  ComfyUIConfig,
   ConditionConfig,
   FlowDefinition,
   FlowEdge,
   FlowIssue,
   FlowNode,
+  ImageConfig,
   JSONField,
   LLMConfig,
   NodeType,
@@ -38,7 +43,20 @@ export interface CanvasEdge {
  * nodes come with every flow and cannot be added or removed.
  *
  * EditableTypes 是用户可以添加的节点类型；输入与输出节点随每个编排自带，不能添加或删除。 */
-export const EDITABLE_TYPES: NodeType[] = ["llm", "template", "condition"];
+export const EDITABLE_TYPES: NodeType[] = ["llm", "template", "condition", "image_generation", "comfyui_template"];
+
+/** MAX_IMAGE_SIDE bounds each side of an image node's size, as in flowdef.
+ * MAX_IMAGE_SIDE 是图像节点尺寸每一边的上限，与 flowdef 一致。 */
+const MAX_IMAGE_SIDE = 16384;
+
+/** isImageSize mirrors flowdef's size rule: "<width>x<height>", each side a
+ * decimal integer from 1 to 16384 without sign or leading zero.
+ * isImageSize 对应 flowdef 的尺寸规则：「宽x高」，每边是 1 到 16384 的十进制整数，无符号、
+ * 无前导零。 */
+export function isImageSize(value: string): boolean {
+  const match = /^([1-9][0-9]{0,4})x([1-9][0-9]{0,4})$/.exec(value);
+  return match !== null && Number(match[1]) <= MAX_IMAGE_SIDE && Number(match[2]) <= MAX_IMAGE_SIDE;
+}
 
 export const OPERATORS: { value: Operator; label: string; unary?: boolean; numeric?: boolean }[] = [
   { value: "contains", label: "包含" },
@@ -101,11 +119,33 @@ export function conditionConfig(node: FlowNode): ConditionConfig {
   return out;
 }
 
-/** defaultConfig is a new node's config. / defaultConfig 是新节点的配置。 */
-export function defaultConfig(type: NodeType, model: string): Record<string, unknown> | undefined {
+export function imageConfig(node: FlowNode): ImageConfig {
+  const c = node.config ?? {};
+  const out: ImageConfig = { model: typeof c.model === "string" ? c.model : "", prompt: typeof c.prompt === "string" ? c.prompt : "" };
+  if (typeof c.size === "string" && c.size !== "") out.size = c.size;
+  return out;
+}
+
+export function comfyConfig(node: FlowNode): ComfyUIConfig {
+  const c = node.config ?? {};
+  const inputs: Record<string, string> = {};
+  if (typeof c.inputs === "object" && c.inputs !== null && !Array.isArray(c.inputs)) {
+    for (const [name, value] of Object.entries(c.inputs)) if (typeof value === "string") inputs[name] = value;
+  }
+  return { template: typeof c.template === "string" ? c.template : "", inputs };
+}
+
+/** defaultConfig is a new node's config; model and imageModel are the
+ * defaults for llm and image nodes.
+ * defaultConfig 是新节点的配置；model 与 imageModel 分别是 llm 与图像节点的默认模型。 */
+export function defaultConfig(type: NodeType, model: string, imageModel = ""): Record<string, unknown> | undefined {
   switch (type) {
     case "llm":
       return { model, prompt: "" };
+    case "image_generation":
+      return { model: imageModel, prompt: "" };
+    case "comfyui_template":
+      return { template: "", inputs: {} };
     case "template":
       return { template: "" };
     case "condition":
@@ -126,10 +166,10 @@ export function nextNodeId(def: FlowDefinition, type: NodeType): string {
 
 /** addNode adds a node of type at position and returns its id.
  * addNode 在 position 处添加一个 type 类型的节点并返回其 id。 */
-export function addNode(def: FlowDefinition, type: NodeType, position: { x: number; y: number }, model = ""): { def: FlowDefinition; id: string } {
+export function addNode(def: FlowDefinition, type: NodeType, position: { x: number; y: number }, model = "", imageModel = ""): { def: FlowDefinition; id: string } {
   const id = nextNodeId(def, type);
   const node: FlowNode = { id, type, position: { x: Math.round(position.x), y: Math.round(position.y) } };
-  const config = defaultConfig(type, model);
+  const config = defaultConfig(type, model, imageModel);
   if (config) node.config = config;
   return { def: { ...def, nodes: [...def.nodes, node] }, id };
 }
@@ -244,6 +284,10 @@ export function nodeFields(node: FlowNode): string[] {
       return ["text"];
     case "condition":
       return ["result"];
+    case "image_generation":
+      return ["image"];
+    case "comfyui_template":
+      return ["image", "artifacts"];
     default:
       return [];
   }
@@ -255,10 +299,15 @@ export interface Reference {
 }
 
 /** referencesFor lists the variables a template on node id may use: the
- * flow's inputs and the fields of every upstream node.
+ * flow's inputs and the fields of every upstream node. Artifact fields (the
+ * image and files an image or ComfyUI node makes) are listed only when
+ * artifacts is set, which is for an output's result fields: nowhere else may
+ * an artifact be referenced.
  *
- * referencesFor 列出节点 id 上的模板可以使用的变量：编排的输入，以及每个上游节点的字段。 */
-export function referencesFor(def: FlowDefinition, id: string): Reference[] {
+ * referencesFor 列出节点 id 上的模板可以使用的变量：编排的输入，以及每个上游节点的字段。
+ * 产物字段（图像或 ComfyUI 节点产出的图片与文件）只在设置了 artifacts 时列出，那是给输出
+ * 节点的结果字段用的：其他任何地方都不能引用产物。 */
+export function referencesFor(def: FlowDefinition, id: string, artifacts = false): Reference[] {
   const out: Reference[] = def.inputs
     .filter((input) => isIdentifier(input.name))
     .map((input) => ({ ref: `{{inputs.${input.name}}}`, label: `输入 · ${input.label || input.name}` }));
@@ -266,6 +315,7 @@ export function referencesFor(def: FlowDefinition, id: string): Reference[] {
   for (const node of def.nodes) {
     if (!upstream.has(node.id)) continue;
     for (const field of nodeFields(node)) {
+      if (!artifacts && artifactFieldShape(node.type, field)) continue;
       out.push({ ref: `{{${node.id}.${field}}}`, label: `${node.label || node.id} · ${field}` });
     }
   }
@@ -282,6 +332,109 @@ export function unavailableModels(def: FlowDefinition, models: string[]): FlowIs
   return def.nodes
     .filter((n) => n.type === "llm" && !offered.has(llmConfig(n).model))
     .map((n) => ({ node: n.id, field: "config.model", code: "model_unavailable" }));
+}
+
+/** catalogWarnings flags image_generation and comfyui_template nodes that
+ * cannot run against what the catalogs offer now, as issues located on the
+ * nodes: an image model that is gone (or no model while the deployment has
+ * no default), a workflow template that is not offered, an input the
+ * template lacks, a required input left unset, or an input that needs a
+ * file, which a flow cannot supply. A catalog that failed to load flags
+ * nothing.
+ *
+ * catalogWarnings 把按目录当前内容无法运行的 image_generation 与 comfyui_template 节点标出
+ * 来，作为定位到这些节点的问题：图像模型已不存在（或未指定模型而部署没有默认生图）、
+ * 工作流模板不在可用列表中、模板没有的输入、必填却未设置的输入，以及需要文件输入——编排
+ * 无法提供文件。加载失败的目录不标记任何东西。 */
+export function catalogWarnings(def: FlowDefinition, catalog: FlowCatalog): FlowIssue[] {
+  const out: FlowIssue[] = [];
+  for (const node of def.nodes) {
+    if (node.type === "image_generation" && catalog.imageModels) {
+      const { model } = imageConfig(node);
+      if (model === "" && !catalog.imageModels.defaultAvailable) out.push({ node: node.id, field: "config.model", code: "image_generation_unavailable" });
+      else if (model !== "" && !catalog.imageModels.models.some((m) => m.id === model)) out.push({ node: node.id, field: "config.model", code: "model_unavailable" });
+    }
+    if (node.type === "comfyui_template" && catalog.templates) {
+      const config = comfyConfig(node);
+      const template = catalog.templates.find((t) => t.id === config.template);
+      if (!template) {
+        out.push({ node: node.id, field: "config.template", code: "template_unavailable" });
+        continue;
+      }
+      const declared = new Set(template.inputs.map((input) => input.name));
+      for (const name of Object.keys(config.inputs)) {
+        if (!declared.has(name)) out.push({ node: node.id, field: `config.inputs.${name}`, code: "invalid_input" });
+      }
+      for (const input of template.inputs) {
+        if (input.type === "file") {
+          if (input.required) out.push({ node: node.id, field: `config.inputs.${input.name}`, code: "unsupported_input" });
+        } else if (input.required && input.default === undefined && (config.inputs[input.name] ?? "").trim() === "") {
+          out.push({ node: node.id, field: `config.inputs.${input.name}`, code: "required" });
+        }
+      }
+    }
+  }
+  return out;
+}
+
+/** artifactReferenceIssues finds artifact fields referenced anywhere but as
+ * the whole of an output's ref — in a prompt, a template, a condition, an
+ * image prompt, a ComfyUI input, or mixed with other text in a result
+ * field — as the issues the server reports on save. Output problems sit on
+ * the output node, as the server places them.
+ *
+ * artifactReferenceIssues 找出在输出 ref 的全部内容之外被引用的产物字段——在提示词、模板、
+ * 条件、图像提示词、ComfyUI 输入里，或在结果字段中与其他文本混在一起——给出与服务端保存时
+ * 报告的相同的问题。输出的问题与服务端一样位于输出节点上。 */
+export function artifactReferenceIssues(def: FlowDefinition): FlowIssue[] {
+  const types = new Map(def.nodes.map((n) => [n.id, n.type] as const));
+  const names = (text: string) => templateRefs(text).refs.some((ref) => artifactFieldShape(types.get(ref.scope) ?? "", ref.field));
+  const out: FlowIssue[] = [];
+  const check = (node: string, field: string, text: string) => {
+    if (names(text)) out.push({ node, field, code: "artifact_reference" });
+  };
+  for (const node of def.nodes) {
+    const c = node.config ?? {};
+    const text = (value: unknown) => (typeof value === "string" ? value : "");
+    switch (node.type) {
+      case "llm":
+        check(node.id, "config.system", text(c.system));
+        check(node.id, "config.prompt", text(c.prompt));
+        break;
+      case "template":
+        check(node.id, "config.template", text(c.template));
+        break;
+      case "condition":
+        check(node.id, "config.left", text(c.left));
+        check(node.id, "config.right", text(c.right));
+        break;
+      case "image_generation":
+        check(node.id, "config.prompt", text(c.prompt));
+        break;
+      case "comfyui_template":
+        for (const [name, value] of Object.entries(comfyConfig(node).inputs)) check(node.id, `config.inputs.${name}`, value);
+        break;
+    }
+  }
+  const outputNode = def.nodes.find((n) => n.type === "output")?.id ?? "";
+  for (const output of def.outputs) {
+    if (names(output.ref) && !templateRefs(output.ref).sole) out.push({ node: outputNode, field: `outputs.${output.name}.ref`, code: "artifact_reference" });
+  }
+  return out;
+}
+
+/** mergeIssues adds the locally found issues to those the server reported,
+ * leaving out one the server already reported for the same node and field
+ * (on the output node, any of its fields, since the server may number a
+ * result field where the editor names it).
+ *
+ * mergeIssues 把本地发现的问题并入服务端报告的问题，服务端已对同一节点与字段报告过的则
+ * 略去（对输出节点，其任何字段都算，因为服务端可能按序号而编辑器按名称称呼结果字段）。 */
+export function mergeIssues(def: FlowDefinition, server: FlowIssue[], local: FlowIssue[]): FlowIssue[] {
+  const output = def.nodes.find((n) => n.type === "output")?.id;
+  const known = (issue: FlowIssue) =>
+    server.some((s) => s.node === issue.node && s.code === issue.code && (s.field === issue.field || (issue.node === output && s.field.startsWith("outputs"))));
+  return [...server, ...local.filter((issue) => !known(issue))];
 }
 
 /** serialize is the definition as it is sent to save: the nodes' configs
@@ -301,7 +454,14 @@ export function serialize(def: FlowDefinition): FlowDefinition {
       if (node.label) out.label = node.label;
       if (node.type === "llm") out.config = { ...llmConfig(node) };
       else if (node.type === "template") out.config = { ...templateConfig(node) };
-      else if (node.type === "condition") {
+      else if (node.type === "image_generation") {
+        const c = imageConfig(node);
+        out.config = { ...(c.model ? { model: c.model } : {}), prompt: c.prompt, ...(c.size ? { size: c.size } : {}) };
+      } else if (node.type === "comfyui_template") {
+        const c = comfyConfig(node);
+        const inputs = Object.fromEntries(Object.entries(c.inputs).filter(([, value]) => value !== ""));
+        out.config = { template: c.template, ...(Object.keys(inputs).length > 0 ? { inputs } : {}) };
+      } else if (node.type === "condition") {
         const c = conditionConfig(node);
         const unary = OPERATORS.find((o) => o.value === c.op)?.unary;
         out.config = unary ? { left: c.left, op: c.op } : { ...c, right: c.right ?? "" };

@@ -11,10 +11,12 @@ import { cn } from "cn";
 
 import { failureText, studioCall } from "@/components/studio/flows/api";
 import { ARIA_LABELS, FLOW_NODE_TYPES, NODE_KIND, type FlowCanvasNode } from "@/components/studio/flows/flow-node";
+import { ArtifactValue } from "@/components/studio/flows/artifact-view";
 import { RunForm } from "@/components/studio/flows/run-form";
 import { useHydrated } from "@/components/studio/flows/use-hydrated";
 import { sendToSignIn } from "@/components/studio/session-expired";
 import { Button } from "@/components/ui/button";
+import { artifactFieldShape, artifactOutputs } from "@/lib/studio/artifacts";
 import { toCanvasEdges } from "@/lib/studio/flow-graph";
 import { applyFrame, duration, initialRunState, type RunState } from "@/lib/studio/flow-run";
 import { issueText, parseRun, runErrorText, statusText, type FlowDefinition, type Run, type RunStep } from "@/lib/studio/flows";
@@ -132,7 +134,7 @@ function View({ flowId, flowName, run, definition }: { flowId: string; flowName:
         draggable: false,
         connectable: false,
         deletable: false,
-        data: { node, definition, issues: 0, warning: false, state: state.nodes[node.id] },
+        data: { node, definition, issues: 0, warning: "", state: state.nodes[node.id] },
       })),
     [definition, selected, state.nodes]
   );
@@ -180,6 +182,7 @@ function View({ flowId, flowName, run, definition }: { flowId: string; flowName:
   const step = selected ? current.steps.find((s) => s.nodeId === selected) : undefined;
   const selectedNode = selected ? definition.nodes.find((n) => n.id === selected) : undefined;
   const label = (id: string) => definition.nodes.find((n) => n.id === id)?.label || id;
+  const artifacts = React.useMemo(() => artifactOutputs(definition), [definition]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -268,14 +271,18 @@ function View({ flowId, flowName, run, definition }: { flowId: string; flowName:
             {state.finished && Object.keys(current.outputs).length > 0 ? (
               <section className="grid gap-2">
                 <p className="font-medium">结果</p>
-                {Object.entries(current.outputs).map(([key, value]) => (
-                  <ValueBlock key={key} label={key} value={value} copyable />
-                ))}
+                {Object.entries(current.outputs).map(([key, value]) =>
+                  artifacts[key] ? (
+                    <ArtifactValue key={key} runId={run.id} label={key} value={value} shape={artifacts[key]} />
+                  ) : (
+                    <ValueBlock key={key} label={key} value={value} copyable />
+                  )
+                )}
               </section>
             ) : null}
 
             {selectedNode ? (
-              <NodeDetail label={label(selectedNode.id)} kind={NODE_KIND[selectedNode.type].label} step={step} live={state.live[selectedNode.id]}
+              <NodeDetail runId={run.id} nodeType={selectedNode.type} label={label(selectedNode.id)} kind={NODE_KIND[selectedNode.type].label} step={step} live={state.live[selectedNode.id]}
                 started={state.started[selectedNode.id]} running={state.nodes[selectedNode.id] === "running"} now={now} />
             ) : (
               <p className="text-xs text-muted-foreground">点选画布上的节点，查看它的输入、输出与用量。</p>
@@ -292,7 +299,9 @@ function View({ flowId, flowName, run, definition }: { flowId: string; flowName:
   );
 }
 
-function NodeDetail({ label, kind, step, live, started, running, now }: {
+function NodeDetail({ runId, nodeType, label, kind, step, live, started, running, now }: {
+  runId: string;
+  nodeType: string;
   label: string;
   kind: string;
   step?: RunStep;
@@ -313,7 +322,7 @@ function NodeDetail({ label, kind, step, live, started, running, now }: {
         <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-xs">
           {step.model ? (
             <>
-              <dt className="text-muted-foreground">模型</dt>
+              <dt className="text-muted-foreground">{nodeType === "comfyui_template" ? "模板" : "模型"}</dt>
               <dd className="font-mono">{step.model}</dd>
             </>
           ) : null}
@@ -332,7 +341,11 @@ function NodeDetail({ label, kind, step, live, started, running, now }: {
         <p className="text-xs text-muted-foreground">已运行 {duration(started, new Date(now).toISOString()) || "片刻"}</p>
       ) : null}
       {step?.errorCode ? <p className="rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive">{runErrorText(step.errorCode)}</p> : null}
-      {running ? <ValueBlock label="正在生成" value={live ?? ""} placeholder="等待模型开始输出…" /> : null}
+      {running && (nodeType === "image_generation" || nodeType === "comfyui_template") ? (
+        <p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">正在生成，完成后会在这里显示结果。</p>
+      ) : running ? (
+        <ValueBlock label="正在生成" value={live ?? ""} placeholder="等待模型开始输出…" />
+      ) : null}
       {step && Object.keys(step.inputs).length > 0 ? (
         <div className="grid gap-2">
           <p className="text-xs font-medium text-muted-foreground">输入</p>
@@ -344,16 +357,17 @@ function NodeDetail({ label, kind, step, live, started, running, now }: {
       {step && Object.keys(step.outputs).length > 0 ? (
         <div className="grid gap-2">
           <p className="text-xs font-medium text-muted-foreground">输出</p>
-          {Object.entries(step.outputs).map(([key, value]) => (
-            <ValueBlock key={key} label={key} value={value} copyable />
-          ))}
+          {Object.entries(step.outputs).map(([key, value]) => {
+            const shape = artifactFieldShape(nodeType, key);
+            return shape ? <ArtifactValue key={key} runId={runId} label={key} value={value} shape={shape} /> : <ValueBlock key={key} label={key} value={value} copyable />;
+          })}
         </div>
       ) : null}
     </section>
   );
 }
 
-const INPUT_LABEL: Record<string, string> = { system: "系统提示词", prompt: "提示词", left: "比较的值", right: "与之比较" };
+const INPUT_LABEL: Record<string, string> = { system: "系统提示词", prompt: "提示词", left: "比较的值", right: "与之比较", size: "尺寸" };
 
 function ValueBlock({ label, value, copyable, placeholder }: { label: string; value: string; copyable?: boolean; placeholder?: string }) {
   return (

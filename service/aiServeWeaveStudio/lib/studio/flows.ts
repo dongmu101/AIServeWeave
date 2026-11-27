@@ -10,7 +10,7 @@ import { ContractError } from "./contract.ts";
  */
 
 export type ValueType = "text" | "number" | "boolean";
-export type NodeType = "input" | "llm" | "template" | "condition" | "output";
+export type NodeType = "input" | "llm" | "template" | "condition" | "image_generation" | "comfyui_template" | "output";
 export type Branch = "true" | "false";
 export type Operator =
   | "equals"
@@ -83,6 +83,25 @@ export interface ConditionConfig {
   right?: string;
 }
 
+/** ImageConfig is an image_generation node's config. An empty model means
+ * the deployment's default image generation.
+ * ImageConfig 是 image_generation 节点的配置。model 为空表示使用部署默认的图像生成。 */
+export interface ImageConfig {
+  model: string;
+  prompt: string;
+  size?: string;
+}
+
+/** ComfyUIConfig is a comfyui_template node's config: the workflow template
+ * id and the template of each input the node sets; inputs left out take the
+ * workflow template's default.
+ * ComfyUIConfig 是 comfyui_template 节点的配置：工作流模板 id，以及节点设置的每个输入的
+ * 模板；未设置的输入取工作流模板自己的默认值。 */
+export interface ComfyUIConfig {
+  template: string;
+  inputs: Record<string, string>;
+}
+
 export interface FlowSummary {
   id: string;
   name: string;
@@ -150,7 +169,7 @@ export interface FlowIssue {
   code: string;
 }
 
-const NODE_TYPES: NodeType[] = ["input", "llm", "template", "condition", "output"];
+const NODE_TYPES: NodeType[] = ["input", "llm", "template", "condition", "image_generation", "comfyui_template", "output"];
 const VALUE_TYPES: ValueType[] = ["text", "number", "boolean"];
 const STEP_STATUSES: StepStatus[] = ["succeeded", "failed", "canceled", "skipped"];
 const RUN_STATUSES: RunStatus[] = ["running", "succeeded", "failed", "canceled", "interrupted"];
@@ -368,6 +387,11 @@ const ISSUE_TEXT: Record<string, string> = {
   unknown_input: "提交了未声明的输入。",
   invalid_value: "输入值与类型不符。",
   model_unavailable: "所选模型当前不可用，请换一个。",
+  artifact_reference: "图片或文件结果只能整个作为结果字段的取值，不能放进提示词、模板或其他内容里。",
+  template_unavailable: "所选工作流模板当前不可用（未发布或对你不可见），请换一个。",
+  image_generation_unavailable: "部署没有默认的图像生成，请选择一个图像模型。",
+  unsupported_input: "这个输入需要文件，编排暂时无法提供，所以这个模板还不能在编排里运行。",
+  invalid_input: "这个输入的值不符合模板的要求，或模板没有这个输入。",
 };
 
 const FIELD_TEXT: Record<string, string> = {
@@ -381,6 +405,8 @@ const FIELD_TEXT: Record<string, string> = {
   "config.left": "左侧",
   "config.op": "比较方式",
   "config.right": "右侧",
+  "config.size": "尺寸",
+  "config.inputs": "模板输入",
   config: "配置",
   edges: "连线",
   label: "显示名称",
@@ -402,6 +428,8 @@ function fieldPath(field: string): string {
   if (input) return `输入「${input[1]}」`;
   const output = /^outputs\.([A-Za-z_][A-Za-z0-9_]*)/.exec(field);
   if (output) return `输出「${output[1]}」`;
+  const templateInput = /^config\.inputs\.(.+)$/.exec(field);
+  if (templateInput) return `模板输入「${templateInput[1]}」`;
   if (field.startsWith("inputs")) return "输入";
   if (field.startsWith("outputs")) return "输出";
   if (field.startsWith("config.json_fields")) return "结构化字段";
@@ -436,6 +464,17 @@ const RUN_ERROR_TEXT: Record<string, string> = {
   insufficient_balance: "余额不足，请联系管理员充值。",
   account_subscription_expired: "账号包月已到期，请联系管理员续费。",
   upstream_error: "模型返回了错误。",
+  no_image_produced: "没有生成图片。",
+  image_generation_unavailable: "部署没有默认的图像生成，请在图像生成节点里选择一个图像模型。",
+  template_unavailable: "工作流模板当前不可用（未发布或对你不可见）。",
+  invalid_input: "填入的值不符合模板输入的类型或范围，或模板没有这个输入。",
+  unsupported_input: "模板需要文件输入，编排暂时无法提供。",
+  no_capable_node: "当前没有能运行这个工作流的节点。",
+  queue_timeout: "排队等待运行的时间太久，已放弃。",
+  generation_failed: "生成失败。",
+  out_of_memory: "生成时显存不足，请换更小的尺寸或参数。",
+  job_cancelled: "生成任务被取消了。",
+  artifact_storage_unavailable: "产物存储暂不可用，请稍后重试。",
 };
 
 /** runErrorText explains why a run or a node failed.

@@ -18,8 +18,10 @@
 //     so skipping flows down a branch until it meets a join that another
 //     branch keeps alive.
 //   - A reference to a node that was skipped renders as "".
-//   - Independent nodes run in parallel, at most Config.MaxParallel model
-//     calls at a time.
+//   - Independent nodes run in parallel, at most Config.MaxParallel calls —
+//     model calls, image generations and workflow template runs — at a time.
+//   - An image_generation or comfyui_template node's fields hold artifact
+//     ids, which flowdef only lets an output reference.
 //   - The first node failure fails the run: model calls still in flight are
 //     cancelled and nothing further starts.
 //   - The output node renders Definition.Outputs into Result.Outputs. When the
@@ -43,7 +45,10 @@
 //     就运行，否则跳过。被跳过的节点把自己的出边都落定为未激活，因此跳过会沿分支向下
 //     传播，直到遇到另一条分支仍然激活的汇合点。
 //   - 引用被跳过的节点时渲染为空字符串。
-//   - 互不依赖的节点并行运行，同时进行的模型调用最多 Config.MaxParallel 个。
+//   - 互不依赖的节点并行运行，同时进行的调用（模型调用、生图与工作流模板运行）最多
+//     Config.MaxParallel 个。
+//   - image_generation 与 comfyui_template 节点的字段保存产物 id，flowdef 只允许输出
+//     引用它们。
 //   - 第一个节点失败即令运行失败：仍在进行的模型调用被取消，之后不再启动任何节点。
 //   - 输出节点把 Definition.Outputs 渲染为 Result.Outputs。输出节点本身被跳过时运行
 //     仍然成功，只是没有输出。
@@ -86,6 +91,9 @@ const (
 	CodeInvalidJSONOutput = "invalid_json_output"
 	CodeNotANumber        = "not_a_number"
 	CodeValueTooLarge     = "value_too_large"
+	// CodeNoImage fails an image_generation node whose call produced no image.
+	// CodeNoImage 表示 image_generation 节点的调用没有产出图片。
+	CodeNoImage = "no_image_produced"
 )
 
 // Error is a failure with a stable code and no content. A Dispatcher returns
@@ -127,6 +135,52 @@ type ChatReply struct {
 	Usage Usage
 }
 
+// ImageCall is one image_generation node's call, its prompt rendered. Model
+// is empty for the deployment's own image generation, Size for its default.
+//
+// ImageCall 是一个 image_generation 节点的调用，提示词已渲染。Model 为空表示使用
+// 部署自己的生图，Size 为空表示默认尺寸。
+type ImageCall struct {
+	Model  string
+	Prompt string
+	Size   string
+}
+
+// TemplateCall is one comfyui_template node's call: the workflow template id
+// and the rendered value of each input the node sets. An input that rendered
+// empty is still present; the Dispatcher decides how the template takes it.
+//
+// TemplateCall 是一个 comfyui_template 节点的调用：工作流模板 id，以及该节点设置的
+// 每个输入渲染后的取值。渲染为空的输入仍然存在；模板如何接收它由 Dispatcher 决定。
+type TemplateCall struct {
+	Template string
+	Inputs   map[string]string
+}
+
+// Artifact kinds. / 产物种类。
+const (
+	ArtifactImage = "image"
+	ArtifactVideo = "video"
+	ArtifactFile  = "file"
+)
+
+// Artifact is one file a call produced, by its public artifact id. Kind is
+// ArtifactImage, ArtifactVideo or ArtifactFile.
+//
+// Artifact 是一次调用产出的一个文件，以公开的产物 id 标识。Kind 为 ArtifactImage、
+// ArtifactVideo 或 ArtifactFile。
+type Artifact struct {
+	ID       string `json:"artifact_id"`
+	Filename string `json:"filename"`
+	Kind     string `json:"kind"`
+}
+
+// MediaReply is a finished image generation or workflow template run.
+// / MediaReply 是一次已完成的生图或工作流模板运行。
+type MediaReply struct {
+	Artifacts []Artifact
+}
+
 // Dispatcher makes model calls on the engine's behalf.
 //
 // Chat runs one call and returns the whole reply. It calls delta with each
@@ -134,13 +188,24 @@ type ChatReply struct {
 // never after Chat returns. It must return promptly once ctx ends. On failure
 // it returns a *Error naming why, and may still return the usage spent.
 //
+// GenerateImage and RunTemplate run an image_generation and a
+// comfyui_template node's call to the end and return the artifacts produced.
+// Like Chat they must return promptly once ctx ends, and fail with a *Error.
+// A RunTemplate whose run is still going when ctx ends should cancel it.
+//
 // Dispatcher 代表引擎进行模型调用。
 //
 // Chat 执行一次调用并返回完整回复。回复文本每到达一段，它就用该段调用 delta；调用发生
 // 在调用 Chat 的 goroutine 上，且绝不在 Chat 返回之后。ctx 结束后它必须尽快返回。失败时
 // 返回说明原因的 *Error，并且仍可返回已消耗的用量。
+//
+// GenerateImage 与 RunTemplate 把 image_generation 与 comfyui_template 节点的调用执行到
+// 结束，并返回产出的产物。与 Chat 一样，ctx 结束后它们必须尽快返回，失败时返回 *Error。
+// ctx 结束时运行仍在进行的 RunTemplate 应当取消该运行。
 type Dispatcher interface {
 	Chat(ctx context.Context, call ChatCall, delta func(text string)) (ChatReply, error)
+	GenerateImage(ctx context.Context, call ImageCall) (MediaReply, error)
+	RunTemplate(ctx context.Context, call TemplateCall) (MediaReply, error)
 }
 
 // Config configures an Engine. Only Dispatcher is required.
@@ -152,10 +217,10 @@ type Config struct {
 	Clock runtime.Clock
 	// RunTimeout bounds a whole run. / RunTimeout 限制整次运行。
 	RunTimeout time.Duration
-	// NodeTimeout bounds one model call. / NodeTimeout 限制一次模型调用。
+	// NodeTimeout bounds one call. / NodeTimeout 限制一次调用。
 	NodeTimeout time.Duration
-	// MaxParallel bounds a run's concurrent model calls.
-	// MaxParallel 限制一次运行中并发的模型调用数。
+	// MaxParallel bounds a run's concurrent calls.
+	// MaxParallel 限制一次运行中并发的调用数。
 	MaxParallel int
 	// MaxValueBytes bounds a node's output value and each rendered template:
 	// a longer reply is cut, a longer rendering fails the node.
@@ -253,11 +318,16 @@ type Event struct {
 
 // Step is one node's outcome. Inputs holds what the node actually evaluated —
 // for an llm node the rendered system prompt and prompt, for a condition the
-// rendered operands. Error is a code, set when Status is NodeFailed.
+// rendered operands, for an image_generation node the prompt and size, for a
+// comfyui_template node each input it set. Error is a code, set when Status
+// is NodeFailed. Model is the model of an llm or image_generation node and
+// the workflow template of a comfyui_template node.
 //
 // Step 是一个节点的结果。Inputs 是节点实际求值的内容——llm 节点为渲染后的系统
-// 提示词与提示词，条件节点为渲染后的操作数。Error 是错误码，在 Status 为 NodeFailed
-// 时设置。
+// 提示词与提示词，条件节点为渲染后的操作数，image_generation 节点为提示词与尺寸，
+// comfyui_template 节点为它设置的每个输入。Error 是错误码，在 Status 为 NodeFailed
+// 时设置。Model 对 llm 与 image_generation 节点是模型，对 comfyui_template 节点是
+// 工作流模板。
 type Step struct {
 	Node       string
 	Type       flowdef.NodeType
@@ -309,6 +379,8 @@ type planNode struct {
 	tmpl  map[string]flowdef.Template // config field → template
 	llm   flowdef.LLMConfig
 	cond  flowdef.ConditionConfig
+	image flowdef.ImageConfig
+	comfy flowdef.ComfyUIConfig
 }
 
 type planOutput struct {
@@ -385,6 +457,24 @@ func (n *planNode) compile() error {
 		}
 		n.cond = c
 		return errors.Join(parse("left", c.Left), parse("right", c.Right))
+	case flowdef.NodeImage:
+		c, err := n.Image()
+		if err != nil {
+			return err
+		}
+		n.image = c
+		return parse("prompt", c.Prompt)
+	case flowdef.NodeComfyUI:
+		c, err := n.ComfyUI()
+		if err != nil {
+			return err
+		}
+		n.comfy = c
+		var errs []error
+		for name, src := range c.Inputs {
+			errs = append(errs, parse("inputs."+name, src))
+		}
+		return errors.Join(errs...)
 	}
 	return nil
 }

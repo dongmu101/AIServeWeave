@@ -1,3 +1,26 @@
+# Studio 编排第二期节点（2026-11-27）
+
+编排新增「图像生成」与「ComfyUI 模板」两类节点，从定义、执行到下载都已交付（规格用户故事 51、52、59、68）。代码与默认测试已通过，**未接真实 ComfyUI、推理生图模型与对象存储联调，也未在浏览器里走通新界面**。
+
+- **`common/flowdef`**：
+  - `image_generation`：`{model?, prompt, size?}`。`model` 是固定的图像模型名，留空表示部署自己的生图工作流（`-images-workflow-id`）；`size` 形如 `宽x高`。输出字段 `image`。
+  - `comfyui_template`：`{template, inputs?}`。`template` 是已发布工作流模板的 id，`inputs` 按模板输入名给出模板文本，未列出的取模板默认值。输出字段 `image`（第一张图片）与 `artifacts`（全部产物的 JSON 数组，每项 `artifact_id`、`filename`、`kind`）。
+  - 这些字段保存的是产物 id，只能作为输出 ref 的全部内容被引用，其他位置报新问题码 `artifact_reference`，产物 id 因此不会被送进模型或参与比较。
+- **Gateway**（`flow/`、`httpapi/studio_media.go`）：
+  - 引擎的派发器新增 `GenerateImage` 与 `RunTemplate`，两者与模型调用共用并发上限和单节点超时。
+  - 两类节点都在进程内走 API Key 前门的同一段代码：部署默认生图走 `/v1/images/generations`（url 模式），模板走 `/v1/workflows/{id}/runs` 并跟踪 job 到结束，节点被停止时撤回 job。调度、共享工作流队列、job 记录、产物持久化与租户限流照常生效。
+  - 推理生图模型只返回字节，Gateway 把它们流式写入对象存储（key 由租户、运行与产物 id 推导），未配置 `-artifact-storage` 时节点以 `artifact_storage_unavailable` 失败。
+  - 新端点：`GET /studio/v1/image-models`、`GET /studio/v1/workflow-templates`（只列本租户可见的模板，不含图），以及 `GET /studio/v1/runs/{id}/artifacts/{artifact_id}`。下载只接受该成员自己的运行中某个步骤产出的产物，并带 `nosniff` 与 `Content-Security-Policy: sandbox`。
+  - 启动运行时的事前检查扩展到这两类节点：图像模型不可用、部署没有默认生图、模板不存在或对本租户不可见时，在存下运行之前就回 400，并附节点定位的问题。
+- **Studio**：新节点的配置面板（图像模型与模板来自上述目录）、产物字段只在输出节点的变量菜单中出现、即时 `artifact_reference` 检查、运行视图中图片与文件的展示与下载，以及产物下载的流式 BFF 路由。见 [Studio STATUS](service/aiServeWeaveStudio/STATUS.md)。
+- **控制面**：无改动。保存时的校验自动接受新节点类型，`node_type` 列宽 32 已够。
+
+升级须知：先升级控制面（它用新的 `flowdef` 才能保存含新节点的编排），再升级 Gateway 与 Studio。无新开关；推理生图节点需要 Gateway 配置 `-artifact-storage`。
+
+已通过的检查：Gateway 与控制面全部默认测试；`flow` 与新用例的 `-race`；临时用例（已删除）覆盖 flowdef 新节点的校验与产物引用规则、引擎的产物输出与失败码、超时、取消与并发上限，以及 Gateway 经假 ComfyUI 节点与假推理生图节点走通的模板运行、默认生图、推理生图写入对象存储、下载的归属与响应头、各类失败码、模板可见范围、取消和事前拒绝。Studio 的 lint、typecheck、121 项单元测试与生产构建通过，并用桩上游做了下载与页面渲染的 HTTP 级检查。
+
+尚未交付：编排的图片与文件类运行输入（模板的必填文件输入因此无法从编排运行，报 `unsupported_input`）；推理生图存入对象存储的图片尚无保留期清理；`openapi.yaml` 仍未收录 `/studio/v1`。
+
 # CLI 订阅额度调度优化（2026-11-26）
 
 Gateway 调度 Claude Code / Codex 订阅账户时，从「只看已用比例」改为同时看距重置的时间，并让 Agent 的额度快照更快赶上实际用量。代码已交付，现有默认测试全部通过；新逻辑用一次性测试验证（未提交），默认测试套件尚未覆盖；**未在真实账户接近耗尽或临近重置的场景下验收**。
@@ -28,7 +51,7 @@ Gateway 调度 Claude Code / Codex 订阅账户时，从「只看已用比例」
 
 已通过的检查：flowdef 与 flow 的 `go test -race`（覆盖率 98% / 93.5%）；Gateway 与控制面全部默认测试；Gateway httpapi 新用例经进程内聊天路径与假节点走通执行、事件流、持久化、取消、失去运行与事前拒绝，`-race` 下重复 20 次稳定；控制面 e2e 用 Gateway 真实客户端对真实控制面走通全部内部接口。Studio 的 lint、typecheck、76 项单元测试与生产构建通过，并用桩上游在无头 Chrome 中走通从新建、编辑、保存出错定位、运行、实时观察到停止与重跑的全流程，包括手机宽度与深色主题。
 
-尚未验收：**gormstore live 用例未运行**（本机没有 Docker 与数据库），新表在真实 MySQL 与 PostgreSQL 上的迁移、结构自检与契约测试待补跑；Studio、Gateway、控制面与真实模型的端到端联调未做。尚未交付：第二期节点（图像生成、ComfyUI 模板）与文件类输入、运行表分区与保留期、编排指标、请求检索中的 `studio_flow` 来源、`openapi.yaml` 中的 `/studio/v1`。
+尚未验收：**gormstore live 用例未运行**（本机没有 Docker 与数据库），新表在真实 MySQL 与 PostgreSQL 上的迁移、结构自检与契约测试待补跑；Studio、Gateway、控制面与真实模型的端到端联调未做。尚未交付：文件类输入（第二期节点已于 2026-11-27 交付，见上文）、运行表分区与保留期、编排指标、请求检索中的 `studio_flow` 来源、`openapi.yaml` 中的 `/studio/v1`。
 
 # 购买与赠送点数、注册赠送入库（2026-11-24）
 

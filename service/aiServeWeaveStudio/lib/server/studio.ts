@@ -21,6 +21,7 @@ import {
   type Run,
   type RunPage,
 } from "@/lib/studio/flows";
+import { parseImageModels, parseWorkflowTemplates, type ImageModelCatalog, type WorkflowTemplate } from "@/lib/studio/flow-catalog";
 import type { SessionPayload } from "@/lib/studio/session-payload";
 import { readSession } from "@/lib/server/session";
 import { callGateway } from "@/lib/server/upstream";
@@ -158,4 +159,17 @@ export function loadRuns(session: SessionPayload, flowId: string, returnTo: stri
   const search = new URLSearchParams({ limit: "30" });
   if (cursor) search.set("cursor", cursor);
   return loadStudio(session, `/studio/v1/flows/${flowId}/runs`, returnTo, parseRunPage, `?${search}`);
+}
+
+/** loadImageModels reads the image models a flow's image node may use.
+ * loadImageModels 读取编排的图像生成节点可用的图像模型。 */
+export function loadImageModels(session: SessionPayload, returnTo: string): Promise<Load<ImageModelCatalog>> {
+  return loadStudio(session, "/studio/v1/image-models", returnTo, parseImageModels);
+}
+
+/** loadWorkflowTemplates reads the published workflow templates the tenant
+ * may use in a ComfyUI node.
+ * loadWorkflowTemplates 读取本租户可在 ComfyUI 节点中使用的已发布工作流模板。 */
+export function loadWorkflowTemplates(session: SessionPayload, returnTo: string): Promise<Load<WorkflowTemplate[]>> {
+  return loadStudio(session, "/studio/v1/workflow-templates", returnTo, parseWorkflowTemplates);
 }

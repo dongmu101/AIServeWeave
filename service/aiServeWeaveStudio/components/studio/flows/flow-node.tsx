@@ -8,16 +8,18 @@ import {
   CircleSlashIcon,
   FlagIcon,
   GitBranchIcon,
+  ImageIcon,
   LoaderCircleIcon,
   LogInIcon,
   SparklesIcon,
   TriangleAlertIcon,
   TypeIcon,
+  WorkflowIcon,
   XIcon,
 } from "lucide-react";
 import { cn } from "cn";
 
-import { conditionConfig, llmConfig, OPERATORS, templateConfig } from "@/lib/studio/flow-graph";
+import { comfyConfig, conditionConfig, imageConfig, llmConfig, OPERATORS, templateConfig } from "@/lib/studio/flow-graph";
 import type { NodeState } from "@/lib/studio/flow-run";
 import type { FlowDefinition, FlowNode as Definition, NodeType } from "@/lib/studio/flows";
 
@@ -34,7 +36,8 @@ export type FlowCanvasNodeData = {
   node: Definition;
   definition: FlowDefinition;
   issues: number;
-  warning: boolean;
+  /** why the node cannot run now (an unavailable model or template…), or "" */
+  warning: string;
   state?: NodeState;
 };
 
@@ -45,6 +48,8 @@ export const NODE_KIND: Record<NodeType, { label: string; icon: React.ReactEleme
   llm: { label: "LLM", icon: <SparklesIcon />, tint: "bg-violet-500/10 text-violet-700 dark:text-violet-300" },
   template: { label: "文本模板", icon: <TypeIcon />, tint: "bg-amber-500/10 text-amber-700 dark:text-amber-300" },
   condition: { label: "条件", icon: <GitBranchIcon />, tint: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" },
+  image_generation: { label: "图像生成", icon: <ImageIcon />, tint: "bg-pink-500/10 text-pink-700 dark:text-pink-300" },
+  comfyui_template: { label: "ComfyUI 模板", icon: <WorkflowIcon />, tint: "bg-cyan-500/10 text-cyan-700 dark:text-cyan-300" },
   output: { label: "输出", icon: <FlagIcon />, tint: "bg-rose-500/10 text-rose-700 dark:text-rose-300" },
 };
 
@@ -70,6 +75,12 @@ export function nodeSummary(node: Definition, definition: FlowDefinition): strin
     }
     case "template":
       return firstLine(templateConfig(node).template) || "空模板";
+    case "image_generation": {
+      const c = imageConfig(node);
+      return `${c.model || "部署默认"}${c.size ? ` · ${c.size}` : ""}`;
+    }
+    case "comfyui_template":
+      return comfyConfig(node).template || "未选择模板";
     case "condition": {
       const c = conditionConfig(node);
       const op = OPERATORS.find((o) => o.value === c.op);
@@ -112,7 +123,7 @@ export function FlowNodeCard({ data, selected }: NodeProps<FlowCanvasNode>) {
             {issues}
           </span>
         ) : warning ? (
-          <span title="模型当前不可用" className="text-amber-600 [&_svg]:size-4">
+          <span title={warning} className="text-amber-600 [&_svg]:size-4">
             <TriangleAlertIcon />
           </span>
         ) : null}

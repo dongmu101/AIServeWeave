@@ -54,3 +54,16 @@ test("run events are not on the forward list: they have their own streaming rout
   assert.equal(resolveStudioRoute("GET", ["runs", "frn_1", "events"], none), null);
   assert.equal(resolveStudioRoute("PUT", ["flows", "flw_1"], none), null);
 });
+
+test("the image model and workflow template catalogs are allowed for GET only", () => {
+  assert.deepEqual(resolveStudioRoute("GET", ["image-models"], none), { method: "GET", path: "/studio/v1/image-models", search: "" });
+  assert.deepEqual(resolveStudioRoute("GET", ["workflow-templates"], new URLSearchParams("tenant_id=other")), { method: "GET", path: "/studio/v1/workflow-templates", search: "" });
+  for (const name of ["image-models", "workflow-templates"]) {
+    for (const method of ["POST", "PUT", "PATCH", "DELETE"]) assert.equal(resolveStudioRoute(method, [name], none), null, `${method} ${name}`);
+    assert.equal(resolveStudioRoute("GET", [name, "x"], none), null);
+  }
+});
+
+test("artifact downloads are not on the forward list: they have their own streaming route", () => {
+  assert.equal(resolveStudioRoute("GET", ["runs", "frn_1", "artifacts", "art_1"], none), null);
+});

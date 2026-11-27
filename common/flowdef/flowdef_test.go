@@ -95,7 +95,7 @@ func TestValidate(t *testing.T) {
 		{"reserved node id", func(d *Definition) {
 			d.Nodes = append(d.Nodes, Node{ID: InputsScope, Type: NodeTemplate, Config: json.RawMessage(`{"template":"x"}`)})
 		}, []want{{InputsScope, CodeInvalidName}}},
-		{"unknown node type", func(d *Definition) { d.Nodes[3].Type = "image_generation" }, []want{{"fix", CodeInvalidType}}},
+		{"unknown node type", func(d *Definition) { d.Nodes[3].Type = "http_request" }, []want{{"fix", CodeInvalidType}}},
 		{"label too long", func(d *Definition) { d.Nodes[1].Label = strings.Repeat("长", MaxLabelRunes+1) }, []want{{"draft", CodeInvalidLabel}}},
 
 		// LLM config.

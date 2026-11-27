@@ -183,7 +183,7 @@ Console 的定位是管理后台（用户、Key、配额、计费、机群）。
 
 - **术语**：仓库里「工作流」已指 ComfyUI 模板运行。新概念统一称为 **编排（Flow）**，节点称为 **编排节点**，一次执行称为 **编排运行（Flow Run）**。已写入 GLOSSARY（2026-11-25）。
 - **定义格式与校验放在 `common`**：`common/flowdef`（2026-11-25 已实现）定义编排 JSON 结构、节点类型、变量引用语法、`Decode` 和 `Validate`。Gateway（运行前）与控制面（保存时）调用同一个 `Validate`，不允许各自判断。这与 `common/workflowtemplate.Validate` 的约定相同。与后者不同，`Validate` 收集全部问题（最多 50 条），每条带所属节点 id、字段路径和稳定的错误码（如 `cycle`、`unknown_reference`、`reference_not_upstream`），供编辑器在画布上定位（用户故事 55）。错误文本只含标识符，不引用提示词、标签或取值。
-- **分期**：第一期节点类型为 input、llm、template、condition、output，输入类型为 text、number、boolean。image_generation、comfyui_template 节点与 image、file 输入放到第二期，等 Gateway 能运行时再加入 `flowdef`；在此之前，含这些类型的定义一律被拒绝，而不是存下无法运行的定义。
+- **分期**：第一期节点类型为 input、llm、template、condition、output，输入类型为 text、number、boolean。第二期的 image_generation 与 comfyui_template 节点已于 2026-11-27 加入 `flowdef` 并能在 Gateway 上运行（见下文定义形状）。image、file 输入仍未加入：含这些输入类型的定义一律被拒绝，需要必填文件输入的模板也无法从编排运行。
 - **定义形状（契约，以 `common/flowdef` 为准）**：
 
   ```text
@@ -202,13 +202,18 @@ Console 的定位是管理后台（用户、Key、配额、计费、机群）。
   template.config:  {template}                 输出字段 text
   condition.config: {left, op, right?}         输出字段 result
                     op: equals | not_equals | contains | not_contains | gt | gte | lt | lte | empty | not_empty
+  image_generation.config: {model?, prompt, size?}   输出字段 image（产物 id）
+                    model 为空表示部署自己的生图工作流；size 形如 "<宽>x<高>"
+  comfyui_template.config: {template, inputs?: {模板输入名: 模板}}   输出字段 image、artifacts
+                    artifacts 是 [{artifact_id, filename, kind: image|video|file}] 的 JSON 文本
+  产物字段（image、artifacts）只能作为输出 ref 的全部内容被引用，否则报 artifact_reference
   ```
 
 - **变量引用**：`{{inputs.<name>}}` / `{{<node_id>.<field>}}`，两侧可有空格，纯替换，无表达式求值、无代码执行。只能引用上游节点（输出声明引用输出节点的上游）。`{{` 后不是「标识符.标识符」形式的内容（如 `{{name}}`、JSON）按原文保留，方便提示词里引用模板语言；`{{a.b.c}}` 报错，不支持嵌套字段。标识符为 `[A-Za-z_][A-Za-z0-9_]*`，最长 64 字节；节点 id 不能是 `inputs`。
 
 - **执行引擎是 Gateway 内的深模块 `flow`**（2026-11-25 已实现，尚未接入 HTTP）：对外只暴露「给定定义 + 输入 + 派发器 → 事件流 + 最终结果」。引擎负责拓扑排序、并行分支、条件跳过、变量替换、节点超时、整体期限和取消传播。
   - **接口**：`Engine.Plan(定义, 输入)` 同步校验定义并绑定输入，出错返回 `*flowdef.ValidationError`，HTTP 层据此回 400；`Plan.Run(ctx, emit)` 执行并返回 `Result`，事件按顺序、只从一个 goroutine 发出。
-  - **派发器**：第一期只有一个方法 `Chat(ctx, call, delta) (reply, error)`，同步返回整条回复，文字增量经回调送出，失败返回带稳定错误码的 `*flow.Error`。Gateway 侧沿用 Studio 发送消息的做法，进程内调用 `chatCompletions` 并用 tap 取增量。第二期再加入生图与 ComfyUI Job 的方法。
+  - **派发器**：`Chat(ctx, call, delta) (reply, error)` 同步返回整条回复，文字增量经回调送出，失败返回带稳定错误码的 `*flow.Error`。Gateway 侧沿用 Studio 发送消息的做法，进程内调用 `chatCompletions` 并用 tap 取增量。第二期（2026-11-27）加入 `GenerateImage` 与 `RunTemplate`，返回产出的产物，与模型调用共用并发上限和单节点超时。
   - **汇合与跳过**：指向某节点的边全部落定后判定该节点，只要有一条激活的入边就运行（「任一分支到达即运行」）。没有激活的入边就跳过，跳过沿分支向下传播。引用被跳过的节点时得到空字符串。输出节点被跳过时，运行仍算成功，只是没有输出。
   - **并行**：互不依赖的节点并行执行，同一次运行最多同时进行 4 个模型调用（可配置）。
   - **失败**：第一个节点失败就让整次运行失败，进行中的模型调用被取消（节点状态 `canceled`），之后不再启动新节点。节点状态有 `succeeded`、`failed`、`canceled`、`skipped`；运行状态有 `succeeded`、`failed`、`canceled`，`interrupted` 由租约扫描器标记。
@@ -220,7 +225,7 @@ Console 的定位是管理后台（用户、Key、配额、计费、机群）。
   - **租约过期（2026-11-25 修订，替代原定的后台扫描器）**：控制面按自己的时钟计算租约到期时间。状态仍为 `running` 但租约已过的运行，读出来就是 `interrupted`，结束时间取租约到期时间，统计进行中运行数时也不计入。该副本之后的续租、步骤和终态写入一律回 409 `studio_run_finished`，Gateway 收到后取消本地执行。这样不需要扫描器，也不改写数据库里那一行。
   - **重试**：运行 id 由 Gateway 铸造，登记运行可安全重试；步骤按 (运行, 节点) 幂等；重复写入同一终态视为成功。
 - **步骤结果持久化**：每个节点结束时，把状态、截断后的输出（上限可配置）、耗时和用量写入控制面。这条写入是旁路，不阻塞执行；写入失败时有界重试并计入指标。运行结束时的终态写入必须重试直到成功或租约过期。
-- **ComfyUI 模板节点**：通过现有工作流 Job 路径提交，Job 归属同一租户，并受模板 `VisibleTenantIDs` 约束。产物经现有产物 id 与下载路径暴露，运行记录只保存公开的 `artifact_id`。
+- **ComfyUI 模板节点**：通过现有工作流 Job 路径提交，Job 归属同一租户，并受模板 `VisibleTenantIDs` 约束。产物经现有产物 id 与下载路径暴露，运行记录只保存公开的 `artifact_id`。（2026-11-27 实现）Studio 经 `GET /studio/v1/runs/{id}/artifacts/{artifact_id}` 下载，只接受该成员自己运行的步骤里出现过的产物。推理生图模型没有 job 产物，图片写入对象存储，产物 id 前缀 `sart_`。
 - **上限**：单个编排最多 50 个节点；单次运行有总期限（默认 30 分钟）和单节点期限（默认 5 分钟）；每个用户同时运行的编排数和每个租户的并发运行数都有上限。超限分别返回 400 或 429。
 - **SSE 事件**（2026-11-26 实现时修订）：流以 `run_snapshot` 开头（运行、已结束的步骤、进行中节点迄今的文本），之后是 `node_started`、`node_delta`（LLM 流式输出）、`node_finished`、`node_skipped`、`run_finished`。不再单独发 `run_started`：快照已包含它。断线重连时直接取新快照，不必先读控制面再订阅，也就不会在两者之间漏掉事件。已结束的运行直接回快照与终态，与 Job 事件流的约定一致。如果运行不在本副本，只发快照，客户端改为轮询 `GET /studio/v1/runs/{id}`。跟不上的观察者被断开，重连即可。
 - **每次模型调用单独计量**（2026-11-26 实现时补充）：运行中的每次模型调用都单独经过租户限流（各自的配额租约与 token 计数），并使用新的 request id。用量账本按 request id 去重，如果共用启动请求的 id，同一次运行的多次调用只会记一次账。

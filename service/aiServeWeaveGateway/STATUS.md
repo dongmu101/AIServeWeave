@@ -161,6 +161,25 @@ go run ./service/aiServeWeaveGateway -comfyui-managed-addr 127.0.0.1:8093 ...
 
 `InternalToken` 用 `AISW_CONTROL_PLANE_TOKEN` 环境变量传，不要用 `-control-plane-token` flag —— flag 在 `ps` 输出里可见。
 
+## Studio 编排的产物节点（2026-11-27）
+
+`image_generation` 与 `comfyui_template` 两类编排节点在 `httpapi/studio_media.go` 中实现，是 `studioFlowDispatcher` 的 `GenerateImage` 与 `RunTemplate`。两者都在进程内调用 API Key 前门的处理器，不另走一套调度：
+
+- **部署默认生图**（节点不指定模型）：调用 `imagesGenerations`，`response_format` 为 `url`，结果是普通 job 产物。部署未配置 `-images-workflow-id` 时节点以 `image_generation_unavailable` 失败。
+- **推理生图模型**（指定模型）：直接调用 `Scheduler.GenerateImage`，字节经有界流式写入 `-artifact-storage`，key 为 `studio/<租户>/<运行>/<产物 id>`，产物 id 前缀 `sart_`。不配置对象存储时以 `artifact_storage_unavailable` 失败；推理后端只接受提示词，设置了尺寸时以 `invalid_input` 失败。
+- **ComfyUI 模板**：调用 `submitRun`，然后每秒调用一次 `jobStatus`，直到 job 结束（连续 5 次询问失败才放弃），最后调用 `listArtifacts`，只保留 `output` 分区。节点渲染出的文本按模板声明的类型转换；渲染为空白的输入不传，由模板默认值或 `Bind` 的必填检查处理；模板有必填文件输入时以 `unsupported_input` 失败。节点被停止（取消、超时、兄弟节点失败）时调用 `cancelJob` 撤回该 job。
+- 每次调用使用新的 request id，提交前经 `withQuota` 走租户限流，与模型调用相同。上游的 OpenAI 形状错误由 `openAIFailure` 映射为节点失败码：`template_unavailable`、`no_capable_node`、`queue_timeout`、`generation_failed`、`out_of_memory`、`job_cancelled`、`no_image_produced`、`invalid_input`、`rate_limited`，其余为 `upstream_error`。
+
+新端点（挂在编排端点旁）：
+
+- `GET /studio/v1/image-models`：`{data:[{id,name}], default_available}`。`data` 是本成员可调用、且有节点以生图能力发布的模型；`default_available` 表示部署默认生图已配置并已注册。
+- `GET /studio/v1/workflow-templates`：本租户可见、且通过校验的模板，带输入（名称、类型、必填、默认值、长度与数值范围）与输出声明，不含图，也不含输入写入的节点与字段。
+- `GET /studio/v1/runs/{id}/artifacts/{artifact_id}`：运行必须属于本成员，产物 id 必须出现在该运行某个产物节点的步骤输出里，否则 404 `not_found`，即使同租户拥有该产物。`sart_` 产物从对象存储读出，类型由开头字节嗅探，只声明图片类型；其余经 `serveJobArtifact`（`downloadArtifact` 的主体）读出。响应固定带 `X-Content-Type-Options: nosniff`、`Content-Security-Policy: sandbox`、`Cache-Control: private, no-store`。
+
+`POST /studio/v1/flows/{id}/runs` 的事前检查从 llm 节点扩展到这两类节点：问题码分别为 `model_unavailable`、`image_generation_unavailable`、`template_unavailable`，整体仍回 400 `model_unavailable`。
+
+已知限制：推理生图写入对象存储的图片不受 `artifactcleanup` 管理，暂无保留期；编排还不能提供文件输入。
+
 ## Studio 编排与运行（2026-11-26）
 
 `-studio` 下新增编排与运行端点，实现在 `httpapi/studio_flows.go`（端点）、`httpapi/studio_runs.go`（本副本上的运行执行、续租、步骤持久化与实时订阅）、`httpapi/studio_dispatch.go`（模型调用）、`flow/`（执行引擎），存储经 `controlplaneclient/studioflows.go` 调控制面 `/internal/v1/studio/flows*`、`/internal/v1/studio/runs*`。编排定义与校验在 `common/flowdef`。

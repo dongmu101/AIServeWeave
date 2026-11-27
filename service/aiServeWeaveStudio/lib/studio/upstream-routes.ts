@@ -48,6 +48,8 @@ const ROUTES: Route[] = [
   { method: "GET", pattern: ["flows", ":id", "versions", ":id"], query: [] },
   { method: "GET", pattern: ["flows", ":id", "runs"], query: ["cursor", "limit"] },
   { method: "POST", pattern: ["flows", ":id", "runs"], query: [], maxBody: RUN_BODY_BYTES },
+  { method: "GET", pattern: ["image-models"], query: [] },
+  { method: "GET", pattern: ["workflow-templates"], query: [] },
   { method: "GET", pattern: ["runs", ":id"], query: [] },
   { method: "POST", pattern: ["runs", ":id", "cancel"], query: [] },
 ];

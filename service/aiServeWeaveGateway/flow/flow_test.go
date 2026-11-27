@@ -69,6 +69,14 @@ func (f dispatcherFunc) Chat(ctx context.Context, call ChatCall, delta func(stri
 	return f(ctx, call, delta)
 }
 
+func (dispatcherFunc) GenerateImage(context.Context, ImageCall) (MediaReply, error) {
+	return MediaReply{}, &Error{Code: "unsupported"}
+}
+
+func (dispatcherFunc) RunTemplate(context.Context, TemplateCall) (MediaReply, error) {
+	return MediaReply{}, &Error{Code: "unsupported"}
+}
+
 // replies answers each call with a fixed text chosen by model.
 func replies(texts map[string]string) Dispatcher {
 	return dispatcherFunc(func(_ context.Context, call ChatCall, _ func(string)) (ChatReply, error) {

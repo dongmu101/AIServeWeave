@@ -22,11 +22,14 @@
 //     referenced anywhere as {{inputs.<name>}};
 //   - exactly one output node: it has no outgoing edges. The result fields it
 //     collects are declared in Definition.Outputs;
-//   - llm, template and condition nodes in between, each reachable from the
-//     input node. Edges out of a condition node carry branch "true" or
+//   - llm, template, condition, image_generation and comfyui_template nodes
+//     in between, each reachable from the input node. Edges out of a condition node carry branch "true" or
 //     "false"; no other edge carries a branch;
 //   - no cycles. A node may reference {{<node>.<field>}} only for a node
 //     upstream of it, so the value always exists by the time it runs.
+//   - the fields image_generation and comfyui_template nodes produce name
+//     artifacts, not text. They may only be referenced as the whole of an
+//     output's ref, so an artifact id is never fed to a model or compared.
 //
 // Flow contents — prompts, input values and outputs — are the same class of
 // secret as a chat message. Errors from this package name identifiers (node
@@ -51,10 +54,13 @@
 //   - 恰好一个输入节点：编排的起点，没有入边。它提供的运行时变量声明在
 //     Definition.Inputs 中，任何地方都以 {{inputs.<名称>}} 引用；
 //   - 恰好一个输出节点：没有出边。它收集的结果字段声明在 Definition.Outputs 中；
-//   - 中间是 llm、template 与 condition 节点，每个都能从输入节点到达。条件节点的
+//   - 中间是 llm、template、condition、image_generation 与 comfyui_template
+//     节点，每个都能从输入节点到达。条件节点的
 //     出边带 branch「true」或「false」，其他边都不带 branch；
 //   - 不能有环。节点只能以 {{<节点>.<字段>}} 引用它上游的节点，这样它运行时该值
 //     一定已经存在。
+//   - image_generation 与 comfyui_template 节点产出的字段指向产物而不是文本。它们
+//     只能作为输出 ref 的全部内容被引用，因此产物 id 永远不会被送进模型或参与比较。
 //
 // 编排内容——提示词、输入值与输出——与对话消息属于同一类机密。本包的错误只写
 // 标识符（节点 id、输入名与字段名），从不引用模板、标签或取值。
@@ -91,23 +97,35 @@ const (
 	MaxTextValueBytes  = 64 << 10
 	MaxModelLength     = 256
 	MaxIssues          = 50
+	// MaxTemplateIDLength bounds a comfyui_template node's template id and
+	// MaxTemplateInputs the inputs it binds; MaxTemplateInputNameLength
+	// bounds each input's name, which the template's publisher chose.
+	// MaxTemplateIDLength 限制 comfyui_template 节点的模板 id，MaxTemplateInputs
+	// 限制它绑定的输入数；MaxTemplateInputNameLength 限制每个输入名（由模板发布者
+	// 选定）的长度。
+	MaxTemplateIDLength        = 256
+	MaxTemplateInputs          = 50
+	MaxTemplateInputNameLength = 128
+	// MaxImageSide bounds each side of an image_generation node's size.
+	// MaxImageSide 限制 image_generation 节点尺寸的每一边。
+	MaxImageSide = 16384
 )
 
 // NodeType is the closed set of node kinds.
 // / NodeType 是节点种类的封闭集合。
 type NodeType string
 
-// Node types. Image generation and ComfyUI template nodes are planned and will
-// be added here when the Gateway can run them; a definition that names a type
-// this package does not know is rejected rather than stored unrunnable.
+// Node types. A definition that names a type this package does not know is
+// rejected rather than stored unrunnable.
 //
-// 节点类型。图像生成与 ComfyUI 模板节点已规划，等 Gateway 能运行它们时再加入；
-// 定义中出现本包不认识的类型时直接拒绝，而不是存下一份无法运行的定义。
+// 节点类型。定义中出现本包不认识的类型时直接拒绝，而不是存下一份无法运行的定义。
 const (
 	NodeInput     NodeType = "input"
 	NodeLLM       NodeType = "llm"
 	NodeTemplate  NodeType = "template"
 	NodeCondition NodeType = "condition"
+	NodeImage     NodeType = "image_generation"
+	NodeComfyUI   NodeType = "comfyui_template"
 	NodeOutput    NodeType = "output"
 )
 
@@ -163,7 +181,32 @@ const (
 	// FieldResult is a condition node's outcome, "true" or "false".
 	// FieldResult 是条件节点的结果，「true」或「false」。
 	FieldResult = "result"
+	// FieldImage is the artifact id of the image an image_generation or
+	// comfyui_template node produced; for the latter, its first image, or ""
+	// when it produced none.
+	// FieldImage 是 image_generation 或 comfyui_template 节点产出的图片的产物 id；
+	// 对后者是第一张图片，没有图片时为空字符串。
+	FieldImage = "image"
+	// FieldArtifacts lists every artifact a comfyui_template node produced,
+	// as a JSON array of {"artifact_id", "filename", "kind"} objects.
+	// FieldArtifacts 列出 comfyui_template 节点产出的全部产物，形式为
+	// {"artifact_id", "filename", "kind"} 对象组成的 JSON 数组。
+	FieldArtifacts = "artifacts"
 )
+
+// IsArtifactField reports whether field of a node of type t names artifacts
+// rather than text.
+//
+// IsArtifactField 报告 t 类型节点的 field 字段指向的是产物而不是文本。
+func IsArtifactField(t NodeType, field string) bool {
+	switch t {
+	case NodeImage:
+		return field == FieldImage
+	case NodeComfyUI:
+		return field == FieldImage || field == FieldArtifacts
+	}
+	return false
+}
 
 // Definition is one flow version's content, without its identity and
 // publication metadata (id, name, version), which the control plane owns.
@@ -275,6 +318,29 @@ type ConditionConfig struct {
 	Right string   `json:"right,omitempty"`
 }
 
+// ImageConfig is an image_generation node's config. Prompt is a template.
+// Model is a fixed image model name, or empty for the deployment's own image
+// generation workflow; Size, when set, is "<width>x<height>".
+//
+// ImageConfig 是 image_generation 节点的配置。Prompt 是模板。Model 是固定的图像
+// 模型名，为空时使用部署自己的生图工作流；Size 设置时形如「<宽>x<高>」。
+type ImageConfig struct {
+	Model  string `json:"model,omitempty"`
+	Prompt string `json:"prompt"`
+	Size   string `json:"size,omitempty"`
+}
+
+// ComfyUIConfig is a comfyui_template node's config: the published workflow
+// template to run, and a template for each of its inputs the node sets. An
+// input left out takes the workflow template's own default.
+//
+// ComfyUIConfig 是 comfyui_template 节点的配置：要运行的已发布工作流模板，以及该
+// 节点为其设置的每个输入的模板。未列出的输入取工作流模板自己的默认值。
+type ComfyUIConfig struct {
+	Template string            `json:"template"`
+	Inputs   map[string]string `json:"inputs,omitempty"`
+}
+
 // LLM decodes an llm node's config strictly: unknown fields are an error.
 // / LLM 严格解码 llm 节点的配置：未知字段报错。
 func (n Node) LLM() (LLMConfig, error) {
@@ -294,6 +360,20 @@ func (n Node) Template() (TemplateConfig, error) {
 func (n Node) Condition() (ConditionConfig, error) {
 	var c ConditionConfig
 	return c, n.decodeConfig(NodeCondition, &c)
+}
+
+// Image decodes an image_generation node's config strictly.
+// / Image 严格解码 image_generation 节点的配置。
+func (n Node) Image() (ImageConfig, error) {
+	var c ImageConfig
+	return c, n.decodeConfig(NodeImage, &c)
+}
+
+// ComfyUI decodes a comfyui_template node's config strictly.
+// / ComfyUI 严格解码 comfyui_template 节点的配置。
+func (n Node) ComfyUI() (ComfyUIConfig, error) {
+	var c ComfyUIConfig
+	return c, n.decodeConfig(NodeComfyUI, &c)
 }
 
 func (n Node) decodeConfig(want NodeType, v any) error {
@@ -368,6 +448,10 @@ const (
 	CodeInvalidEdge      IssueCode = "invalid_edge"
 	CodeCycle            IssueCode = "cycle"
 	CodeUnreachable      IssueCode = "unreachable"
+	// CodeArtifactReference is a reference to an artifact field anywhere but
+	// as the whole of an output's ref.
+	// CodeArtifactReference 表示在输出 ref 的全部内容之外的地方引用了产物字段。
+	CodeArtifactReference IssueCode = "artifact_reference"
 
 	// Run-input codes, from BindInputs. / 运行输入的问题码，来自 BindInputs。
 	CodeUnknownInput IssueCode = "unknown_input"
@@ -448,6 +532,9 @@ type templateUse struct {
 	owner string
 	field string
 	tmpl  Template
+	// whole marks an output ref that is a single reference and nothing else,
+	// the one place an artifact field may be referenced.
+	whole bool
 }
 
 type validator struct {
@@ -455,12 +542,13 @@ type validator struct {
 	issues    []Issue
 	truncated bool
 
-	inputs  map[string]bool            // declared, well-named inputs
-	nodes   map[string]Node            // well-named, unique nodes
-	fields  map[string]map[string]bool // node id → referenceable fields
-	uses    []templateUse
-	inputID string // the single input node, if exactly one
-	outID   string // the single output node, if exactly one
+	inputs    map[string]bool            // declared, well-named inputs
+	nodes     map[string]Node            // well-named, unique nodes
+	fields    map[string]map[string]bool // node id → referenceable fields
+	nodeTypes map[string]NodeType        // node id → type, for artifact fields
+	uses      []templateUse
+	inputID   string // the single input node, if exactly one
+	outID     string // the single output node, if exactly one
 }
 
 func (v *validator) add(node, field string, code IssueCode, format string, args ...any) {
@@ -539,6 +627,7 @@ func (v *validator) checkInputs() {
 func (v *validator) checkNodes() {
 	v.nodes = make(map[string]Node, len(v.def.Nodes))
 	v.fields = make(map[string]map[string]bool, len(v.def.Nodes))
+	v.nodeTypes = make(map[string]NodeType, len(v.def.Nodes))
 	var inputs, outputs []string
 	for i, n := range v.def.Nodes {
 		id := n.ID
@@ -555,6 +644,7 @@ func (v *validator) checkNodes() {
 				id = ""
 			} else {
 				v.nodes[id] = n
+				v.nodeTypes[id] = n.Type
 			}
 		}
 		v.checkLabel(id, "label", n.Label)
@@ -572,6 +662,10 @@ func (v *validator) checkNodes() {
 			v.checkTemplateNode(id, n)
 		case NodeCondition:
 			v.checkCondition(id, n)
+		case NodeImage:
+			v.checkImage(id, n)
+		case NodeComfyUI:
+			v.checkComfyUI(id, n)
 		default:
 			v.add(id, "type", CodeInvalidType, "unknown node type")
 		}
@@ -713,6 +807,93 @@ func (v *validator) checkCondition(id string, n Node) {
 		v.numericOperand(id, "config.left", c.Op, c.Left, left, leftOK)
 		v.numericOperand(id, "config.right", c.Op, c.Right, right, rightOK)
 	}
+}
+
+func (v *validator) checkImage(id string, n Node) {
+	c, err := n.Image()
+	if err != nil {
+		v.add(id, "config", CodeInvalidConfig, "image_generation config is invalid: %s", err)
+		return
+	}
+	if c.Model != "" && (strings.TrimSpace(c.Model) != c.Model || len(c.Model) > MaxModelLength || strings.Contains(c.Model, "{{")) {
+		v.add(id, "config.model", CodeInvalidConfig, "model must be a model name of at most %d bytes, not a template", MaxModelLength)
+	}
+	v.template(id, "config.prompt", c.Prompt, true)
+	if c.Size != "" && !validImageSize(c.Size) {
+		v.add(id, "config.size", CodeInvalidConfig, "size must be <width>x<height>, each between 1 and %d", MaxImageSide)
+	}
+	v.setFields(id, FieldImage)
+}
+
+// validImageSize reports whether s is "<width>x<height>" with both sides
+// decimal integers between 1 and MaxImageSide, without sign or leading zero.
+func validImageSize(s string) bool {
+	w, h, ok := strings.Cut(s, "x")
+	return ok && validSide(w) && validSide(h)
+}
+
+func validSide(s string) bool {
+	if s == "" || s[0] == '0' || len(s) > 5 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	n, _ := strconv.Atoi(s)
+	return n <= MaxImageSide
+}
+
+func (v *validator) checkComfyUI(id string, n Node) {
+	c, err := n.ComfyUI()
+	if err != nil {
+		v.add(id, "config", CodeInvalidConfig, "comfyui_template config is invalid: %s", err)
+		return
+	}
+	v.setFields(id, FieldImage, FieldArtifacts)
+	switch t := strings.TrimSpace(c.Template); {
+	case t == "":
+		v.add(id, "config.template", CodeRequired, "template is required")
+	case t != c.Template || len(c.Template) > MaxTemplateIDLength || !utf8.ValidString(c.Template) || strings.Contains(c.Template, "{{"):
+		// Like an llm node's model, the template is fixed when the flow is
+		// saved so the editor can flag one that is no longer published.
+		// 与 llm 节点的模型一样，模板在保存时就是固定的，编辑器才能标出已不再发布的模板。
+		v.add(id, "config.template", CodeInvalidConfig, "template must be a workflow template id of at most %d bytes, not a template", MaxTemplateIDLength)
+	}
+	if len(c.Inputs) > MaxTemplateInputs {
+		v.add(id, "config.inputs", CodeTooMany, "at most %d template inputs are allowed", MaxTemplateInputs)
+		return
+	}
+	names := make([]string, 0, len(c.Inputs))
+	for name := range c.Inputs {
+		names = append(names, name)
+	}
+	slices.Sort(names) // stable issue order across map iteration
+	for _, name := range names {
+		// The name was chosen by the template's publisher and is checked
+		// against the template at run time; here it only has to be a
+		// printable label that is safe to show and to key a field path by.
+		// 输入名由模板发布者选定，运行时再与模板核对；这里只要求它是可以安全显示、
+		// 也可以用作字段路径的可打印标签。
+		if !validTemplateInputName(name) {
+			v.add(id, "config.inputs", CodeInvalidName, "template input names must be printable text of at most %d bytes", MaxTemplateInputNameLength)
+			continue
+		}
+		v.template(id, "config.inputs."+name, c.Inputs[name], false)
+	}
+}
+
+func validTemplateInputName(s string) bool {
+	if s == "" || len(s) > MaxTemplateInputNameLength || !utf8.ValidString(s) || strings.TrimSpace(s) != s {
+		return false
+	}
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f || r == '.' {
+			return false
+		}
+	}
+	return true
 }
 
 // numericOperand rejects a numeric comparison's operand that has no
@@ -898,7 +1079,9 @@ func (v *validator) checkOutputs() {
 			seen[o.Name] = true
 			path = "outputs." + o.Name
 		}
-		v.template(at, path+".ref", o.Ref, true)
+		if t, ok := v.template(at, path+".ref", o.Ref, true); ok {
+			_, v.uses[len(v.uses)-1].whole = t.SoleRef()
+		}
 	}
 }
 
@@ -916,7 +1099,7 @@ func (v *validator) checkReferences(upstream map[string]map[string]bool) {
 			if reported[k] {
 				continue
 			}
-			if code, msg := v.checkRef(u.owner, r, upstream); code != "" {
+			if code, msg := v.checkRef(u.owner, r, u.whole, upstream); code != "" {
 				reported[k] = true
 				v.add(u.owner, u.field, code, "{{%s}} %s", r, msg)
 			}
@@ -924,7 +1107,7 @@ func (v *validator) checkReferences(upstream map[string]map[string]bool) {
 	}
 }
 
-func (v *validator) checkRef(owner string, r Ref, upstream map[string]map[string]bool) (IssueCode, string) {
+func (v *validator) checkRef(owner string, r Ref, whole bool, upstream map[string]map[string]bool) (IssueCode, string) {
 	if r.Scope == InputsScope {
 		if !v.inputs[r.Field] {
 			return CodeUnknownReference, "names an input that is not declared"
@@ -936,6 +1119,9 @@ func (v *validator) checkRef(owner string, r Ref, upstream map[string]map[string
 	}
 	if !v.fields[r.Scope][r.Field] {
 		return CodeUnknownReference, "names a field that node does not produce"
+	}
+	if !whole && IsArtifactField(v.nodeTypes[r.Scope], r.Field) {
+		return CodeArtifactReference, "names an artifact, which only an output can reference, as its whole ref"
 	}
 	if upstream != nil && owner != "" && !upstream[owner][r.Scope] {
 		return CodeNotUpstream, "names a node that is not upstream of this one"

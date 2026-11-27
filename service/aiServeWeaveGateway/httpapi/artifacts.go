@@ -162,10 +162,20 @@ func (h *handlers) listPersistedArtifacts(w http.ResponseWriter, r *http.Request
 // 对象存储配置之前（或被关闭期间）记录的产物，本就没有 StorageKey 可以尝试。
 func (h *handlers) downloadArtifact(w http.ResponseWriter, r *http.Request) {
 	identity, _ := IdentityFrom(r.Context())
-	artifactID := r.PathValue("artifact_id")
-	rec, ok := h.jobs.artifact(artifactID, identity.TenantID)
+	h.serveJobArtifact(w, r, identity.TenantID, r.PathValue("artifact_id"))
+}
+
+// serveJobArtifact streams tenantID's job artifact artifactID, answering an
+// unknown one with 404. It is downloadArtifact's body, shared with the Studio
+// flow-run download, which checks the run's own claim to the artifact first.
+//
+// serveJobArtifact 流式发送 tenantID 的 job 产物 artifactID，未知时答 404。它是
+// downloadArtifact 的主体，与 Studio 编排运行的下载共用；后者先检查该运行确实拥有
+// 这个产物。
+func (h *handlers) serveJobArtifact(w http.ResponseWriter, r *http.Request, tenantID, artifactID string) {
+	rec, ok := h.jobs.artifact(artifactID, tenantID)
 	if !ok {
-		rec, ok = h.recoverArtifactRoute(r.Context(), artifactID, identity.TenantID)
+		rec, ok = h.recoverArtifactRoute(r.Context(), artifactID, tenantID)
 	}
 	if !ok {
 		writeOpenAIError(w, http.StatusNotFound, "invalid_request_error", "artifact_not_found", "no such artifact")

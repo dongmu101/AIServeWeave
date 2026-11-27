@@ -1,3 +1,19 @@
+## 编排第二期节点（2026-11-27）
+
+编排编辑器与运行视图加入「图像生成」与「ComfyUI 模板」两类节点（规格用户故事 51、52、59、68 的前端部分）。本节只记 Studio；`common/flowdef` 与 Gateway 一侧见[根 STATUS](../../STATUS.md#studio-编排第二期节点2026-11-27)。
+
+- **编辑器**：左侧新增「图像生成」「ComfyUI 模板」。
+  - 图像生成：模型下拉来自 `GET /studio/v1/image-models`，仅当 `default_available` 为真时才有「部署默认」；提示词是模板（有「插入变量」）；尺寸可选，按 flowdef 的规则（`宽x高`，每边 1–16384、无前导零）即时标红。
+  - ComfyUI 模板：模板下拉来自 `GET /studio/v1/workflow-templates`；选中后为模板声明的每个输入生成一个模板输入框，标签写明类型、必填、默认值与长度或数值范围，留空则用模板默认值。文件类型的输入只显示说明，必填的文件输入使该节点不能运行。换模板时保留同名输入，其余丢弃；模板没有的输入显示为可移除的黄色条目。
+  - 模型或模板不可用、必填输入未设置、必填文件输入、模板没有的输入，都在节点上标黄，运行前拦下，与已有的 LLM 模型检查并列。点「运行」时会重新读取两份目录，因此页面打开之后被取消发布的模板也能被拦住；目录加载失败时不据此标记任何东西，概览里给出提示。
+  - 产物字段（`image`、`artifacts`）只出现在输出节点结果字段的「插入变量」菜单里，其他节点的菜单不列出。手写引用时（`lib/studio/flow-template.ts` 是 flowdef 模板语法的客户端镜像）在提示词、模板、条件、图像提示词、ComfyUI 输入里引用，或在结果字段里与其他文字混写，会立刻标出 `artifact_reference`，不必等保存；保存时服务端报告的同类问题与之合并，不重复。结果字段整个引用产物是允许的，并有说明。
+- **运行视图**：产物输出是否为图片或文件，由运行所用版本的定义判断（结果字段的 ref 是对 `image_generation` 或 `comfyui_template` 节点产物字段的唯一引用），不看值的形状。`image` 显示为图片，`artifacts` 显示为列表（图片内联缩略图，视频与其他文件为文件名加下载链接），每项和每张图都有「下载」；点图片可放大。节点详情里同样展示。图片加载失败显示「图片无法加载，可能已被清理」。节点失败原因新增 `no_image_produced`、`image_generation_unavailable`、`template_unavailable`、`invalid_input`、`unsupported_input`、`no_capable_node`、`queue_timeout`、`generation_failed`、`out_of_memory`、`job_cancelled`、`artifact_storage_unavailable` 的中文文案；运行中的图像与 ComfyUI 节点不显示逐字输出，只提示「正在生成」。
+- **BFF**：白名单新增 `GET image-models`、`GET workflow-templates`。产物下载走独立路由 `GET /api/studio/runs/{id}/artifacts/{artifactId}`：校验来源、会话与两个 id，对 Gateway 的响应只传递 `Content-Type`、`Content-Length`、`Content-Disposition`，字节不经缓冲直接转发，没有大小上限（最长 15 分钟），并固定加 `X-Content-Type-Options: nosniff`、`Content-Security-Policy: sandbox`、`Cache-Control: private, no-store`；Gateway 没给 `Content-Disposition` 时补 `attachment`，给了 `Content-Encoding` 时不传 `Content-Length`。错误只保留稳定错误码。
+
+验证：lint、typecheck、121 项单元测试（新增模板引用解析、产物值与下载头、两份目录的契约解析、产物字段的引用菜单与即时检查、目录可用性检查、新节点的序列化、白名单）与生产构建通过。用桩控制面与桩 Gateway 加生产构建（`next start`）做了 HTTP 级检查：登录后下载 8 MiB 的桩产物，字节数一致，响应头为上述集合（桩 Gateway 给出的 `Content-Security-Policy: default-src *` 被覆盖为 `sandbox`）；上游 404、非法 id、无会话分别得到 404、404、401；两份目录经白名单转发；运行页与编辑器页服务端渲染成功，运行页的结果里 `image` 渲染为 `<img src="/api/studio/runs/…/artifacts/…">`，`artifacts` 列表为缩略图与下载链接。
+
+未验证：没有在浏览器里走通（本机没有 Playwright 与无头浏览器）：画布上新节点的外观、配置面板的交互、缩略图放大、下载按钮的实际下载；手机宽度与深色主题；未接真实 Gateway、ComfyUI 与对象存储联调，上面的 Gateway 契约是按约定实现的。
+
 ## 编排（2026-11-26）
 
 侧边栏「编排」可用了，覆盖规格用户故事 44–69 中第一期范围内的部分。

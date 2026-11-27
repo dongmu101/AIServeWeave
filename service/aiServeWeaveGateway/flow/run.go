@@ -2,6 +2,7 @@ package flow
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -38,22 +39,23 @@ type run struct {
 	status    []NodeStatus        // "" until the node finishes or is skipped
 	values    []map[string]string // outputs of nodes that succeeded
 	ready     []*planNode         // decided to run, not started yet
-	running   int                 // model calls in flight
+	running   int                 // calls in flight
 	failure   *Step               // the first node failure
 	outputs   map[string]string   // set when the output node ran
 	usage     Usage
 }
 
-// message is what a model call's goroutine sends the coordinator: a piece of
-// reply text, or, once, the final outcome.
+// message is what a call's goroutine sends the coordinator: a piece of reply
+// text, or, once, the final outcome.
 type message struct {
 	node  *planNode
 	delta string
 	final bool
 	step  Step
 	reply ChatReply
+	media MediaReply
 	err   error
-	cause error // context.Cause of the call's context when Chat returned
+	cause error // context.Cause of the call's context when the call returned
 }
 
 func (r *run) execute(parent context.Context) Result {
@@ -83,7 +85,7 @@ func (r *run) execute(parent context.Context) Result {
 			continue
 		}
 		r.running--
-		r.finishLLM(m)
+		r.finishCall(m)
 	}
 
 	res := r.result(started)
@@ -118,8 +120,8 @@ func after(clock runtime.Clock, ctx context.Context, d time.Duration, fire func(
 	}()
 }
 
-// start runs a node that was decided to run. Every node but an llm node
-// finishes on the spot.
+// start runs a node that was decided to run. Every node but those that make a
+// call — llm, image_generation and comfyui_template — finishes on the spot.
 func (r *run) start(n *planNode) {
 	r.send(Event{Type: EventNodeStarted, Node: n.ID})
 	step := Step{Node: n.ID, Type: n.Type, StartedAt: r.clock.Now()}
@@ -167,6 +169,10 @@ func (r *run) start(n *planNode) {
 		r.finish(n, step, NodeSucceeded, "")
 	case flowdef.NodeLLM:
 		r.startLLM(n, step)
+	case flowdef.NodeImage:
+		r.startImage(n, step)
+	case flowdef.NodeComfyUI:
+		r.startTemplate(n, step)
 	}
 }
 
@@ -183,40 +189,85 @@ func (r *run) startLLM(n *planNode, step Step) {
 	call := ChatCall{Model: n.llm.Model, System: system, Prompt: prompt, Temperature: n.llm.Temperature, MaxTokens: n.llm.MaxTokens}
 	step.Model = call.Model
 	step.Inputs = map[string]string{"system": system, "prompt": prompt}
+	r.call(n, step, func(ctx context.Context, m *message) error {
+		var err error
+		m.reply, err = r.p.cfg.Dispatcher.Chat(ctx, call, func(text string) {
+			if text != "" {
+				r.post(message{node: n, delta: text})
+			}
+		})
+		return err
+	})
+}
 
+func (r *run) startImage(n *planNode, step Step) {
+	prompt, ok := r.render(n.tmpl["prompt"])
+	if !ok {
+		r.finish(n, step, NodeFailed, CodeValueTooLarge)
+		return
+	}
+	call := ImageCall{Model: n.image.Model, Prompt: prompt, Size: n.image.Size}
+	step.Model = call.Model
+	step.Inputs = map[string]string{"prompt": prompt}
+	if call.Size != "" {
+		step.Inputs["size"] = call.Size
+	}
+	r.call(n, step, func(ctx context.Context, m *message) error {
+		var err error
+		m.media, err = r.p.cfg.Dispatcher.GenerateImage(ctx, call)
+		return err
+	})
+}
+
+func (r *run) startTemplate(n *planNode, step Step) {
+	call := TemplateCall{Template: n.comfy.Template, Inputs: make(map[string]string, len(n.comfy.Inputs))}
+	total := 0
+	for name := range n.comfy.Inputs {
+		v, ok := r.render(n.tmpl["inputs."+name])
+		if total += len(v); !ok || total > r.p.cfg.MaxValueBytes {
+			r.finish(n, step, NodeFailed, CodeValueTooLarge)
+			return
+		}
+		call.Inputs[name] = v
+	}
+	step.Model = call.Template
+	step.Inputs = call.Inputs
+	r.call(n, step, func(ctx context.Context, m *message) error {
+		var err error
+		m.media, err = r.p.cfg.Dispatcher.RunTemplate(ctx, call)
+		return err
+	})
+}
+
+// call runs do on its own goroutine under the node timeout, as one of the
+// run's calls in flight, and hands its outcome to the coordinator. do fills
+// in the reply on the message it is given.
+func (r *run) call(n *planNode, step Step, do func(ctx context.Context, m *message) error) {
 	ctx, cancel := context.WithCancelCause(r.ctx)
 	after(r.clock, ctx, r.p.cfg.NodeTimeout, func() { cancel(errNodeTimeout) })
 	r.running++
 	go func() {
 		defer cancel(nil)
-		reply, err := r.p.cfg.Dispatcher.Chat(ctx, call, func(text string) {
-			if text != "" {
-				r.post(message{node: n, delta: text})
-			}
-		})
-		r.post(message{node: n, final: true, step: step, reply: reply, err: err, cause: context.Cause(ctx)})
+		m := message{node: n, final: true, step: step}
+		m.err = do(ctx, &m)
+		m.cause = context.Cause(ctx)
+		r.post(m)
 	}()
 }
 
-// finishLLM records a model call's outcome. A call that failed because the
-// run was stopping is cancelled, not failed, so the run's own reason wins.
-func (r *run) finishLLM(m message) {
+// finishCall records a call's outcome. A call that failed because the run was
+// stopping is cancelled, not failed, so the run's own reason wins.
+func (r *run) finishCall(m message) {
 	n, step := m.node, m.step
 	step.Usage = m.reply.Usage
 	r.usage.add(m.reply.Usage)
 	switch {
 	case m.err == nil:
-		text := truncate(m.reply.Text, r.p.cfg.MaxValueBytes)
-		step.Outputs = map[string]string{flowdef.FieldText: text}
-		if fields := n.llm.JSONFields; len(fields) > 0 {
-			values, ok := parseJSONFields(text, fields, r.p.cfg.MaxValueBytes)
-			if !ok {
-				r.finish(n, step, NodeFailed, CodeInvalidJSONOutput)
-				return
-			}
-			for k, v := range values {
-				step.Outputs[k] = v
-			}
+		outputs, code := r.callOutputs(n, m)
+		step.Outputs = outputs
+		if code != "" {
+			r.finish(n, step, NodeFailed, code)
+			return
 		}
 		r.finish(n, step, NodeSucceeded, "")
 	case r.ctx.Err() != nil:
@@ -231,6 +282,51 @@ func (r *run) finishLLM(m message) {
 		}
 		r.finish(n, step, NodeFailed, code)
 	}
+}
+
+// callOutputs turns a successful call's reply into the node's outputs, or
+// names why the reply does not do.
+func (r *run) callOutputs(n *planNode, m message) (map[string]string, string) {
+	switch n.Type {
+	case flowdef.NodeLLM:
+		text := truncate(m.reply.Text, r.p.cfg.MaxValueBytes)
+		outputs := map[string]string{flowdef.FieldText: text}
+		if fields := n.llm.JSONFields; len(fields) > 0 {
+			values, ok := parseJSONFields(text, fields, r.p.cfg.MaxValueBytes)
+			if !ok {
+				return outputs, CodeInvalidJSONOutput
+			}
+			for k, v := range values {
+				outputs[k] = v
+			}
+		}
+		return outputs, ""
+	case flowdef.NodeImage:
+		image := firstImage(m.media.Artifacts)
+		if image == "" {
+			return nil, CodeNoImage
+		}
+		return map[string]string{flowdef.FieldImage: image}, ""
+	default: // flowdef.NodeComfyUI
+		list := m.media.Artifacts
+		if list == nil {
+			list = []Artifact{}
+		}
+		encoded, err := json.Marshal(list)
+		if err != nil || len(encoded) > r.p.cfg.MaxValueBytes {
+			return nil, CodeValueTooLarge
+		}
+		return map[string]string{flowdef.FieldImage: firstImage(list), flowdef.FieldArtifacts: string(encoded)}, ""
+	}
+}
+
+func firstImage(list []Artifact) string {
+	for _, a := range list {
+		if a.Kind == ArtifactImage && a.ID != "" {
+			return a.ID
+		}
+	}
+	return ""
 }
 
 // finish records a node's end and, if it succeeded, settles its outgoing

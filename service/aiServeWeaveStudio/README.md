@@ -16,6 +16,7 @@ Studio 是面向租户成员的 AI 工作台：与平台上的模型对话，以
 - 发送不走白名单转发，而是 `POST /api/studio/conversations/{id}/stream`：鉴权后转发到 Gateway `POST /studio/v1/conversations/{id}/messages`，并把 Gateway 的 SSE 字节原样转回浏览器。翻译成 Vercel AI SDK UI 消息流的工作在浏览器里完成（`lib/studio/chat-transport.ts` → `gateway-stream.ts` → `stream-translate.ts`），服务端不再逐个 token 解析。浏览器收到的只是 Gateway 帧的内容：用户自己的会话与回答，以及固定文案的错误码，不含任何响应头或令牌。对话与消息由 Gateway 存在控制面，Studio 不存储。
 - Gateway 拒绝会话（401）时，页面经 `/api/session/expired` 清掉失效的 Cookie 再去登录。
 - 编排运行的事件流走 `GET /api/studio/runs/{id}/events`：鉴权后转发 Gateway `GET /studio/v1/runs/{id}/events`，SSE 字节原样转回，由浏览器解析（`lib/studio/flow-run.ts`）。关闭页面只是停止观察，运行仍在 Gateway 上继续。
+- 运行产物（生成的图片与文件）走 `GET /api/studio/runs/{id}/artifacts/{artifactId}`：鉴权并校验两个 id 后转发 Gateway `GET /studio/v1/runs/{id}/artifacts/{artifact_id}`，字节不经缓冲、没有大小上限，只传递类型、长度与 `Content-Disposition`，并固定加 `nosniff`、`Content-Security-Policy: sandbox`、`Cache-Control: private, no-store`。图像模型与工作流模板目录（`GET image-models`、`GET workflow-templates`）走白名单转发。
 - 编排与运行的其他请求走同一个白名单转发。保存编排和启动运行的请求体上限分别放宽到 1 MiB + 64 KiB 和 2 MiB。被拒绝时，问题列表只转发节点、字段与错误码，供编辑器在画布上定位。
 
 ## 本地运行

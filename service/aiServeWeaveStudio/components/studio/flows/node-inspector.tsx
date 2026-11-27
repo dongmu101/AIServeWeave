@@ -8,9 +8,14 @@ import { NODE_KIND } from "@/components/studio/flows/flow-node";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import type { StudioModel } from "@/lib/studio/contract";
+import type { FlowCatalog, ImageModelCatalog, TemplateInput, TemplateInputType, WorkflowTemplate } from "@/lib/studio/flow-catalog";
+import { artifactOutputs } from "@/lib/studio/artifacts";
 import {
+  comfyConfig,
   conditionConfig,
+  imageConfig,
   isIdentifier,
+  isImageSize,
   llmConfig,
   OPERATORS,
   referencesFor,
@@ -40,21 +45,29 @@ export function NodeInspector({
   def,
   nodeId,
   models,
+  catalog,
   issues,
+  warnings,
   onChange,
   onDelete,
 }: {
   def: FlowDefinition;
   nodeId: string;
   models: StudioModel[];
+  catalog: FlowCatalog;
   issues: FlowIssue[];
+  /** why the node cannot run now, such as an unavailable model or template
+   * 节点当前无法运行的原因，例如不可用的模型或模板 */
+  warnings: FlowIssue[];
   onChange: (def: FlowDefinition) => void;
   onDelete: (id: string) => void;
 }) {
   const node = def.nodes.find((n) => n.id === nodeId);
   if (!node) return null;
   const kind = NODE_KIND[node.type];
-  const references = referencesFor(def, node.id);
+  // Only an output may reference an artifact, as the whole of a result field.
+  // 只有输出节点可以引用产物，且要作为结果字段的全部内容。
+  const references = referencesFor(def, node.id, node.type === "output");
   const config = (next: Record<string, unknown>) => onChange(setConfig(def, node.id, next));
   const invalid = (field: string) => issues.some((issue) => issue.field === field || issue.field.startsWith(`${field}.`));
 
@@ -81,16 +94,35 @@ export function NodeInspector({
         </ul>
       ) : null}
 
+      {warnings.length > 0 ? (
+        <ul className="grid gap-1 rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300" aria-label="这个节点暂时无法运行">
+          {warnings.map((warning, i) => (
+            <li key={i} className="flex items-start gap-1.5">
+              <TriangleAlertIcon className="mt-px size-3.5 shrink-0" />
+              {issueText(warning)}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
       <Field label="显示名称">
         <input className={fieldClass} value={node.label ?? ""} maxLength={100} placeholder={kind.label}
           onChange={(event) => onChange(updateNode(def, node.id, (n) => ({ ...n, label: event.target.value })))} />
       </Field>
 
       {node.type === "input" ? <InputsEditor inputs={def.inputs} issues={issues} onChange={(inputs) => onChange({ ...def, inputs })} /> : null}
-      {node.type === "output" ? <OutputsEditor outputs={def.outputs} references={references} issues={issues} onChange={(outputs) => onChange({ ...def, outputs })} /> : null}
+      {node.type === "output" ? <OutputsEditor def={def} outputs={def.outputs} references={references} issues={issues} onChange={(outputs) => onChange({ ...def, outputs })} /> : null}
 
       {node.type === "llm" ? (
         <LLMForm config={llmConfig(node)} models={models} references={references} invalid={invalid} onChange={config} />
+      ) : null}
+
+      {node.type === "image_generation" ? (
+        <ImageForm config={imageConfig(node)} catalog={catalog.imageModels} references={references} invalid={invalid} onChange={config} />
+      ) : null}
+
+      {node.type === "comfyui_template" ? (
+        <ComfyForm config={comfyConfig(node)} templates={catalog.templates} references={references} invalid={invalid} onChange={config} />
       ) : null}
 
       {node.type === "template" ? (
@@ -287,6 +319,183 @@ function JSONFieldRow({ field, invalid, onChange, onRemove }: { field: JSONField
   );
 }
 
+const TEMPLATE_TYPE_LABEL: Record<TemplateInputType, string> = { string: "文本", integer: "整数", number: "数字", boolean: "是/否", file: "文件" };
+
+function ImageForm({
+  config,
+  catalog,
+  references,
+  invalid,
+  onChange,
+}: {
+  config: ReturnType<typeof imageConfig>;
+  catalog: ImageModelCatalog | null;
+  references: Reference[];
+  invalid: (field: string) => boolean;
+  onChange: (config: Record<string, unknown>) => void;
+}) {
+  const set = (patch: Record<string, unknown>) => {
+    const next: Record<string, unknown> = { ...config, ...patch };
+    for (const key of Object.keys(next)) if (next[key] === undefined) delete next[key];
+    onChange(next);
+  };
+  const known = catalog?.models.some((m) => m.id === config.model) ?? true;
+  const noDefault = catalog !== null && !catalog.defaultAvailable;
+  const gone = config.model !== "" && !known;
+  const sizeBad = config.size !== undefined && !isImageSize(config.size);
+  return (
+    <>
+      <Field label="图像模型">
+        <select className={fieldClass} value={config.model} aria-invalid={invalid("config.model") || gone || (config.model === "" && noDefault) || undefined}
+          onChange={(event) => set({ model: event.target.value })}>
+          {catalog === null ? (
+            <option value={config.model}>{config.model || "部署默认"}</option>
+          ) : (
+            <>
+              {catalog.defaultAvailable ? <option value="">部署默认</option> : <option value="" disabled>请选择模型</option>}
+              {gone ? <option value={config.model}>{config.model}（当前不可用）</option> : null}
+              {catalog.models.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.name}
+                </option>
+              ))}
+            </>
+          )}
+        </select>
+      </Field>
+      {gone ? (
+        <p className="flex items-center gap-1.5 text-xs text-amber-600">
+          <TriangleAlertIcon className="size-3.5" />
+          这个图像模型当前不可用，运行前请换一个。
+        </p>
+      ) : null}
+      {config.model === "" && noDefault ? (
+        <p className="flex items-center gap-1.5 text-xs text-amber-600">
+          <TriangleAlertIcon className="size-3.5" />
+          部署没有默认的图像生成，运行前请选择一个图像模型。
+        </p>
+      ) : null}
+      <TemplateField label="提示词" rows={6} value={config.prompt} references={references} invalid={invalid("config.prompt")}
+        placeholder="例如：一只在雨中打伞的猫，{{inputs.style}} 风格" onChange={(prompt) => set({ prompt })} />
+      <Field label="尺寸（可选）" hint="宽x高，每边 1–16384，例如 1024x1024；留空由模型决定">
+        <input className={cn(fieldClass, "font-mono")} value={config.size ?? ""} placeholder="1024x1024" aria-invalid={invalid("config.size") || sizeBad || undefined}
+          onChange={(event) => set({ size: event.target.value.trim() === "" ? undefined : event.target.value.trim() })} />
+      </Field>
+      <p className="text-xs text-muted-foreground">产出的图片是 {"{{节点ID.image}}"}，只能在输出节点的结果字段里整个引用，不能放进别的节点。</p>
+    </>
+  );
+}
+
+/** inputHint is the one line of facts about a workflow template input.
+ * inputHint 是关于工作流模板某个输入的一行说明。 */
+function inputHint(input: TemplateInput): string {
+  const parts: string[] = [TEMPLATE_TYPE_LABEL[input.type]];
+  parts.push(input.required ? "必填" : "选填");
+  if (input.default !== undefined) parts.push(`默认 ${String(input.default)}`);
+  if (input.maxLength !== undefined) parts.push(`最长 ${input.maxLength} 字符`);
+  if (input.min !== undefined || input.max !== undefined) parts.push(`范围 ${input.min ?? "…"} – ${input.max ?? "…"}`);
+  return parts.join(" · ");
+}
+
+function ComfyForm({
+  config,
+  templates,
+  references,
+  invalid,
+  onChange,
+}: {
+  config: ReturnType<typeof comfyConfig>;
+  templates: WorkflowTemplate[] | null;
+  references: Reference[];
+  invalid: (field: string) => boolean;
+  onChange: (config: Record<string, unknown>) => void;
+}) {
+  const template = templates?.find((t) => t.id === config.template);
+  const gone = templates !== null && config.template !== "" && !template;
+  const declared = new Set(template?.inputs.map((input) => input.name));
+  const stale = template ? Object.keys(config.inputs).filter((name) => !declared.has(name)) : [];
+  const setInput = (name: string, value: string) => {
+    const inputs = { ...config.inputs };
+    if (value === "") delete inputs[name];
+    else inputs[name] = value;
+    onChange({ ...config, inputs });
+  };
+  function pick(id: string) {
+    // Inputs the new template also declares keep their values; the rest would
+    // only be refused at run time.
+    // 新模板同样声明的输入保留取值；其余的只会在运行时被拒绝。
+    const next = templates?.find((t) => t.id === id);
+    const keep = new Set(next?.inputs.map((input) => input.name));
+    onChange({ template: id, inputs: Object.fromEntries(Object.entries(config.inputs).filter(([name]) => keep.has(name))) });
+  }
+  return (
+    <>
+      <Field label="工作流模板">
+        <select className={fieldClass} value={config.template} aria-invalid={invalid("config.template") || gone || undefined} onChange={(event) => pick(event.target.value)}>
+          {templates === null ? <option value={config.template}>{config.template || "（模板列表加载失败）"}</option> : null}
+          {templates !== null && config.template === "" ? <option value="">请选择模板</option> : null}
+          {gone ? <option value={config.template}>{config.template}（当前不可用）</option> : null}
+          {templates?.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.id}
+            </option>
+          ))}
+        </select>
+        {template?.description ? <span className="text-xs text-muted-foreground/80">{template.description}</span> : null}
+      </Field>
+      {gone ? (
+        <p className="flex items-center gap-1.5 text-xs text-amber-600">
+          <TriangleAlertIcon className="size-3.5" />
+          这个模板当前不可用（未发布或对你不可见），运行前请换一个。
+        </p>
+      ) : null}
+      {template ? (
+        <div className="grid gap-3">
+          <div>
+            <p className="text-xs font-medium text-muted-foreground">模板输入</p>
+            <p className="mt-0.5 text-xs text-muted-foreground/80">留空则使用模板自己的默认值；可以用「插入变量」引用输入或上游结果。</p>
+          </div>
+          {template.inputs.length === 0 ? <p className="text-xs text-muted-foreground">这个模板没有输入。</p> : null}
+          {template.inputs.map((input) =>
+            input.type === "file" ? (
+              <div key={input.name} className={cn("grid gap-1 rounded-lg border border-dashed p-3 text-xs", input.required && "border-amber-500")}>
+                <p className="font-mono">{input.name}</p>
+                <p className="text-muted-foreground">{inputHint(input)}</p>
+                <p className={input.required ? "text-amber-600" : "text-muted-foreground"}>
+                  {input.required ? "编排暂时无法提供文件，这个模板不能在编排里运行。" : "编排暂时无法提供文件，这个输入会使用模板的默认值。"}
+                </p>
+              </div>
+            ) : (
+              <TemplateField key={input.name} label={`${input.name}（${inputHint(input)}）`} rows={input.type === "string" ? 3 : 1} single={input.type !== "string"}
+                value={config.inputs[input.name] ?? ""} references={references} invalid={invalid(`config.inputs.${input.name}`)}
+                placeholder={input.default !== undefined ? String(input.default) : undefined} onChange={(value) => setInput(input.name, value)} />
+            )
+          )}
+          {stale.map((name) => (
+            <div key={name} className="flex items-center gap-2 rounded-lg border border-amber-500 p-2 text-xs">
+              <TriangleAlertIcon className="size-3.5 shrink-0 text-amber-600" />
+              <span className="min-w-0 flex-1 truncate">
+                <span className="font-mono">{name}</span>：模板没有这个输入
+              </span>
+              <Button variant="ghost" size="icon-sm" aria-label={`移除输入 ${name}`} onClick={() => setInput(name, "")}>
+                <Trash2Icon />
+              </Button>
+            </div>
+          ))}
+          {template.outputs.length > 0 ? (
+            <p className="text-xs text-muted-foreground">模板产出：{template.outputs.map((o) => o.name).join("、")}。</p>
+          ) : null}
+        </div>
+      ) : templates !== null && config.template === "" ? (
+        <p className="text-xs text-muted-foreground">选择模板后，在这里为它的输入赋值。</p>
+      ) : null}
+      <p className="text-xs text-muted-foreground">
+        第一张图片是 {"{{节点ID.image}}"}，全部产物是 {"{{节点ID.artifacts}}"}；它们只能在输出节点的结果字段里整个引用。
+      </p>
+    </>
+  );
+}
+
 function ConditionForm({
   node,
   references,
@@ -381,13 +590,14 @@ function InputsEditor({ inputs, issues, onChange }: { inputs: FlowInput[]; issue
   );
 }
 
-function OutputsEditor({ outputs, references, issues, onChange }: { outputs: FlowOutput[]; references: Reference[]; issues: FlowIssue[]; onChange: (outputs: FlowOutput[]) => void }) {
+function OutputsEditor({ def, outputs, references, issues, onChange }: { def: FlowDefinition; outputs: FlowOutput[]; references: Reference[]; issues: FlowIssue[]; onChange: (outputs: FlowOutput[]) => void }) {
+  const artifacts = artifactOutputs(def);
   const update = (i: number, next: FlowOutput) => onChange(outputs.map((output, j) => (j === i ? next : output)));
   return (
     <div className="grid gap-3">
       <div>
         <p className="text-xs font-medium text-muted-foreground">结果字段</p>
-        <p className="mt-0.5 text-xs text-muted-foreground/80">运行结束后展示的内容，通常引用某个上游节点的结果。</p>
+        <p className="mt-0.5 text-xs text-muted-foreground/80">运行结束后展示的内容，通常引用某个上游节点的结果。图片与文件结果只能在这里整个引用。</p>
       </div>
       {outputs.map((output, i) => {
         const invalid = issues.some((issue) => issue.field.startsWith(`outputs.${output.name}`) || issue.field.startsWith(`outputs[${i}]`));
@@ -402,6 +612,11 @@ function OutputsEditor({ outputs, references, issues, onChange }: { outputs: Flo
             </div>
             <TemplateField label="取值" single value={output.ref} references={references} invalid={invalid} placeholder="{{draft.text}}"
               onChange={(ref) => update(i, { ...output, ref })} />
+            {artifacts[output.name] ? (
+              <p className="text-xs text-muted-foreground">
+                {artifacts[output.name] === "image" ? "这是一张图片" : "这是一组产物文件"}，运行结果里会直接展示并可下载。需要整个引用，不能和其他文字混写。
+              </p>
+            ) : null}
           </div>
         );
       })}

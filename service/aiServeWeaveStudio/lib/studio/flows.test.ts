@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { ContractError } from "./contract.ts";
-import { flowErrorText, issueText, parseFlow, parseFlowPage, parseIssues, parseRun, parseRunPage, runErrorText, statusText } from "./flows.ts";
+import { flowErrorText, issueText, parseDefinition, parseFlow, parseFlowPage, parseIssues, parseRun, parseRunPage, runErrorText, statusText } from "./flows.ts";
 
 const definition = {
   inputs: [{ name: "topic", label: "主题", type: "text", required: true }],
@@ -76,4 +76,40 @@ test("issue, status and error wording is Chinese and names the field", () => {
   assert.equal(runErrorText("invalid_json_output"), "模型没有按要求返回 JSON。");
   assert.equal(flowErrorText("run_limit", () => "fallback"), "同时进行的运行太多，请等其中一个结束。");
   assert.equal(flowErrorText("rate_limited", () => "fallback"), "fallback");
+});
+
+test("parseDefinition reads image_generation and comfyui_template nodes", () => {
+  const def = parseDefinition({
+    ...definition,
+    nodes: [
+      ...definition.nodes,
+      { id: "img", type: "image_generation", config: { prompt: "p", size: "512x512" }, position: { x: 1, y: 2 } },
+      { id: "flux", type: "comfyui_template", config: { template: "t", inputs: { prompt: "x" } }, position: { x: 3, y: 4 } },
+    ],
+  });
+  assert.deepEqual(def.nodes.slice(-2).map((n) => n.type), ["image_generation", "comfyui_template"]);
+  assert.deepEqual(def.nodes.at(-1)?.config, { template: "t", inputs: { prompt: "x" } });
+  assert.throws(() => parseDefinition({ ...definition, nodes: [{ id: "x", type: "video_generation", position: {} }] }), ContractError);
+});
+
+test("issues of the second-phase nodes read in Chinese and name their field", () => {
+  assert.equal(issueText({ node: "end", field: "outputs.cover.ref", code: "artifact_reference" }), "输出「cover」：图片或文件结果只能整个作为结果字段的取值，不能放进提示词、模板或其他内容里。");
+  assert.equal(issueText({ node: "n", field: "config.prompt", code: "artifact_reference" }), "提示词：图片或文件结果只能整个作为结果字段的取值，不能放进提示词、模板或其他内容里。");
+  assert.equal(issueText({ node: "n", field: "config.inputs.prompt", code: "invalid_input" }), "模板输入「prompt」：这个输入的值不符合模板的要求，或模板没有这个输入。");
+  assert.equal(issueText({ node: "n", field: "config.size", code: "invalid_config" }), "尺寸：配置不正确。");
+  assert.equal(issueText({ node: "n", field: "config.template", code: "template_unavailable" }), "模板：所选工作流模板当前不可用（未发布或对你不可见），请换一个。");
+  assert.equal(issueText({ node: "n", field: "config.model", code: "image_generation_unavailable" }), "模型：部署没有默认的图像生成，请选择一个图像模型。");
+  assert.equal(issueText({ node: "n", field: "config.inputs.ref", code: "unsupported_input" }), "模板输入「ref」：这个输入需要文件，编排暂时无法提供，所以这个模板还不能在编排里运行。");
+});
+
+test("every new node failure code has its own Chinese wording", () => {
+  const generic = runErrorText("never_heard_of_it");
+  for (const code of [
+    "no_image_produced", "image_generation_unavailable", "model_unavailable", "template_unavailable", "invalid_input", "unsupported_input", "no_capable_node",
+    "queue_timeout", "generation_failed", "out_of_memory", "job_cancelled", "artifact_storage_unavailable", "rate_limited", "upstream_error", "node_timeout",
+  ]) {
+    const text = runErrorText(code);
+    assert.notEqual(text, generic, code);
+    assert.match(text, /[\u4e00-\u9fff]/, code);
+  }
 });

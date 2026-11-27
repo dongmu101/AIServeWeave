@@ -40,6 +40,9 @@ func (h *handlers) mountStudioFlows(mux *http.ServeMux, st StudioFlowStore, runn
 	mux.HandleFunc("GET /studio/v1/runs/{id}", s.getRun)
 	mux.HandleFunc("GET /studio/v1/runs/{id}/events", s.events)
 	mux.HandleFunc("POST /studio/v1/runs/{id}/cancel", s.cancelRun)
+	mux.HandleFunc("GET /studio/v1/runs/{id}/artifacts/{artifact_id}", s.artifact)
+	mux.HandleFunc("GET /studio/v1/image-models", s.imageModels)
+	mux.HandleFunc("GET /studio/v1/workflow-templates", s.workflowTemplates)
 }
 
 type studioFlows struct {
@@ -412,13 +415,27 @@ func (s *studioFlows) unavailableModels(ctx context.Context, def flowdef.Definit
 	for _, m := range s.h.sched.Models(ctx) {
 		offered[m.ID] = true
 	}
+	identity, _ := IdentityFrom(ctx)
 	var issues []flowdef.Issue
 	for _, n := range def.Nodes {
-		if n.Type != flowdef.NodeLLM {
-			continue
-		}
-		if c, err := n.LLM(); err == nil && !offered[c.Model] {
-			issues = append(issues, flowdef.Issue{Node: n.ID, Field: "config.model", Code: "model_unavailable", Message: "the model is not available"})
+		switch n.Type {
+		case flowdef.NodeLLM:
+			if c, err := n.LLM(); err == nil && !offered[c.Model] {
+				issues = append(issues, flowdef.Issue{Node: n.ID, Field: "config.model", Code: "model_unavailable", Message: "the model is not available"})
+			}
+		case flowdef.NodeImage:
+			c, err := n.Image()
+			switch {
+			case err != nil:
+			case c.Model != "" && len(s.h.sched.ImageCandidates(ctx, c.Model)) == 0:
+				issues = append(issues, flowdef.Issue{Node: n.ID, Field: "config.model", Code: codeModelUnavailable, Message: "the image model is not available"})
+			case c.Model == "" && !s.h.defaultImagesAvailable():
+				issues = append(issues, flowdef.Issue{Node: n.ID, Field: "config.model", Code: codeImagesUnavailable, Message: "this deployment has no default image generation"})
+			}
+		case flowdef.NodeComfyUI:
+			if c, err := n.ComfyUI(); err == nil && !s.h.templateVisible(c.Template, identity.TenantID) {
+				issues = append(issues, flowdef.Issue{Node: n.ID, Field: "config.template", Code: codeTemplateUnavailable, Message: "the workflow template is not available"})
+			}
 		}
 	}
 	return issues

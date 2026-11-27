@@ -131,6 +131,26 @@ func (t Template) Refs() []Ref {
 	return refs
 }
 
+// SoleRef reports whether the template is exactly one reference, with
+// nothing but white space around it, and returns that reference.
+//
+// SoleRef 报告模板是否恰好是一个引用、两侧只有空白，并返回该引用。
+func (t Template) SoleRef() (Ref, bool) {
+	var ref *Ref
+	for _, s := range t.segments {
+		switch {
+		case s.ref != nil && ref == nil:
+			ref = s.ref
+		case s.ref != nil, strings.TrimSpace(s.literal) != "":
+			return Ref{}, false
+		}
+	}
+	if ref == nil {
+		return Ref{}, false
+	}
+	return *ref, true
+}
+
 // Render substitutes every reference with value(ref) and returns the result.
 //
 // Render 用 value(ref) 替换每个引用并返回结果。
