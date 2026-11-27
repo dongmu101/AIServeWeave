@@ -201,7 +201,7 @@ func TestValidate(t *testing.T) {
 		// Inputs and outputs.
 		{"invalid input name", func(d *Definition) { d.Inputs[0].Name = "my topic" }, []want{{"start", CodeInvalidName}, {"draft", CodeUnknownReference}}},
 		{"duplicate input", func(d *Definition) { d.Inputs = append(d.Inputs, Input{Name: "topic", Type: TypeText}) }, []want{{"start", CodeDuplicateName}}},
-		{"input of unknown type", func(d *Definition) { d.Inputs[0].Type = "image" }, []want{{"start", CodeInvalidType}}},
+		{"input of unknown type", func(d *Definition) { d.Inputs[0].Type = "video" }, []want{{"start", CodeInvalidType}}},
 		{"input default of the wrong type", func(d *Definition) { d.Inputs[0].Default = json.RawMessage(`42`) }, []want{{"start", CodeInvalidDefault}}},
 		{"number and boolean defaults of the wrong type", func(d *Definition) {
 			d.Inputs = append(d.Inputs, Input{Name: "n", Type: TypeNumber, Default: json.RawMessage(`"3"`)},

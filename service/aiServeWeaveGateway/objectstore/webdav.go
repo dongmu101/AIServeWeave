@@ -141,3 +141,60 @@ func (b *WebDAV) Delete(ctx context.Context, key string) error {
 	}
 	return nil
 }
+
+// List walks the collection prefix names, one PROPFIND per collection. See
+// the Backend doc comment. Unlike Local, Delete leaves emptied collections in
+// place: Put streams its body, so it could not be retried if a collection it
+// had just created were pruned under it.
+//
+// List 遍历 prefix 指向的集合，每个集合一次 PROPFIND。见 Backend 的文档注释。与
+// Local 不同，Delete 会留下变空的集合：Put 流式发送 body，如果它刚创建的集合被
+// 清掉，这次 Put 无法重试。
+func (b *WebDAV) List(ctx context.Context, prefix string, fn func(ObjectEntry) error) error {
+	if err := validateKey(prefix); err != nil {
+		return err
+	}
+	// A prefix that names an object, not a collection, has nothing under it;
+	// servers refuse a PROPFIND listing of an object rather than say so.
+	// 指向对象而不是集合的前缀之下什么也没有；服务端会拒绝对对象做列举的 PROPFIND，
+	// 而不是如实说明。
+	info, err := b.client.Stat(b.fullPath(prefix))
+	if err != nil {
+		if gowebdav.IsErrNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("objectstore: webdav list %q: %s", prefix, b.redact(err.Error()))
+	}
+	if !info.IsDir() {
+		return nil
+	}
+	return b.walk(ctx, prefix, fn)
+}
+
+func (b *WebDAV) walk(ctx context.Context, dir string, fn func(ObjectEntry) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	entries, err := b.client.ReadDir(b.fullPath(dir))
+	if err != nil {
+		if gowebdav.IsErrNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("objectstore: webdav list %q: %s", dir, b.redact(err.Error()))
+	}
+	for _, e := range entries {
+		key := dir + "/" + e.Name()
+		if validateKey(key) != nil {
+			continue
+		}
+		if e.IsDir() {
+			err = b.walk(ctx, key, fn)
+		} else {
+			err = fn(ObjectEntry{Key: key, Size: e.Size(), ModTime: e.ModTime()})
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}

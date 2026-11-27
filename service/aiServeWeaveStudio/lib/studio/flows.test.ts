@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { ContractError } from "./contract.ts";
-import { flowErrorText, issueText, parseDefinition, parseFlow, parseFlowPage, parseIssues, parseRun, parseRunPage, runErrorText, statusText } from "./flows.ts";
+import { flowErrorText, isFileInput, issueText, parseDefinition, parseFlow, parseFlowPage, parseIssues, parseRun, parseRunPage, runErrorText, statusText } from "./flows.ts";
 
 const definition = {
   inputs: [{ name: "topic", label: "主题", type: "text", required: true }],
@@ -93,13 +93,59 @@ test("parseDefinition reads image_generation and comfyui_template nodes", () => 
 });
 
 test("issues of the second-phase nodes read in Chinese and name their field", () => {
-  assert.equal(issueText({ node: "end", field: "outputs.cover.ref", code: "artifact_reference" }), "输出「cover」：图片或文件结果只能整个作为结果字段的取值，不能放进提示词、模板或其他内容里。");
-  assert.equal(issueText({ node: "n", field: "config.prompt", code: "artifact_reference" }), "提示词：图片或文件结果只能整个作为结果字段的取值，不能放进提示词、模板或其他内容里。");
-  assert.equal(issueText({ node: "n", field: "config.inputs.prompt", code: "invalid_input" }), "模板输入「prompt」：这个输入的值不符合模板的要求，或模板没有这个输入。");
+  const reference = "图片或文件只能整个作为结果字段的取值，或整个填入 ComfyUI 模板的文件型输入（ComfyUI 的 artifacts 不行），不能放进提示词、模板、条件，也不能与其他文字混写。";
+  assert.equal(issueText({ node: "end", field: "outputs.cover.ref", code: "artifact_reference" }), `输出「cover」：${reference}`);
+  assert.equal(issueText({ node: "n", field: "config.prompt", code: "artifact_reference" }), `提示词：${reference}`);
+  assert.equal(issueText({ node: "n", field: "config.inputs.ref", code: "artifact_reference" }), `模板输入「ref」：${reference}`);
+  assert.match(issueText({ node: "n", field: "config.inputs.prompt", code: "invalid_input" }), /^模板输入「prompt」：.*文本输入不能绑定文件、文件输入只能选文件来源/);
   assert.equal(issueText({ node: "n", field: "config.size", code: "invalid_config" }), "尺寸：配置不正确。");
   assert.equal(issueText({ node: "n", field: "config.template", code: "template_unavailable" }), "模板：所选工作流模板当前不可用（未发布或对你不可见），请换一个。");
   assert.equal(issueText({ node: "n", field: "config.model", code: "image_generation_unavailable" }), "模型：部署没有默认的图像生成，请选择一个图像模型。");
-  assert.equal(issueText({ node: "n", field: "config.inputs.ref", code: "unsupported_input" }), "模板输入「ref」：这个输入需要文件，编排暂时无法提供，所以这个模板还不能在编排里运行。");
+});
+
+test("image and file inputs parse without a default", () => {
+  const def = parseDefinition({
+    ...definition,
+    inputs: [
+      { name: "photo", type: "image", required: true, default: "ignored" },
+      { name: "doc", label: "文档", type: "file", required: false },
+      { name: "topic", type: "text", required: false, default: "x" },
+    ],
+  });
+  assert.deepEqual(def.inputs, [
+    { name: "photo", type: "image", required: true },
+    { name: "doc", label: "文档", type: "file", required: false },
+    { name: "topic", type: "text", required: false, default: "x" },
+  ]);
+  assert.deepEqual(def.inputs.map(isFileInput), [true, true, false]);
+  assert.throws(() => parseDefinition({ ...definition, inputs: [{ name: "x", type: "video", required: false }] }), ContractError);
+});
+
+test("the issues of a refused file input read in Chinese", () => {
+  const text = (code: string) => issueText({ node: "", field: "inputs.photo", code });
+  assert.match(text("unsupported_file_type"), /^输入「photo」：文件类型不受支持.*png、jpg、jpeg、webp、gif、bmp/);
+  assert.match(text("not_found"), /^输入「photo」：上次运行的这个文件已不存在或已过保留期/);
+  assert.match(text("artifact_storage_unavailable"), /^输入「photo」：部署没有配置文件存储/);
+  assert.match(text("unknown_input"), /多出了没有对应输入的文件/);
+  assert.match(text("invalid_value"), /不能同时上传新文件又沿用上次的文件/);
+  assert.match(text("required"), /必填/);
+  assert.match(issueText({ node: "", field: "inputs[0].default", code: "invalid_default" }), /图片和文件输入不能设默认值/);
+});
+
+test("a stored file that is gone fails a node with its own wording; the old unsupported_input stays readable", () => {
+  const generic = runErrorText("never_heard_of_it");
+  assert.match(runErrorText("not_found"), /已不存在，可能超过了保留期被清理/);
+  assert.match(runErrorText("invalid_input"), /文本输入绑了文件、文件输入绑了文本、必填的文件没有选/);
+  assert.notEqual(runErrorText("unsupported_input"), generic);
+  assert.match(runErrorText("unsupported_input"), /编排暂时无法提供/);
+});
+
+test("refused run starts that are not about one input read in Chinese", () => {
+  const fallback = () => "fallback";
+  assert.match(flowErrorText("too_large", fallback), /换小一点的文件.*200 MiB/);
+  assert.equal(flowErrorText("body_too_large", fallback), flowErrorText("too_large", fallback));
+  assert.match(flowErrorText("storage_unavailable", fallback), /上传文件的存储暂不可用/);
+  assert.equal(flowErrorText("invalid_inputs", fallback), "输入值有误，请按提示修改。");
 });
 
 test("every new node failure code has its own Chinese wording", () => {

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { FLOW_BODY_BYTES, RUN_BODY_BYTES, resolveStudioRoute } from "./upstream-routes.ts";
+import { FLOW_BODY_BYTES, resolveStudioRoute } from "./upstream-routes.ts";
 
 const none = new URLSearchParams();
 
@@ -39,10 +39,9 @@ test("sending is not on the forward list: it has its own streaming route", () =>
   assert.equal(resolveStudioRoute("POST", ["conversations", "cnv_1", "messages"], none), null);
 });
 
-test("flow and run routes are allowed, with room for a definition and input values", () => {
+test("flow and run routes are allowed, with room for a definition", () => {
   assert.deepEqual(resolveStudioRoute("POST", ["flows"], none), { method: "POST", path: "/studio/v1/flows", search: "", maxBody: FLOW_BODY_BYTES });
   assert.equal(resolveStudioRoute("PATCH", ["flows", "flw_1"], none)?.maxBody, FLOW_BODY_BYTES);
-  assert.equal(resolveStudioRoute("POST", ["flows", "flw_1", "runs"], none)?.maxBody, RUN_BODY_BYTES);
   assert.equal(resolveStudioRoute("GET", ["flows", "flw_1"], none)?.maxBody, undefined);
   assert.equal(resolveStudioRoute("GET", ["flows", "flw_1", "versions", "3"], none)?.path, "/studio/v1/flows/flw_1/versions/3");
   assert.equal(resolveStudioRoute("GET", ["flows", "flw_1", "runs"], new URLSearchParams("cursor=x&q=y"))?.search, "?cursor=x");
@@ -66,4 +65,10 @@ test("the image model and workflow template catalogs are allowed for GET only", 
 
 test("artifact downloads are not on the forward list: they have their own streaming route", () => {
   assert.equal(resolveStudioRoute("GET", ["runs", "frn_1", "artifacts", "art_1"], none), null);
+});
+
+test("starting a run is not on the forward list: it has its own streaming route for files", () => {
+  assert.equal(resolveStudioRoute("POST", ["flows", "flw_1", "runs"], none), null);
+  assert.equal(resolveStudioRoute("POST", ["flows", "flw_1", "runs", "start"], none), null);
+  assert.equal(resolveStudioRoute("GET", ["flows", "flw_1", "runs"], none)?.path, "/studio/v1/flows/flw_1/runs");
 });

@@ -1,4 +1,4 @@
-import { artifactFieldShape } from "./artifacts.ts";
+import { refArtifactShape, refFileShape } from "./artifacts.ts";
 import type { FlowCatalog } from "./flow-catalog.ts";
 import { templateRefs } from "./flow-template.ts";
 import type {
@@ -16,6 +16,7 @@ import type {
   Operator,
   TemplateConfig,
 } from "./flows.ts";
+import { isFileInput } from "./flows.ts";
 
 /**
  * The editor's model of a flow: pure functions over a FlowDefinition that the
@@ -298,26 +299,39 @@ export interface Reference {
   label: string;
 }
 
-/** referencesFor lists the variables a template on node id may use: the
- * flow's inputs and the fields of every upstream node. Artifact fields (the
- * image and files an image or ComfyUI node makes) are listed only when
- * artifacts is set, which is for an output's result fields: nowhere else may
- * an artifact be referenced.
+/** RefSlot is where a reference is going: "text" is anything fed to a model,
+ * compared or shown as text; "output" is the whole of an output's result
+ * field; "file" is the whole of a ComfyUI template's file input.
+ * RefSlot 是引用的去处："text" 是喂给模型、用于比较或作为文本展示的任何位置；"output" 是输出
+ * 结果字段的全部内容；"file" 是 ComfyUI 模板文件型输入的全部内容。 */
+export type RefSlot = "text" | "output" | "file";
+
+/** referencesFor lists the variables a template on node id may use in slot:
+ * the flow's inputs and the fields of every upstream node. What names an
+ * artifact is restricted as flowdef restricts it: a text slot lists none of
+ * it (not the file inputs, not the image and files a node makes); an output
+ * lists all; a file slot lists exactly the references that name one file —
+ * the image and file inputs and the `image` of an upstream node — and
+ * nothing else, not even text.
  *
- * referencesFor 列出节点 id 上的模板可以使用的变量：编排的输入，以及每个上游节点的字段。
- * 产物字段（图像或 ComfyUI 节点产出的图片与文件）只在设置了 artifacts 时列出，那是给输出
- * 节点的结果字段用的：其他任何地方都不能引用产物。 */
-export function referencesFor(def: FlowDefinition, id: string, artifacts = false): Reference[] {
-  const out: Reference[] = def.inputs
-    .filter((input) => isIdentifier(input.name))
-    .map((input) => ({ ref: `{{inputs.${input.name}}}`, label: `输入 · ${input.label || input.name}` }));
+ * referencesFor 列出节点 id 上的模板在 slot 中可以使用的变量：编排的输入，以及每个上游节点
+ * 的字段。凡指向产物的，限制与 flowdef 一致：文本位置一个也不列（文件输入、节点产出的图片与
+ * 文件都不列）；输出全部列出；文件位置恰好列出指向单个文件的引用——image 与 file 输入，以及
+ * 上游节点的 image——此外一概不列，文本也不列。 */
+export function referencesFor(def: FlowDefinition, id: string, slot: RefSlot = "text"): Reference[] {
+  const out: Reference[] = [];
+  const offer = (ref: string, label: string, scope: string, field: string) => {
+    const shape = refArtifactShape(def, { scope, field });
+    const ok = slot === "output" || (slot === "text" ? shape === null : refFileShape(def, { scope, field }) !== null);
+    if (ok) out.push({ ref, label });
+  };
+  for (const input of def.inputs) {
+    if (isIdentifier(input.name)) offer(`{{inputs.${input.name}}}`, `输入 · ${input.label || input.name}`, "inputs", input.name);
+  }
   const upstream = upstreamOf(def, id);
   for (const node of def.nodes) {
     if (!upstream.has(node.id)) continue;
-    for (const field of nodeFields(node)) {
-      if (!artifacts && artifactFieldShape(node.type, field)) continue;
-      out.push({ ref: `{{${node.id}.${field}}}`, label: `${node.label || node.id} · ${field}` });
-    }
+    for (const field of nodeFields(node)) offer(`{{${node.id}.${field}}}`, `${node.label || node.id} · ${field}`, node.id, field);
   }
   return out;
 }
@@ -338,14 +352,14 @@ export function unavailableModels(def: FlowDefinition, models: string[]): FlowIs
  * cannot run against what the catalogs offer now, as issues located on the
  * nodes: an image model that is gone (or no model while the deployment has
  * no default), a workflow template that is not offered, an input the
- * template lacks, a required input left unset, or an input that needs a
- * file, which a flow cannot supply. A catalog that failed to load flags
- * nothing.
+ * template lacks, a required input left unset, a file input bound to
+ * anything but one file, or a text input bound to a file. A catalog that
+ * failed to load flags nothing.
  *
  * catalogWarnings 把按目录当前内容无法运行的 image_generation 与 comfyui_template 节点标出
  * 来，作为定位到这些节点的问题：图像模型已不存在（或未指定模型而部署没有默认生图）、
- * 工作流模板不在可用列表中、模板没有的输入、必填却未设置的输入，以及需要文件输入——编排
- * 无法提供文件。加载失败的目录不标记任何东西。 */
+ * 工作流模板不在可用列表中、模板没有的输入、必填却未设置的输入、文件型输入绑定了文件以外的
+ * 内容，以及文本型输入绑定了文件。加载失败的目录不标记任何东西。 */
 export function catalogWarnings(def: FlowDefinition, catalog: FlowCatalog): FlowIssue[] {
   const out: FlowIssue[] = [];
   for (const node of def.nodes) {
@@ -366,10 +380,16 @@ export function catalogWarnings(def: FlowDefinition, catalog: FlowCatalog): Flow
         if (!declared.has(name)) out.push({ node: node.id, field: `config.inputs.${name}`, code: "invalid_input" });
       }
       for (const input of template.inputs) {
-        if (input.type === "file") {
-          if (input.required) out.push({ node: node.id, field: `config.inputs.${input.name}`, code: "unsupported_input" });
-        } else if (input.required && input.default === undefined && (config.inputs[input.name] ?? "").trim() === "") {
-          out.push({ node: node.id, field: `config.inputs.${input.name}`, code: "required" });
+        const field = `config.inputs.${input.name}`;
+        const value = config.inputs[input.name] ?? "";
+        const { refs, sole } = templateRefs(value);
+        const file = sole ? refFileShape(def, refs[0]) : null;
+        if (value.trim() === "") {
+          if (input.required && input.default === undefined) out.push({ node: node.id, field, code: "required" });
+        } else if (input.type === "file" ? file === null : file !== null) {
+          // The Gateway refuses these when the node runs.
+          // Gateway 在节点运行时会拒绝这些。
+          out.push({ node: node.id, field, code: "invalid_input" });
         }
       }
     }
@@ -377,18 +397,22 @@ export function catalogWarnings(def: FlowDefinition, catalog: FlowCatalog): Flow
   return out;
 }
 
-/** artifactReferenceIssues finds artifact fields referenced anywhere but as
- * the whole of an output's ref — in a prompt, a template, a condition, an
- * image prompt, a ComfyUI input, or mixed with other text in a result
- * field — as the issues the server reports on save. Output problems sit on
- * the output node, as the server places them.
+/** artifactReferenceIssues finds artifact references — a file input, or the
+ * image or files an image or ComfyUI node makes — anywhere flowdef refuses
+ * them, as the issues the server reports on save. An artifact may be the
+ * whole of an output's ref, and the whole of a ComfyUI template input when it
+ * is one file (an image or file input, or a node's `image`, not its
+ * `artifacts`); in a prompt, a template, a condition, an image prompt, or
+ * mixed with other text anywhere, it is refused. Output problems sit on the
+ * output node, as the server places them.
  *
- * artifactReferenceIssues 找出在输出 ref 的全部内容之外被引用的产物字段——在提示词、模板、
- * 条件、图像提示词、ComfyUI 输入里，或在结果字段中与其他文本混在一起——给出与服务端保存时
- * 报告的相同的问题。输出的问题与服务端一样位于输出节点上。 */
+ * artifactReferenceIssues 找出 flowdef 不允许出现产物引用的地方——文件输入，或图像与 ComfyUI
+ * 节点产出的图片与文件——给出与服务端保存时报告的相同的问题。产物可以是输出 ref 的全部内容，
+ * 也可以是 ComfyUI 模板输入的全部内容（限于单个文件：image 或 file 输入，或节点的 image，
+ * 而不是它的 artifacts）；在提示词、模板、条件、图像提示词里，或在任何位置与其他文字混写，
+ * 一律不允许。输出的问题与服务端一样位于输出节点上。 */
 export function artifactReferenceIssues(def: FlowDefinition): FlowIssue[] {
-  const types = new Map(def.nodes.map((n) => [n.id, n.type] as const));
-  const names = (text: string) => templateRefs(text).refs.some((ref) => artifactFieldShape(types.get(ref.scope) ?? "", ref.field));
+  const names = (text: string) => templateRefs(text).refs.some((ref) => refArtifactShape(def, ref) !== null);
   const out: FlowIssue[] = [];
   const check = (node: string, field: string, text: string) => {
     if (names(text)) out.push({ node, field, code: "artifact_reference" });
@@ -412,7 +436,13 @@ export function artifactReferenceIssues(def: FlowDefinition): FlowIssue[] {
         check(node.id, "config.prompt", text(c.prompt));
         break;
       case "comfyui_template":
-        for (const [name, value] of Object.entries(comfyConfig(node).inputs)) check(node.id, `config.inputs.${name}`, value);
+        for (const [name, value] of Object.entries(comfyConfig(node).inputs)) {
+          const { refs, sole } = templateRefs(value);
+          // A single reference to one file is the one thing an input may hold.
+          // 对单个文件的单个引用，是输入唯一可以持有的产物。
+          if (sole && refFileShape(def, refs[0]) !== null) continue;
+          check(node.id, `config.inputs.${name}`, value);
+        }
         break;
     }
   }
@@ -446,7 +476,7 @@ export function serialize(def: FlowDefinition): FlowDefinition {
     inputs: def.inputs.map((input) => {
       const out = { ...input };
       if (!out.label) delete out.label;
-      if (out.default === undefined || out.default === "") delete out.default;
+      if (isFileInput(out) || out.default === undefined || out.default === "") delete out.default;
       return out;
     }),
     nodes: def.nodes.map((node) => {

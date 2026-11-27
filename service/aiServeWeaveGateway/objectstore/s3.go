@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
@@ -222,6 +223,38 @@ func (b *S3) Delete(ctx context.Context, key string) error {
 		Key:    aws.String(b.fullKey(key)),
 	}); err != nil {
 		return fmt.Errorf("objectstore: s3 delete %q: %s", key, b.redact(err.Error()))
+	}
+	return nil
+}
+
+// List pages through ListObjectsV2 under prefix. See the Backend doc
+// comment. A key the bucket holds that this package could not have written
+// (one validateKey rejects) is skipped rather than handed to fn.
+//
+// List 经 ListObjectsV2 逐页列出 prefix 之下的对象。见 Backend 的文档注释。bucket
+// 里本包不可能写出的 key（validateKey 会拒绝的）被跳过，不交给 fn。
+func (b *S3) List(ctx context.Context, prefix string, fn func(ObjectEntry) error) error {
+	if err := validateKey(prefix); err != nil {
+		return err
+	}
+	pages := s3.NewListObjectsV2Paginator(b.client, &s3.ListObjectsV2Input{
+		Bucket: aws.String(b.bucket),
+		Prefix: aws.String(b.fullKey(prefix) + "/"),
+	})
+	for pages.HasMorePages() {
+		page, err := pages.NextPage(ctx)
+		if err != nil {
+			return fmt.Errorf("objectstore: s3 list %q: %s", prefix, b.redact(err.Error()))
+		}
+		for _, obj := range page.Contents {
+			key := strings.TrimPrefix(aws.ToString(obj.Key), b.prefix)
+			if validateKey(key) != nil {
+				continue
+			}
+			if err := fn(ObjectEntry{Key: key, Size: aws.ToInt64(obj.Size), ModTime: aws.ToTime(obj.LastModified)}); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }

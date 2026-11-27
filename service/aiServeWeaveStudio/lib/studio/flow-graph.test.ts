@@ -144,6 +144,7 @@ const portrait: WorkflowTemplate = {
   ],
   outputs: [],
 };
+const needsFile: WorkflowTemplate = { ...portrait, inputs: [...portrait.inputs.slice(0, 1), { name: "ref", type: "file", required: true }] };
 const catalog = (over: Partial<FlowCatalog> = {}): FlowCatalog => ({
   imageModels: { models: [{ id: "flux", name: "Flux" }], defaultAvailable: true },
   templates: [portrait],
@@ -198,7 +199,7 @@ test("configs are read with defaults for what is missing", () => {
 test("artifact fields are offered only to an output's result fields", () => {
   const def = media();
   assert.deepEqual(referencesFor(def, "end").map((r) => r.ref), ["{{inputs.topic}}"]);
-  assert.deepEqual(referencesFor(def, "end", true).map((r) => r.ref), [
+  assert.deepEqual(referencesFor(def, "end", "output").map((r) => r.ref), [
     "{{inputs.topic}}",
     "{{image_generation_1.image}}",
     "{{comfyui_template_1.image}}",
@@ -247,7 +248,7 @@ test("a template that is not offered is flagged, and says nothing more about its
   assert.equal(catalogWarnings(unset, catalog())[0].code, "template_unavailable");
 });
 
-test("template inputs: unknown name, unset required, required file, optional file", () => {
+test("template inputs: unknown name, unset required, unset required file, optional file", () => {
   const ok = setConfig(media(), "comfyui_template_1", { template: "portrait", inputs: { prompt: "a cat" } });
   assert.deepEqual(catalogWarnings(ok, catalog()), []);
 
@@ -257,11 +258,33 @@ test("template inputs: unknown name, unset required, required file, optional fil
   const stale = setConfig(media(), "comfyui_template_1", { template: "portrait", inputs: { prompt: "p", old_name: "x" } });
   assert.deepEqual(catalogWarnings(stale, catalog()), [{ node: "comfyui_template_1", field: "config.inputs.old_name", code: "invalid_input" }]);
 
-  const needsFile: WorkflowTemplate = { ...portrait, inputs: [...portrait.inputs.slice(0, 1), { name: "ref", type: "file", required: true }] };
   const blocked = setConfig(media(), "comfyui_template_1", { template: "portrait", inputs: { prompt: "p" } });
-  assert.deepEqual(catalogWarnings(blocked, catalog({ templates: [needsFile] })), [{ node: "comfyui_template_1", field: "config.inputs.ref", code: "unsupported_input" }]);
+  assert.deepEqual(catalogWarnings(blocked, catalog({ templates: [needsFile] })), [{ node: "comfyui_template_1", field: "config.inputs.ref", code: "required" }]);
   // an optional file input does not stop the node
   assert.deepEqual(catalogWarnings(blocked, catalog()), []);
+});
+
+test("a template's file input takes one file; a text input takes none", () => {
+  const withPhoto = (): FlowDefinition => ({ ...media(), inputs: [{ name: "topic", type: "text", required: true }, { name: "photo", type: "image", required: true }, { name: "doc", type: "file", required: false }] });
+  const bind = (inputs: Record<string, string>) => setConfig(withPhoto(), "comfyui_template_1", { template: "portrait", inputs });
+  const warn = (inputs: Record<string, string>) => catalogWarnings(bind(inputs), catalog({ templates: [needsFile] }));
+  const bad = [{ node: "comfyui_template_1", field: "config.inputs.ref", code: "invalid_input" }];
+
+  // a file input of the flow, or an upstream node's image, are files
+  assert.deepEqual(warn({ prompt: "p", ref: "{{inputs.photo}}" }), []);
+  assert.deepEqual(warn({ prompt: "p", ref: " {{ inputs.doc }} " }), []);
+  assert.deepEqual(warn({ prompt: "p", ref: "{{image_generation_1.image}}" }), []);
+  // text, a mix, a text input of the flow, a node's text, and a list are not
+  assert.deepEqual(warn({ prompt: "p", ref: "photo.png" }), bad);
+  assert.deepEqual(warn({ prompt: "p", ref: "x {{inputs.photo}}" }), bad);
+  assert.deepEqual(warn({ prompt: "p", ref: "{{inputs.topic}}" }), bad);
+  assert.deepEqual(warn({ prompt: "p", ref: "{{inputs.nope}}" }), bad);
+  assert.deepEqual(warn({ prompt: "p", ref: "{{comfyui_template_1.artifacts}}" }), bad);
+  // a text input bound to a file is refused by the Gateway at run time
+  assert.deepEqual(warn({ prompt: "{{inputs.photo}}", ref: "{{inputs.photo}}" }), [{ node: "comfyui_template_1", field: "config.inputs.prompt", code: "invalid_input" }]);
+  assert.deepEqual(warn({ prompt: "{{image_generation_1.image}}", ref: "{{inputs.doc}}" }), [{ node: "comfyui_template_1", field: "config.inputs.prompt", code: "invalid_input" }]);
+  // a blank file input of an optional one is fine; a required one is flagged
+  assert.deepEqual(warn({ prompt: "p", ref: "  " }), [{ node: "comfyui_template_1", field: "config.inputs.ref", code: "required" }]);
 });
 
 test("a required input with a default may be left unset", () => {
@@ -269,33 +292,82 @@ test("a required input with a default may be left unset", () => {
   assert.deepEqual(catalogWarnings(def, catalog()), []); // "seed" is required but defaulted
 });
 
-test("artifact fields are caught wherever they are not a whole result field", () => {
-  let def = media();
+test("artifact references are caught wherever flowdef refuses them", () => {
+  let def: FlowDefinition = { ...media(), inputs: [{ name: "topic", type: "text", required: true }, { name: "photo", type: "image", required: false }] };
   def = addNode(def, "llm", { x: 0, y: 0 }, "qwen3").def;
   def = addNode(def, "template", { x: 0, y: 0 }).def;
   def = addNode(def, "condition", { x: 0, y: 0 }).def;
-  def = setConfig(def, "llm_1", { model: "qwen3", system: "{{image_generation_1.image}}", prompt: "see {{comfyui_template_1.artifacts}}" });
+  def = setConfig(def, "llm_1", { model: "qwen3", system: "{{image_generation_1.image}}", prompt: "see {{comfyui_template_1.artifacts}} and {{inputs.photo}}" });
   def = setConfig(def, "template_1", { template: "{{comfyui_template_1.image}}" });
-  def = setConfig(def, "condition_1", { left: " {{image_generation_1.image}} ", op: "equals", right: "{{comfyui_template_1.image}}" });
-  def = setConfig(def, "image_generation_1", { model: "", prompt: "again {{comfyui_template_1.image}}" });
-  def = setConfig(def, "comfyui_template_1", { template: "portrait", inputs: { prompt: "{{image_generation_1.image}}", fine: "{{inputs.topic}}" } });
-  def = { ...def, outputs: [{ name: "ok", ref: "{{image_generation_1.image}}" }, { name: "bad", ref: "x {{image_generation_1.image}}" }, { name: "txt", ref: "{{llm_1.text}} and {{inputs.topic}}" }] };
+  def = setConfig(def, "condition_1", { left: " {{image_generation_1.image}} ", op: "equals", right: "{{inputs.photo}}" });
+  def = setConfig(def, "image_generation_1", { model: "", prompt: "again {{comfyui_template_1.image}} {{inputs.photo}}" });
+  def = setConfig(def, "comfyui_template_1", {
+    template: "portrait",
+    inputs: {
+      mixed: "x {{image_generation_1.image}}",
+      list: "{{image_generation_1.image}}{{inputs.photo}}",
+      artifacts: "{{comfyui_template_1.artifacts}}",
+      twice: "{{inputs.photo}} {{inputs.photo}}",
+      fine: "{{inputs.topic}}",
+      textual: "{{inputs.topic}} and more",
+      node_image: "{{image_generation_1.image}}",
+      photo: " {{ inputs.photo }} ",
+    },
+  });
+  def = {
+    ...def,
+    outputs: [
+      { name: "ok", ref: "{{image_generation_1.image}}" },
+      { name: "all", ref: "{{comfyui_template_1.artifacts}}" },
+      { name: "file", ref: " {{inputs.photo}} " },
+      { name: "bad", ref: "x {{image_generation_1.image}}" },
+      { name: "badfile", ref: "{{inputs.photo}}!" },
+      { name: "txt", ref: "{{llm_1.text}} and {{inputs.topic}}" },
+    ],
+  };
   assert.deepEqual(artifactReferenceIssues(def), [
     { node: "image_generation_1", field: "config.prompt", code: "artifact_reference" },
-    { node: "comfyui_template_1", field: "config.inputs.prompt", code: "artifact_reference" },
+    { node: "comfyui_template_1", field: "config.inputs.mixed", code: "artifact_reference" },
+    { node: "comfyui_template_1", field: "config.inputs.list", code: "artifact_reference" },
+    { node: "comfyui_template_1", field: "config.inputs.artifacts", code: "artifact_reference" },
+    { node: "comfyui_template_1", field: "config.inputs.twice", code: "artifact_reference" },
     { node: "llm_1", field: "config.system", code: "artifact_reference" },
     { node: "llm_1", field: "config.prompt", code: "artifact_reference" },
     { node: "template_1", field: "config.template", code: "artifact_reference" },
     { node: "condition_1", field: "config.left", code: "artifact_reference" },
     { node: "condition_1", field: "config.right", code: "artifact_reference" },
     { node: "end", field: "outputs.bad.ref", code: "artifact_reference" },
+    { node: "end", field: "outputs.badfile.ref", code: "artifact_reference" },
   ]);
 });
 
-test("a flow that references artifacts only as whole result fields has no artifact issues", () => {
-  const def: FlowDefinition = { ...media(), outputs: [{ name: "a", ref: "{{image_generation_1.image}}" }, { name: "b", ref: "{{ comfyui_template_1.artifacts }}" }, { name: "c", ref: "{{inputs.topic}}" }] };
+test("a flow that references artifacts only as whole result fields or whole file inputs has no artifact issues", () => {
+  const base: FlowDefinition = { ...media(), inputs: [{ name: "topic", type: "text", required: true }, { name: "photo", type: "image", required: true }, { name: "doc", type: "file", required: false }] };
+  const def: FlowDefinition = {
+    ...setConfig(base, "comfyui_template_1", { template: "portrait", inputs: { prompt: "{{inputs.topic}}", ref: "{{inputs.photo}}", other: "{{image_generation_1.image}}" } }),
+    outputs: [{ name: "a", ref: "{{image_generation_1.image}}" }, { name: "b", ref: "{{ comfyui_template_1.artifacts }}" }, { name: "c", ref: "{{inputs.topic}}" }, { name: "d", ref: "{{inputs.photo}}" }, { name: "e", ref: "{{inputs.doc}}" }],
+  };
   assert.deepEqual(artifactReferenceIssues(def), []);
   assert.deepEqual(artifactReferenceIssues(newDefinition()), []);
+});
+
+test("the variable menus list files only where a file may go", () => {
+  let def: FlowDefinition = { ...media(), inputs: [{ name: "topic", type: "text", required: true }, { name: "photo", type: "image", required: false }, { name: "doc", type: "file", required: false }] };
+  def = addNode(def, "llm", { x: 0, y: 0 }, "qwen3").def;
+  const linked = connect(def, "start", "llm_1", null);
+  assert.ok(linked.ok);
+  def = linked.def;
+  const refs = (id: string, slot?: "text" | "output" | "file") => referencesFor(def, id, slot).map((r) => r.ref);
+  // text: no file input, no node artifact
+  assert.deepEqual(refs("llm_1"), ["{{inputs.topic}}"]);
+  assert.deepEqual(refs("comfyui_template_1"), ["{{inputs.topic}}"]);
+  // a ComfyUI file input: the flow's files and an upstream image, never a list or text
+  assert.deepEqual(refs("comfyui_template_1", "file"), ["{{inputs.photo}}", "{{inputs.doc}}", "{{image_generation_1.image}}"]);
+  assert.deepEqual(refs("image_generation_1", "file"), ["{{inputs.photo}}", "{{inputs.doc}}"]);
+  // an output may name anything, including a list and a file input
+  assert.deepEqual(refs("end", "output"), [
+    "{{inputs.topic}}", "{{inputs.photo}}", "{{inputs.doc}}", "{{image_generation_1.image}}", "{{comfyui_template_1.image}}", "{{comfyui_template_1.artifacts}}",
+  ]);
 });
 
 test("text fields of an image node are not artifacts, so llm text may be referenced anywhere", () => {
@@ -335,4 +407,17 @@ test("serialize writes image and ComfyUI configs without empty optional fields",
 test("a definition with the new node types survives parse and serialize", () => {
   const def = serialize(media());
   assert.deepEqual(serialize(parseDefinition(JSON.parse(JSON.stringify(def)))), def);
+});
+
+test("serialize drops the default of a file input and keeps a text input's", () => {
+  const def: FlowDefinition = { ...newDefinition(), inputs: [
+    { name: "topic", type: "text", required: false, default: "x" },
+    { name: "photo", type: "image", required: false, default: "stale" },
+    { name: "doc", type: "file", required: true },
+  ] };
+  assert.deepEqual(serialize(def).inputs, [
+    { name: "topic", type: "text", required: false, default: "x" },
+    { name: "photo", type: "image", required: false },
+    { name: "doc", type: "file", required: true },
+  ]);
 });

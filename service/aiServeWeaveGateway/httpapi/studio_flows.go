@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"AIServeWeave/common/flowdef"
+	"AIServeWeave/common/idgen"
 )
 
 // Studio flow request bounds: a definition of up to flowdef.MaxDefinitionBytes
@@ -341,24 +342,25 @@ func (s *studioFlows) runs(w http.ResponseWriter, r *http.Request) {
 
 // startRun implements POST /studio/v1/flows/{id}/runs: run the latest version,
 // or the one named, with the input values given. Bad input values and
-// models that are not available are refused before anything is stored; the
-// run then executes on this replica and the answer is 202 with the run.
+// models that are not available are refused before the run is stored; the
+// run then executes on this replica and the answer is 202 with the run. A run
+// with image or file inputs is started as multipart/form-data; see
+// studio_inputs.go.
 //
 // startRun 实现 POST /studio/v1/flows/{id}/runs：以给定的输入值运行最新版本或指定版本。
-// 输入值有误或模型不可用时，在存储任何东西之前就被拒绝；之后运行在本副本上执行，应答为
-// 202 并附上运行。
+// 输入值有误或模型不可用时，在存下运行之前就被拒绝；之后运行在本副本上执行，应答为
+// 202 并附上运行。带 image 或 file 输入的运行以 multipart/form-data 启动，见
+// studio_inputs.go。
 func (s *studioFlows) startRun(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathID(w, r, studioFlowIDPrefix, "flow")
 	if !ok {
 		return
 	}
-	var req struct {
-		Inputs  map[string]json.RawMessage `json:"inputs"`
-		Version int64                      `json:"version"`
-	}
-	if !decodeStudioBodyLimit(w, r, &req, maxStudioRunBodyBytes) {
+	req, form, ok := s.parseRunStart(w, r)
+	if !ok {
 		return
 	}
+	defer form.close()
 	owner := studioOwnerOf(r)
 	var definition json.RawMessage
 	version := req.Version
@@ -389,12 +391,15 @@ func (s *studioFlows) startRun(w http.ResponseWriter, r *http.Request) {
 		writeStudioIssues(w, "model_unavailable", "a model of this flow is not available", issues, false)
 		return
 	}
-	if req.Inputs == nil {
-		req.Inputs = map[string]json.RawMessage{}
+	runID := studioRunIDPrefix + idgen.New()
+	staged, ok := s.stageInputFiles(w, r, owner, runID, def, req, form)
+	if !ok {
+		return
 	}
-	inputs, _ := json.Marshal(req.Inputs)
-	run, err := s.runner.start(r.Context(), owner, id, version, inputs, def, req.Inputs)
+	inputs, _ := json.Marshal(staged.values)
+	run, err := s.runner.start(r.Context(), owner, runID, id, version, inputs, def, staged.values, staged.files)
 	if err != nil {
+		s.discard(r.Context(), staged)
 		var invalid *flowdef.ValidationError
 		if errors.As(err, &invalid) {
 			writeStudioIssues(w, "invalid_inputs", "the input values are not valid", invalid.Issues, invalid.Truncated)

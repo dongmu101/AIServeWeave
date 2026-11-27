@@ -9,17 +9,18 @@ import { ArrowLeftIcon, CopyIcon, HistoryIcon, PencilIcon, RotateCcwIcon, Square
 import { toast } from "sonner";
 import { cn } from "cn";
 
-import { failureText, studioCall } from "@/components/studio/flows/api";
+import { failureText, startFlowRun, studioCall } from "@/components/studio/flows/api";
 import { ARIA_LABELS, FLOW_NODE_TYPES, NODE_KIND, type FlowCanvasNode } from "@/components/studio/flows/flow-node";
-import { ArtifactValue } from "@/components/studio/flows/artifact-view";
+import { ArtifactRow, ArtifactValue } from "@/components/studio/flows/artifact-view";
 import { RunForm } from "@/components/studio/flows/run-form";
 import { useHydrated } from "@/components/studio/flows/use-hydrated";
 import { sendToSignIn } from "@/components/studio/session-expired";
 import { Button } from "@/components/ui/button";
-import { artifactFieldShape, artifactOutputs } from "@/lib/studio/artifacts";
+import { artifactFieldShape, artifactOutputs, kindOfFilename, runInputFiles, stepFileInputs } from "@/lib/studio/artifacts";
 import { toCanvasEdges } from "@/lib/studio/flow-graph";
 import { applyFrame, duration, initialRunState, type RunState } from "@/lib/studio/flow-run";
-import { issueText, parseRun, runErrorText, statusText, type FlowDefinition, type Run, type RunStep } from "@/lib/studio/flows";
+import { runErrorText, statusText, type FlowDefinition, type Run, type RunStep } from "@/lib/studio/flows";
+import { serverInputErrors, type BuiltRun } from "@/lib/studio/run-inputs";
 import { SSEParser } from "@/lib/studio/sse";
 
 /**
@@ -160,18 +161,16 @@ function View({ flowId, flowName, run, definition }: { flowId: string; flowName:
     else toast.success("已请求停止。");
   }
 
-  async function startRerun(inputs: Record<string, string | number | boolean>) {
+  async function startRerun(built: BuiltRun) {
     setBusy(true);
-    const result = await studioCall("POST", `flows/${flowId}/runs`, { inputs }, parseRun);
+    const result = await startFlowRun(flowId, built);
     setBusy(false);
     if (result.ok) {
       router.push(`/flows/${flowId}/runs/${result.data.id}`);
       return;
     }
     if (result.code === "invalid_inputs") {
-      const errors: Record<string, string> = {};
-      for (const issue of result.issues) errors[/^inputs\.([A-Za-z_][A-Za-z0-9_]*)$/.exec(issue.field)?.[1] ?? ""] = issueText({ ...issue, field: "" });
-      setRerunErrors(errors);
+      setRerunErrors(serverInputErrors(result.issues));
       return;
     }
     setRerunErrors({ "": failureText(result.code) });
@@ -183,6 +182,10 @@ function View({ flowId, flowName, run, definition }: { flowId: string; flowName:
   const selectedNode = selected ? definition.nodes.find((n) => n.id === selected) : undefined;
   const label = (id: string) => definition.nodes.find((n) => n.id === id)?.label || id;
   const artifacts = React.useMemo(() => artifactOutputs(definition), [definition]);
+  // The files the run was started with, and their names by artifact id.
+  // 运行启动时收到的文件，以及按产物 id 索引的文件名。
+  const inputFiles = React.useMemo(() => runInputFiles(definition, current.inputs), [definition, current.inputs]);
+  const fileNames = React.useMemo(() => Object.fromEntries(inputFiles.map((f) => [f.file.artifactId, f.file.filename])), [inputFiles]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -268,12 +271,26 @@ function View({ flowId, flowName, run, definition }: { flowId: string; flowName:
               <p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">运行所在的服务器停止或重启了，这次运行没有完成。可以重跑。</p>
             ) : null}
 
+            {inputFiles.length > 0 ? (
+              <section className="grid gap-2">
+                <p className="font-medium">输入文件</p>
+                {inputFiles.map(({ name, label: inputLabel, file }) => (
+                  <div key={name} className="grid gap-1">
+                    <span className="font-mono text-[11px] text-muted-foreground">{inputLabel}</span>
+                    <ul className="grid">
+                      <ArtifactRow runId={run.id} item={{ id: file.artifactId, filename: file.filename, kind: kindOfFilename(file.filename) }} />
+                    </ul>
+                  </div>
+                ))}
+              </section>
+            ) : null}
+
             {state.finished && Object.keys(current.outputs).length > 0 ? (
               <section className="grid gap-2">
                 <p className="font-medium">结果</p>
                 {Object.entries(current.outputs).map(([key, value]) =>
                   artifacts[key] ? (
-                    <ArtifactValue key={key} runId={run.id} label={key} value={value} shape={artifacts[key]} />
+                    <ArtifactValue key={key} runId={run.id} label={key} value={value} shape={artifacts[key]} names={fileNames} />
                   ) : (
                     <ValueBlock key={key} label={key} value={value} copyable />
                   )
@@ -282,7 +299,7 @@ function View({ flowId, flowName, run, definition }: { flowId: string; flowName:
             ) : null}
 
             {selectedNode ? (
-              <NodeDetail runId={run.id} nodeType={selectedNode.type} label={label(selectedNode.id)} kind={NODE_KIND[selectedNode.type].label} step={step} live={state.live[selectedNode.id]}
+              <NodeDetail runId={run.id} nodeType={selectedNode.type} fileInputs={stepFileInputs(definition, selectedNode.id)} fileNames={fileNames} label={label(selectedNode.id)} kind={NODE_KIND[selectedNode.type].label} step={step} live={state.live[selectedNode.id]}
                 started={state.started[selectedNode.id]} running={state.nodes[selectedNode.id] === "running"} now={now} />
             ) : (
               <p className="text-xs text-muted-foreground">点选画布上的节点，查看它的输入、输出与用量。</p>
@@ -292,16 +309,20 @@ function View({ flowId, flowName, run, definition }: { flowId: string; flowName:
       </div>
 
       {rerun ? (
-        <RunForm inputs={definition.inputs} previous={current.inputs} busy={busy} serverErrors={rerunErrors}
-          onSubmit={(inputs) => void startRerun(inputs)} onClose={() => setRerun(false)} />
+        <RunForm inputs={definition.inputs} previous={current.inputs} previousRunId={run.id} busy={busy} serverErrors={rerunErrors}
+          onSubmit={(built) => void startRerun(built)} onClose={() => setRerun(false)} />
       ) : null}
     </div>
   );
 }
 
-function NodeDetail({ runId, nodeType, label, kind, step, live, started, running, now }: {
+function NodeDetail({ runId, nodeType, fileInputs, fileNames, label, kind, step, live, started, running, now }: {
   runId: string;
   nodeType: string;
+  /** the node's inputs that are one file, and how each is shown
+   * 节点中恰好是一个文件的输入，及各自的展示形式 */
+  fileInputs: Record<string, "image" | "file">;
+  fileNames: Record<string, string>;
   label: string;
   kind: string;
   step?: RunStep;
@@ -349,9 +370,13 @@ function NodeDetail({ runId, nodeType, label, kind, step, live, started, running
       {step && Object.keys(step.inputs).length > 0 ? (
         <div className="grid gap-2">
           <p className="text-xs font-medium text-muted-foreground">输入</p>
-          {Object.entries(step.inputs).map(([key, value]) => (
-            <ValueBlock key={key} label={INPUT_LABEL[key] ?? key} value={value} />
-          ))}
+          {Object.entries(step.inputs).map(([key, value]) =>
+            nodeType === "comfyui_template" && fileInputs[key] ? (
+              <ArtifactValue key={key} runId={runId} label={key} value={value} shape={fileInputs[key]} names={fileNames} />
+            ) : (
+              <ValueBlock key={key} label={INPUT_LABEL[key] ?? key} value={value} />
+            )
+          )}
         </div>
       ) : null}
       {step && Object.keys(step.outputs).length > 0 ? (

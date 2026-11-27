@@ -183,12 +183,12 @@ Console 的定位是管理后台（用户、Key、配额、计费、机群）。
 
 - **术语**：仓库里「工作流」已指 ComfyUI 模板运行。新概念统一称为 **编排（Flow）**，节点称为 **编排节点**，一次执行称为 **编排运行（Flow Run）**。已写入 GLOSSARY（2026-11-25）。
 - **定义格式与校验放在 `common`**：`common/flowdef`（2026-11-25 已实现）定义编排 JSON 结构、节点类型、变量引用语法、`Decode` 和 `Validate`。Gateway（运行前）与控制面（保存时）调用同一个 `Validate`，不允许各自判断。这与 `common/workflowtemplate.Validate` 的约定相同。与后者不同，`Validate` 收集全部问题（最多 50 条），每条带所属节点 id、字段路径和稳定的错误码（如 `cycle`、`unknown_reference`、`reference_not_upstream`），供编辑器在画布上定位（用户故事 55）。错误文本只含标识符，不引用提示词、标签或取值。
-- **分期**：第一期节点类型为 input、llm、template、condition、output，输入类型为 text、number、boolean。第二期的 image_generation 与 comfyui_template 节点已于 2026-11-27 加入 `flowdef` 并能在 Gateway 上运行（见下文定义形状）。image、file 输入仍未加入：含这些输入类型的定义一律被拒绝，需要必填文件输入的模板也无法从编排运行。
+- **分期**：第一期节点类型为 input、llm、template、condition、output，输入类型为 text、number、boolean。第二期的 image_generation 与 comfyui_template 节点已于 2026-11-27 加入 `flowdef` 并能在 Gateway 上运行（见下文定义形状）。image、file 输入已于 2026-11-27 加入：取值为 `{artifact_id, filename}`，不能有默认值；文件随启动运行以 multipart 上传，存入对象存储，按保留期（默认 30 天）清理。
 - **定义形状（契约，以 `common/flowdef` 为准）**：
 
   ```text
   Definition {                       // id、name、version 由控制面管理，不在定义内
-    inputs:  [{name, label?, type: text|number|boolean, required, default?}]
+    inputs:  [{name, label?, type: text|number|boolean|image|file, required, default?}]   // image、file 不能有 default
     nodes:   [{id, type, label?, config, position: {x, y}}]
     edges:   [{from: node_id, to: node_id, branch?: "true"|"false"}]
     outputs: [{name, ref: 模板，通常为 "{{node_id.field}}"}]
@@ -206,7 +206,9 @@ Console 的定位是管理后台（用户、Key、配额、计费、机群）。
                     model 为空表示部署自己的生图工作流；size 形如 "<宽>x<高>"
   comfyui_template.config: {template, inputs?: {模板输入名: 模板}}   输出字段 image、artifacts
                     artifacts 是 [{artifact_id, filename, kind: image|video|file}] 的 JSON 文本
-  产物字段（image、artifacts）只能作为输出 ref 的全部内容被引用，否则报 artifact_reference
+  文件类引用（image/file 输入、产物字段 image、artifacts）只能作为输出 ref 的全部内容，
+    或 comfyui_template 某个模板输入的全部内容（此时只能是单个文件：image/file 输入或 image 字段，不能是 artifacts），
+    其余位置报 artifact_reference
   ```
 
 - **变量引用**：`{{inputs.<name>}}` / `{{<node_id>.<field>}}`，两侧可有空格，纯替换，无表达式求值、无代码执行。只能引用上游节点（输出声明引用输出节点的上游）。`{{` 后不是「标识符.标识符」形式的内容（如 `{{name}}`、JSON）按原文保留，方便提示词里引用模板语言；`{{a.b.c}}` 报错，不支持嵌套字段。标识符为 `[A-Za-z_][A-Za-z0-9_]*`，最长 64 字节；节点 id 不能是 `inputs`。

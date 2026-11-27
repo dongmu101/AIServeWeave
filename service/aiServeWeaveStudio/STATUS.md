@@ -1,3 +1,19 @@
+## 编排的图片与文件输入（2026-11-27）
+
+编排运行可以带图片与文件（flowdef 输入类型 `image`、`file`）。本节只记 Studio；`common/flowdef` 与 Gateway 一侧见根 STATUS 与 Gateway 代码。本节取代下面「编排第二期节点」里关于文件型模板输入「只显示说明、必填则不能运行」的说法。
+
+- **输入声明**：输入节点的类型下拉新增「图片」「文件」，没有默认值（切换类型时清掉默认值，保存时也不发送）。解析 `image`、`file` 输入时忽略任何默认值。
+- **引用规则与即时校验**（`lib/studio/flow-graph.ts`、`artifacts.ts`，对应 flowdef 的 `artifact_reference`）：产物指 image/file 输入、image_generation 与 comfyui_template 的 `image`、comfyui_template 的 `artifacts`。输出 ref 整个引用可以引用任何产物；comfyui_template 的模板输入整个是单个文件（image/file 输入，或某节点的 `image`，不含 `artifacts`）也可以；其余位置（提示词、模板、条件、图像提示词，以及 ComfyUI 输入里与其他文字混写）立刻标出 `artifact_reference`。变量菜单按去处分三种：文本位置不列任何文件类引用；输出的结果字段全部列出；ComfyUI 文件型输入只列文件来源。
+- **ComfyUI 文件型模板输入**：编辑器给「选择文件来源」下拉（本编排的图片/文件输入，以及上游产出图片的节点），不给文本框；必填未选、选了文件以外的内容、文本型输入绑了文件，都在节点上标黄并在运行前拦下（运行时 Gateway 报 `invalid_input`）。不再产生 `unsupported_input`；历史运行里的该码保留原文案。
+- **运行表单**（编辑器「运行」与运行视图「重跑」共用）：image 输入用 `accept="image/*"` 的文件选择器，file 输入不限类型；显示将上传的文件名与大小；重跑时预填上次的文件（显示文件名，选新文件替换，或「移除」）。前端不设类型与大小限制，以 Gateway 的拒绝为准。服务端的 `required`、`unknown_input`、`invalid_value`、`unsupported_file_type`、`not_found`、`artifact_storage_unavailable` 回填到对应输入下（中文文案）；413 `too_large` 与 503 `storage_unavailable` 在表单底部提示。
+- **提交**（`lib/studio/run-inputs.ts`）：不带文件时仍发 JSON `{"inputs":…}`；带文件时发 multipart：`request` 字段放同样的 JSON，每个文件一个以输入名命名的分片（文件不同时出现在 JSON 里）。重跑复用的文件写成 `{"run_id":"<旧运行>","artifact_id":"<旧产物>"}` 放进 `inputs`。
+- **BFF**：启动运行改走专门路由 `POST /api/studio/flows/{id}/runs/start`（原白名单里的 `POST flows/{id}/runs` 移除，它会整体缓冲请求体并有 2 MiB 上限）。新路由校验来源、会话与编排 id，把请求体以流转发给 Gateway `POST /studio/v1/flows/{id}/runs`（保留 `Content-Type` 与分隔符、`Content-Length`），不缓冲，不设自己的大小上限；只接受 `application/json` 与 `multipart/form-data`；应答只保留稳定错误码与问题列表（`lib/server/gateway-answer.ts`，与白名单转发共用）。
+- **运行视图**：新增「输入文件」区（图片内联预览，其他文件为文件名加下载）；输出 ref 直接引用文件输入时按产物展示（image 输入显示为图片，file 输入显示文件名加下载，文件名取自运行记录的 FileValue）；ComfyUI 节点详情里绑定了单个文件的输入同样按文件展示。下载先探测响应头：文件已过保留期（404）时提示「这个文件已不存在，可能超过保留期被清理了」，而不是存下一份错误页；图片加载失败提示改为「可能已超过保留期被清理」。节点失败码 `not_found`（用到的文件已被清理）与 `invalid_input` 有新文案。
+
+验证：lint、typecheck、147 项单元测试（新增：引用规则含文件输入与 ComfyUI 单文件输入、变量菜单三种去处、模板文件输入的绑定检查、run-inputs 的表单预填/重跑复用/multipart 构造/服务端错误回填、FileValue 解析与输入文件列表、新错误码文案、路由白名单）与生产构建通过。用桩控制面与桩 Gateway 加生产构建（`next start`）做了 HTTP 级检查：登录后经 `runs/start` 上传 60 MiB 与 250 MiB 的 multipart，桩 Gateway 收到的字节数、`Content-Type`（含分隔符）与 `Content-Length` 一致；250 MiB 上传期间 Studio 进程内存只增加约 50 MB，没有整体缓冲；桩 Gateway 的 400 问题列表转发为 `{error, issues}` 且不含其 message；JSON 请求（含复用文件引用）正常；无会话 401、跨站来源 403、非法编排 id 404、`text/plain` 400、旧的 `POST flows/{id}/runs` 404。
+
+未验证：没有在浏览器里走通（本机没有可用的无头浏览器）：输入声明面板、文件选择器与重跑预填的交互、文件来源下拉、输入文件区的预览与下载按钮（含 404 提示）、手机宽度与深色主题；未接真实 Gateway 联调，multipart 的字段约定按任务给出的契约实现；未经真实的 nginx 与 Cloudflare：`deploy/nginx.example.conf` 的 Studio 站点已为 `/api/studio/flows/{id}/runs/start` 单独放宽到 200m 并关闭请求体缓冲（站点其余路径仍为 10m），已部署的 nginx 需照此调整；经 Cloudflare 代理时其套餐上限（免费版 100 MB）先生效。
+
 ## 编排第二期节点（2026-11-27）
 
 编排编辑器与运行视图加入「图像生成」与「ComfyUI 模板」两类节点（规格用户故事 51、52、59、68 的前端部分）。本节只记 Studio；`common/flowdef` 与 Gateway 一侧见[根 STATUS](../../STATUS.md#studio-编排第二期节点2026-11-27)。
@@ -29,7 +45,7 @@
   - 可停止、可重跑（表单预填上次的输入）。
   - 事件流经新的 BFF 路由 `GET /api/studio/runs/{id}/events` 原样转发，浏览器解析（`lib/studio/flow-run.ts`）。流提前结束时自动重连（1–5 秒退避），每次重连都从快照开始，因此运行在其他 Gateway 副本上时也能看到进度。
 - **运行记录**（`/flows/{id}/runs`）：时间、状态、版本、耗时、用量，可加载更多。
-- **BFF**：白名单新增编排与运行的 10 条路由；保存编排的请求体上限放宽到 1 MiB + 64 KiB，启动运行放宽到 2 MiB，其余仍为 64 KiB。400 应答中的问题列表只转发节点、字段与错误码，不转发上游的说明文字。
+- **BFF**：白名单新增编排与运行的 10 条路由；保存编排的请求体上限放宽到 1 MiB + 64 KiB，其余仍为 64 KiB（启动运行当时放宽到 2 MiB，现已改走流式的专门路由，见 2026-11-27 的图片与文件输入）。400 应答中的问题列表只转发节点、字段与错误码，不转发上游的说明文字。
 - 画布只在客户端水合后渲染：它从浏览器读取配色方案，服务端渲染的猜测会在水合后残留，导致深色主题下画布仍是浅色。
 
 验证：lint、typecheck、76 项单元测试（新增编排契约解析、问题文案、画布模型的连线规则与引用列表、运行事件归约、运行表单与导入导出、白名单）与生产构建通过。用桩控制面与桩 Gateway 加生产构建，在无头 Chrome（Playwright）中走通：登录、空列表、新建、添加 LLM 节点、保存时问题标在节点上、拖线连接、填写提示词与结果字段（自动填入 `{{llm_1.text}}`）、保存为第 2 版、运行表单拦下必填项、运行中节点状态与逐段文字、运行结束的结果与节点详情、重跑预填输入、停止后「已取消」、运行记录、编排列表、手机宽度（无横向滚动）、深色主题。未接真实 Gateway 与控制面联调。

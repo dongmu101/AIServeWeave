@@ -20,8 +20,10 @@
 //   - A reference to a node that was skipped renders as "".
 //   - Independent nodes run in parallel, at most Config.MaxParallel calls —
 //     model calls, image generations and workflow template runs — at a time.
-//   - An image_generation or comfyui_template node's fields hold artifact
-//     ids, which flowdef only lets an output reference.
+//   - An image_generation or comfyui_template node's fields, and image and
+//     file inputs, hold artifact ids, which flowdef only lets an output
+//     reference, or a comfyui_template input when they name one file; such
+//     an input reaches the Dispatcher in TemplateCall.Files.
 //   - The first node failure fails the run: model calls still in flight are
 //     cancelled and nothing further starts.
 //   - The output node renders Definition.Outputs into Result.Outputs. When the
@@ -47,8 +49,9 @@
 //   - 引用被跳过的节点时渲染为空字符串。
 //   - 互不依赖的节点并行运行，同时进行的调用（模型调用、生图与工作流模板运行）最多
 //     Config.MaxParallel 个。
-//   - image_generation 与 comfyui_template 节点的字段保存产物 id，flowdef 只允许输出
-//     引用它们。
+//   - image_generation 与 comfyui_template 节点的字段，以及 image 与 file 输入，保存
+//     产物 id。flowdef 只允许输出引用它们；指向单个文件时，也允许 comfyui_template 的
+//     输入引用，这样的输入经 TemplateCall.Files 交给 Dispatcher。
 //   - 第一个节点失败即令运行失败：仍在进行的模型调用被取消，之后不再启动任何节点。
 //   - 输出节点把 Definition.Outputs 渲染为 Result.Outputs。输出节点本身被跳过时运行
 //     仍然成功，只是没有输出。
@@ -150,11 +153,23 @@ type ImageCall struct {
 // and the rendered value of each input the node sets. An input that rendered
 // empty is still present; the Dispatcher decides how the template takes it.
 //
+// An input set to exactly one file — an image or file input of the run, or
+// the image of a node upstream (flowdef.Definition.RefersToFile) — is in
+// Files instead, as that file's artifact id. The id always comes from the
+// run itself, never from text a member typed. A file that is absent (an
+// optional input not given, a skipped node) leaves the input out.
+//
 // TemplateCall 是一个 comfyui_template 节点的调用：工作流模板 id，以及该节点设置的
 // 每个输入渲染后的取值。渲染为空的输入仍然存在；模板如何接收它由 Dispatcher 决定。
+//
+// 恰好设为一个文件的输入——运行的 image 或 file 输入，或上游节点的 image（见
+// flowdef.Definition.RefersToFile）——改为放在 Files 中，取值为该文件的产物 id。这个
+// id 总是来自运行本身，从不来自成员输入的文本。文件不存在时（可选输入未提供、节点被
+// 跳过）不传该输入。
 type TemplateCall struct {
 	Template string
 	Inputs   map[string]string
+	Files    map[string]string
 }
 
 // Artifact kinds. / 产物种类。
@@ -381,6 +396,9 @@ type planNode struct {
 	cond  flowdef.ConditionConfig
 	image flowdef.ImageConfig
 	comfy flowdef.ComfyUIConfig
+	// files names the comfyui_template inputs set to exactly one file.
+	// files 是恰好设为一个文件的 comfyui_template 输入。
+	files map[string]bool
 }
 
 type planOutput struct {
@@ -412,6 +430,16 @@ func (e *Engine) Plan(def flowdef.Definition, inputs map[string]json.RawMessage)
 		}
 		if n.Type == flowdef.NodeInput {
 			p.start = pn
+		}
+		if n.Type == flowdef.NodeComfyUI {
+			for name := range pn.comfy.Inputs {
+				if ref, ok := pn.tmpl["inputs."+name].SoleRef(); ok && def.RefersToFile(ref) {
+					if pn.files == nil {
+						pn.files = map[string]bool{}
+					}
+					pn.files[name] = true
+				}
+			}
 		}
 		p.nodes = append(p.nodes, pn)
 		p.byID[n.ID] = pn

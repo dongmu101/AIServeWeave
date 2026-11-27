@@ -32,6 +32,8 @@ tags:
     description: 工作流 Job 的提交、状态、事件、取消与产物
   - name: admin
     description: 只读运维接口（机群清单 / 工作流目录 / 按租户 job），使用部署密钥
+  - name: studio
+    description: Studio API（`/studio/v1`，仅以 `-studio` 启动时挂载；只接受控制面会话令牌，不接受 API Key）：对话、编排与运行
 
 security:
   - bearerAuth: []
@@ -425,6 +427,781 @@ paths:
         "401":
           $ref: "#/components/responses/AdminError"
 
+  # ---------------------------------------------------------------------------
+  # Studio API（/studio/v1）：以 -studio 启动时挂载，只接受控制面会话令牌
+  # ---------------------------------------------------------------------------
+  /studio/v1/me:
+    get:
+      tags: [studio]
+      summary: 当前会话所属的租户用户
+      operationId: studioGetMe
+      security:
+        - studioSession: []
+      responses:
+        "200":
+          description: 会话身份
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StudioMe"
+        "401":
+          $ref: "#/components/responses/StudioUnauthorized"
+        "503":
+          $ref: "#/components/responses/StudioUnavailable"
+
+  /studio/v1/models:
+    get:
+      tags: [studio]
+      summary: 该用户可对话的模型
+      description: |
+        与同一租户的 API Key 调用 `GET /v1/models` 得到的模型集合相同（同一模型与节点授权），
+        但形状不同：这里是 `{data:[{id,name}]}`，`name` 为展示名，缺省回退为 `id`。
+      operationId: studioListModels
+      security:
+        - studioSession: []
+      responses:
+        "200":
+          description: 模型列表（按目录顺序）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StudioModelList"
+        "401":
+          $ref: "#/components/responses/StudioUnauthorized"
+        "503":
+          $ref: "#/components/responses/StudioUnavailable"
+
+  /studio/v1/conversations:
+    get:
+      tags: [studio]
+      summary: 列出当前用户的对话
+      description: 游标分页，按控制面给出的顺序；`next` 为空（缺省）表示已是最后一页。
+      operationId: studioListConversations
+      security:
+        - studioSession: []
+      parameters:
+        - name: q
+          in: query
+          required: false
+          description: 标题搜索关键字，原样交给控制面
+          schema:
+            type: string
+        - $ref: "#/components/parameters/StudioCursor"
+        - $ref: "#/components/parameters/StudioLimit"
+      responses:
+        "200":
+          description: 一页对话
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StudioConversationPage"
+        "400":
+          $ref: "#/components/responses/StudioInvalidRequest"
+        "401":
+          $ref: "#/components/responses/StudioUnauthorized"
+        "503":
+          $ref: "#/components/responses/StudioUnavailable"
+    post:
+      tags: [studio]
+      summary: 新建对话
+      description: |
+        请求体可为空（视为 `{}`），未知字段被拒绝（400）。请求体上限 256 KiB（413 `too_large`）。
+        标题长度等存储限制由控制面判定，被拒绝时为 400 `invalid_request`。
+      operationId: studioCreateConversation
+      security:
+        - studioSession: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StudioConversationCreate"
+      responses:
+        "201":
+          description: 新对话
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StudioConversation"
+        "400":
+          $ref: "#/components/responses/StudioInvalidRequest"
+        "401":
+          $ref: "#/components/responses/StudioUnauthorized"
+        "409":
+          $ref: "#/components/responses/StudioConflict"
+        "413":
+          $ref: "#/components/responses/StudioTooLarge"
+        "503":
+          $ref: "#/components/responses/StudioUnavailable"
+
+  /studio/v1/conversations/{id}:
+    parameters:
+      - $ref: "#/components/parameters/StudioConversationID"
+    get:
+      tags: [studio]
+      summary: 读取一个对话
+      operationId: studioGetConversation
+      security:
+        - studioSession: []
+      responses:
+        "200":
+          description: 对话
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StudioConversation"
+        "401":
+          $ref: "#/components/responses/StudioUnauthorized"
+        "404":
+          $ref: "#/components/responses/StudioNotFound"
+        "503":
+          $ref: "#/components/responses/StudioUnavailable"
+    patch:
+      tags: [studio]
+      summary: 修改对话的标题、模型或系统提示词
+      description: 只修改请求体中出现且非 null 的字段；请求体上限 256 KiB，未知字段被拒绝（400）。
+      operationId: studioUpdateConversation
+      security:
+        - studioSession: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StudioConversationPatch"
+      responses:
+        "200":
+          description: 修改后的对话
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StudioConversation"
+        "400":
+          $ref: "#/components/responses/StudioInvalidRequest"
+        "401":
+          $ref: "#/components/responses/StudioUnauthorized"
+        "404":
+          $ref: "#/components/responses/StudioNotFound"
+        "409":
+          $ref: "#/components/responses/StudioConflict"
+        "413":
+          $ref: "#/components/responses/StudioTooLarge"
+        "503":
+          $ref: "#/components/responses/StudioUnavailable"
+    delete:
+      tags: [studio]
+      summary: 删除对话及其消息
+      operationId: studioDeleteConversation
+      security:
+        - studioSession: []
+      responses:
+        "204":
+          description: 已删除（无响应体）
+        "401":
+          $ref: "#/components/responses/StudioUnauthorized"
+        "404":
+          $ref: "#/components/responses/StudioNotFound"
+        "503":
+          $ref: "#/components/responses/StudioUnavailable"
+
+  /studio/v1/conversations/{id}/messages:
+    parameters:
+      - $ref: "#/components/parameters/StudioConversationID"
+    get:
+      tags: [studio]
+      summary: 读取对话的消息历史
+      description: |
+        按 `seq` 升序返回 `seq > after_seq` 的消息。这里没有 `next` 游标：
+        继续翻页时把上一页最后一条的 `seq` 作为 `after_seq`。
+      operationId: studioListMessages
+      security:
+        - studioSession: []
+      parameters:
+        - name: after_seq
+          in: query
+          required: false
+          description: 只返回 seq 大于该值的消息；缺省为 0。必须是非负整数，否则 400
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+            default: 0
+        - name: limit
+          in: query
+          required: false
+          description: 最多返回的条数；缺省、非数字或负数按缺省处理，上限与缺省值由控制面决定
+          schema:
+            type: integer
+            minimum: 0
+      responses:
+        "200":
+          description: 消息列表
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StudioMessageList"
+        "400":
+          $ref: "#/components/responses/StudioInvalidRequest"
+        "401":
+          $ref: "#/components/responses/StudioUnauthorized"
+        "404":
+          $ref: "#/components/responses/StudioNotFound"
+        "503":
+          $ref: "#/components/responses/StudioUnavailable"
+    post:
+      tags: [studio]
+      summary: 发送一条消息并以 SSE 流式接收回复
+      description: |
+        请求体必须在「发送 `content`」与「`regenerate: true` 重新回答最后一个问题」之间二选一
+        （`content` 非空白与 `regenerate` 同时成立或同时不成立都是 400）；`regenerate` 不能与
+        `replace_from_message_id` 同用；`replace_from_message_id` 必须是 `msg_` 开头的消息 id，
+        表示用 `content` 替换该条用户消息及其之后的所有消息。`model` 必填且必须是
+        `GET /studio/v1/models` 当前列出的模型，否则 400 `model_unavailable`。
+        请求体上限 256 KiB。
+
+        这是计费请求：账户余额耗尽返回 402 `insufficient_balance`，仅限订阅账户且订阅过期返回
+        402 `account_subscription_expired`；管理对话本身不受影响。
+
+        用户一侧的消息先于派发写入，写入失败则不派发。校验与写入通过后响应为
+        `200 text/event-stream`，**此后所有失败只出现在流内**（HTTP 状态仍为 200）。帧格式为
+        `event: <名称>\ndata: <JSON>\n\n`，顺序为：
+
+        1. `message_start`：`{conversation, user_message, message_id, model}`
+        2. 任意多个 `text_delta` / `thinking_delta`：`{delta}`
+        3. `usage`（仅当有用量时）：`{prompt_tokens, completion_tokens}`
+        4. `error`（仅当回复失败时）：`{code, message}`，code 取值为
+           `model_unavailable`、`insufficient_balance`、`account_subscription_expired`、
+           `rate_limited`、`timeout`、`invalid_request`、`upstream_error`
+        5. `message_stop`：`{message_id, status, error_code?}`，`status` 为
+           `complete` / `incomplete`（客户端中途离开或流被截断）/ `error`
+
+        回复在流结束后写入存储；客户端提前断开时，已收到的部分仍以 `incomplete` 保存。
+        各帧的载荷见 StudioMessageStartFrame、StudioDeltaFrame、StudioUsage、
+        StudioStreamErrorFrame、StudioMessageStopFrame。
+      operationId: studioSendMessage
+      security:
+        - studioSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StudioSendMessageRequest"
+      responses:
+        "200":
+          description: SSE 流，帧序列见操作说明
+          content:
+            text/event-stream:
+              schema:
+                description: |
+                  `event: message_start | text_delta | thinking_delta | usage | error | message_stop`，
+                  每帧 `data:` 为对应事件的 JSON 载荷，依次为下列 schema
+                oneOf:
+                  - $ref: "#/components/schemas/StudioMessageStartFrame"
+                  - $ref: "#/components/schemas/StudioDeltaFrame"
+                  - $ref: "#/components/schemas/StudioUsage"
+                  - $ref: "#/components/schemas/StudioStreamErrorFrame"
+                  - $ref: "#/components/schemas/StudioMessageStopFrame"
+        "400":
+          $ref: "#/components/responses/StudioInvalidRequest"
+        "401":
+          $ref: "#/components/responses/StudioUnauthorized"
+        "402":
+          $ref: "#/components/responses/StudioPaymentRequired"
+        "404":
+          $ref: "#/components/responses/StudioNotFound"
+        "409":
+          $ref: "#/components/responses/StudioConflict"
+        "413":
+          $ref: "#/components/responses/StudioTooLarge"
+        "429":
+          $ref: "#/components/responses/StudioRateLimited"
+        "503":
+          $ref: "#/components/responses/StudioUnavailable"
+
+  /studio/v1/flows:
+    get:
+      tags: [studio]
+      summary: 列出当前用户的编排
+      description: 游标分页；列表中的编排不带 `definition`，需要时用 `GET /studio/v1/flows/{id}` 读取。
+      operationId: studioListFlows
+      security:
+        - studioSession: []
+      parameters:
+        - $ref: "#/components/parameters/StudioCursor"
+        - $ref: "#/components/parameters/StudioLimit"
+      responses:
+        "200":
+          description: 一页编排
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StudioFlowPage"
+        "400":
+          $ref: "#/components/responses/StudioInvalidRequest"
+        "401":
+          $ref: "#/components/responses/StudioUnauthorized"
+        "503":
+          $ref: "#/components/responses/StudioUnavailable"
+    post:
+      tags: [studio]
+      summary: 新建编排（保存第 1 个版本）
+      description: |
+        `definition` 由控制面按 flowdef 规则校验，不合格返回 400 `invalid_flow` 并附问题列表
+        （见 StudioIssuesError）。请求体上限约 1 MiB + 64 KiB（413 `too_large`），未知字段被拒绝。
+      operationId: studioCreateFlow
+      security:
+        - studioSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StudioFlowCreate"
+      responses:
+        "201":
+          description: 新编排（含 definition）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StudioFlow"
+        "400":
+          $ref: "#/components/responses/StudioIssuesError"
+        "401":
+          $ref: "#/components/responses/StudioUnauthorized"
+        "409":
+          $ref: "#/components/responses/StudioConflict"
+        "413":
+          $ref: "#/components/responses/StudioTooLarge"
+        "503":
+          $ref: "#/components/responses/StudioUnavailable"
+
+  /studio/v1/flows/{id}:
+    parameters:
+      - $ref: "#/components/parameters/StudioFlowID"
+    get:
+      tags: [studio]
+      summary: 读取一个编排的最新版本
+      operationId: studioGetFlow
+      security:
+        - studioSession: []
+      responses:
+        "200":
+          description: 编排（含最新版本的 definition）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StudioFlow"
+        "401":
+          $ref: "#/components/responses/StudioUnauthorized"
+        "404":
+          $ref: "#/components/responses/StudioNotFound"
+        "503":
+          $ref: "#/components/responses/StudioUnavailable"
+    patch:
+      tags: [studio]
+      summary: 重命名编排和/或保存新版本
+      description: |
+        `name` 与 `definition` 都可选。给出 `definition` 即保存为新版本；`base_version`
+        为正时表示编辑器开始编辑时所基于的版本，若编排此后已在别处保存则返回
+        409 `flow_changed`。definition 不合格返回 400 `invalid_flow` 并附问题列表。
+      operationId: studioUpdateFlow
+      security:
+        - studioSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StudioFlowPatch"
+      responses:
+        "200":
+          description: 修改后的编排
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StudioFlow"
+        "400":
+          $ref: "#/components/responses/StudioIssuesError"
+        "401":
+          $ref: "#/components/responses/StudioUnauthorized"
+        "404":
+          $ref: "#/components/responses/StudioNotFound"
+        "409":
+          $ref: "#/components/responses/StudioConflict"
+        "413":
+          $ref: "#/components/responses/StudioTooLarge"
+        "503":
+          $ref: "#/components/responses/StudioUnavailable"
+    delete:
+      tags: [studio]
+      summary: 删除编排
+      description: 本副本上仍在进行的该编排的运行，会在下一次写入找不到编排时停止。
+      operationId: studioDeleteFlow
+      security:
+        - studioSession: []
+      responses:
+        "204":
+          description: 已删除（无响应体）
+        "401":
+          $ref: "#/components/responses/StudioUnauthorized"
+        "404":
+          $ref: "#/components/responses/StudioNotFound"
+        "503":
+          $ref: "#/components/responses/StudioUnavailable"
+
+  /studio/v1/flows/{id}/versions/{version}:
+    get:
+      tags: [studio]
+      summary: 读取编排的某个历史版本
+      description: 版本号不是不小于 1 的整数时按不存在处理（404 `not_found`）。
+      operationId: studioGetFlowVersion
+      security:
+        - studioSession: []
+      parameters:
+        - $ref: "#/components/parameters/StudioFlowID"
+        - name: version
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+      responses:
+        "200":
+          description: 该版本的内容
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StudioFlowVersion"
+        "401":
+          $ref: "#/components/responses/StudioUnauthorized"
+        "404":
+          $ref: "#/components/responses/StudioNotFound"
+        "503":
+          $ref: "#/components/responses/StudioUnavailable"
+
+  /studio/v1/flows/{id}/runs:
+    parameters:
+      - $ref: "#/components/parameters/StudioFlowID"
+    get:
+      tags: [studio]
+      summary: 列出某个编排的运行记录
+      description: 游标分页；列表中的运行不带 `inputs`、`outputs` 与 `steps`，需要时用 `GET /studio/v1/runs/{id}` 读取。
+      operationId: studioListFlowRuns
+      security:
+        - studioSession: []
+      parameters:
+        - $ref: "#/components/parameters/StudioCursor"
+        - $ref: "#/components/parameters/StudioLimit"
+      responses:
+        "200":
+          description: 一页运行
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StudioRunPage"
+        "400":
+          $ref: "#/components/responses/StudioInvalidRequest"
+        "401":
+          $ref: "#/components/responses/StudioUnauthorized"
+        "404":
+          $ref: "#/components/responses/StudioNotFound"
+        "503":
+          $ref: "#/components/responses/StudioUnavailable"
+    post:
+      tags: [studio]
+      summary: 启动一次编排运行
+      description: |
+        以给定输入值运行编排的最新版本，或 `version` 指定的版本。运行在**本副本**上异步执行，
+        并且比启动它的请求活得更久；应答 202 附带刚创建的运行（`status: running`），之后用
+        `GET /studio/v1/runs/{id}` 轮询，或用 `GET /studio/v1/runs/{id}/events` 订阅事件流。
+        请求体上限 2 MiB（413 `too_large`），未知字段被拒绝（400 `invalid_request`）。
+
+        带 `image` 或 `file` 输入的编排以 `multipart/form-data` 启动：`request` 字段放与 JSON
+        请求体相同的内容，每个上传的文件一个分片，分片名为输入名。整个请求上限 200 MiB
+        （与工作流上传相同）。每个文件按工作流上传的规则检查（扩展名允许列表
+        `-workflow-upload-allowed-extensions` 与字节嗅探；`image` 输入只接受
+        .png/.jpg/.jpeg/.webp/.gif/.bmp），并在存下运行之前写入对象存储，成为该运行的产物
+        （`sart_` 开头的 id）。运行的 `inputs` 把它记为 StudioRunFileValue。需要部署配置
+        `-artifact-storage`。
+
+        重跑时可以复用本人更早的运行收到过的文件：该输入的 JSON 取值写
+        `{"run_id": "<更早的运行>", "artifact_id": "<该运行 inputs 中的 artifact_id>"}`，
+        文件被复制到新运行之下。JSON 与 multipart 两种形状都可以这样写。
+
+        这是计费请求：余额耗尽返回 402 `insufficient_balance`，订阅账户过期返回
+        402 `account_subscription_expired`。
+
+        在存储任何东西之前，按下列顺序做事前检查，失败都返回 400 且不创建运行，
+        并附带定位到具体节点或输入的问题列表（见 StudioIssuesError）：
+
+        1. `invalid_flow`：所选版本的定义本身不合法；
+        2. `model_unavailable`：定义引用的模型、图像模型或工作流模板当前对该用户不可用
+           （问题的 `code` 为 `model_unavailable`、`image_generation_unavailable` 或
+           `template_unavailable`，`node` 为对应节点，`field` 为 `config.model` 或 `config.template`）；
+        3. `invalid_inputs`：输入值有误（问题不带 `node`，`field` 为 `inputs.<名称>`，
+           `code` 为 `required`、`invalid_value`，未声明的名称为 `unknown_input`）。文件输入另有：
+           `unknown_input`（文件分片不对应任何 image/file 输入）、`unsupported_file_type`
+           （扩展名不允许或内容与扩展名不符）、`not_found`（要复用的文件不存在或已过保留期）、
+           `artifact_storage_unavailable`（部署未配置对象存储）；同一输入既上传文件又给 JSON
+           取值为 `invalid_value`。
+
+        进行中的运行数达到上限时返回 429 `run_limit`；本副本正在关闭时返回 503 `unavailable`；
+        对象存储暂时无法写入或读取时返回 503 `storage_unavailable`，已写入的文件被删除。
+      operationId: studioStartRun
+      security:
+        - studioSession: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StudioRunStartRequest"
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                request:
+                  type: string
+                  description: StudioRunStartRequest 的 JSON 文本；缺省视为 `{}`
+              additionalProperties:
+                type: string
+                format: binary
+                description: 以 image/file 输入名命名的文件分片
+      responses:
+        "202":
+          description: 运行已受理并开始执行
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StudioRun"
+        "400":
+          $ref: "#/components/responses/StudioIssuesError"
+        "401":
+          $ref: "#/components/responses/StudioUnauthorized"
+        "402":
+          $ref: "#/components/responses/StudioPaymentRequired"
+        "404":
+          $ref: "#/components/responses/StudioNotFound"
+        "409":
+          $ref: "#/components/responses/StudioConflict"
+        "413":
+          $ref: "#/components/responses/StudioTooLarge"
+        "429":
+          $ref: "#/components/responses/StudioRateLimited"
+        "503":
+          $ref: "#/components/responses/StudioUnavailable"
+
+  /studio/v1/runs/{id}:
+    parameters:
+      - $ref: "#/components/parameters/StudioRunID"
+    get:
+      tags: [studio]
+      summary: 读取一次运行（含各步骤）
+      description: 在本副本上执行的运行从内存读取，因此所有者能在进度写入存储之前就看到它。
+      operationId: studioGetRun
+      security:
+        - studioSession: []
+      responses:
+        "200":
+          description: 运行
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StudioRun"
+        "401":
+          $ref: "#/components/responses/StudioUnauthorized"
+        "404":
+          $ref: "#/components/responses/StudioNotFound"
+        "503":
+          $ref: "#/components/responses/StudioUnavailable"
+
+  /studio/v1/runs/{id}/events:
+    get:
+      tags: [studio]
+      summary: 订阅一次运行的事件流（SSE）
+      description: |
+        帧格式为 `event: <名称>\ndata: <JSON>\n\n`。流总是以 `run_snapshot` 开头：运行的当前状态、
+        已结束的步骤，以及仍在生成的节点迄今的文本；之后依次出现 `node_started`、`node_delta`、
+        `node_finished`、`node_skipped`，最后是 `run_finished`。空闲时每 15 秒发送一行
+        `: keep-alive` 注释帧（客户端应忽略）。载荷见 StudioRunSnapshotFrame、
+        StudioNodeStartedFrame、StudioNodeDeltaFrame、StudioRunStep（`node_finished` 与
+        `node_skipped` 的载荷）、StudioRunFinishedFrame。
+
+        - 已结束的运行：立即得到 `run_snapshot` 与 `run_finished`，随后流关闭。
+        - 在**其他副本**上执行的运行：只得到 `run_snapshot` 便关闭（没有 `run_finished`），
+          客户端应改为轮询 `GET /studio/v1/runs/{id}`。
+        - 落后太多的观察者会被断开（流关闭但没有 `run_finished`），重连后从新的快照开始。
+
+        运行不存在或不属于当前用户时，在流开始之前返回 404。
+      operationId: studioStreamRunEvents
+      security:
+        - studioSession: []
+      parameters:
+        - $ref: "#/components/parameters/StudioRunID"
+      responses:
+        "200":
+          description: SSE 流，帧序列见操作说明
+          content:
+            text/event-stream:
+              schema:
+                description: |
+                  `event: run_snapshot | node_started | node_delta | node_finished | node_skipped | run_finished`，
+                  每帧 `data:` 为对应事件的 JSON 载荷，依次为下列 schema（`node_finished` 与 `node_skipped` 同为 StudioRunStep）
+                oneOf:
+                  - $ref: "#/components/schemas/StudioRunSnapshotFrame"
+                  - $ref: "#/components/schemas/StudioNodeStartedFrame"
+                  - $ref: "#/components/schemas/StudioNodeDeltaFrame"
+                  - $ref: "#/components/schemas/StudioRunStep"
+                  - $ref: "#/components/schemas/StudioRunFinishedFrame"
+        "401":
+          $ref: "#/components/responses/StudioUnauthorized"
+        "404":
+          $ref: "#/components/responses/StudioNotFound"
+        "503":
+          $ref: "#/components/responses/StudioUnavailable"
+
+  /studio/v1/runs/{id}/cancel:
+    post:
+      tags: [studio]
+      summary: 取消一次进行中的运行
+      description: |
+        只有执行该运行的副本才能停止它。在该副本上应答 202 并附上运行当前状态（终态随后经事件流或
+        轮询得到）；运行在其他副本上仍在进行时返回 409 `run_elsewhere`（稍后重试）；运行已结束时
+        返回 409 `run_finished`。
+      operationId: studioCancelRun
+      security:
+        - studioSession: []
+      parameters:
+        - $ref: "#/components/parameters/StudioRunID"
+      responses:
+        "202":
+          description: 已请求取消，附运行当前状态
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StudioRun"
+        "401":
+          $ref: "#/components/responses/StudioUnauthorized"
+        "404":
+          $ref: "#/components/responses/StudioNotFound"
+        "409":
+          $ref: "#/components/responses/StudioConflict"
+        "503":
+          $ref: "#/components/responses/StudioUnavailable"
+
+  /studio/v1/runs/{id}/artifacts/{artifact_id}:
+    get:
+      tags: [studio]
+      summary: 下载运行收到的文件或某个步骤产出的产物
+      description: |
+        只能下载本人这次运行的输入文件（`inputs` 中 StudioRunFileValue 的 `artifact_id`），或
+        这次运行的步骤输出里出现过的产物 id（`image_generation` 与 `comfyui_template` 节点的
+        `image` / `artifacts` 输出）；其他 id 视为不存在（404 `not_found`），即使该租户拥有它。
+
+        Studio 自己写入对象存储的对象（`sart_` 开头：推理图片与输入文件）有保留期
+        （`-studio-artifact-retention`，默认 30 天），过期后同样 404 `not_found`。
+
+        响应体是租户的文件，经 Studio 来源提供，因此总带 `Content-Disposition: attachment`、
+        `X-Content-Type-Options: nosniff`、`Content-Security-Policy: sandbox` 与
+        `Cache-Control: private, no-store`。`sart_` 开头的 id 是推理生图模型的图片或运行的输入文件
+        （存放在对象存储，`Content-Type` 由文件开头嗅探，只会是图片、音频或视频类型，其余以及 SVG
+        一律回落为 `application/octet-stream`；输入文件以上传时的文件名下载）；其余是工作流产物
+        （`Content-Type` 随产物而定）。
+
+        注意：工作流产物这一支复用 `/v1/artifacts/{artifact_id}` 的下载逻辑，其失败应答（例如
+        `artifact_not_found` 或调度错误）沿用 OpenAI 形状的错误体，而不是 Studio 形状。
+      operationId: studioDownloadRunArtifact
+      security:
+        - studioSession: []
+      parameters:
+        - $ref: "#/components/parameters/StudioRunID"
+        - name: artifact_id
+          in: path
+          required: true
+          schema:
+            type: string
+            maxLength: 128
+      responses:
+        "200":
+          description: 产物内容
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+            X-Content-Type-Options:
+              schema:
+                type: string
+                example: nosniff
+            Content-Security-Policy:
+              schema:
+                type: string
+                example: sandbox
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+            image/*:
+              schema:
+                type: string
+                format: binary
+        "401":
+          $ref: "#/components/responses/StudioUnauthorized"
+        "404":
+          description: 运行或产物不存在（Studio 错误体；工作流产物缺失时可能是 OpenAI 形状的 `artifact_not_found`）
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/StudioErrorBody"
+                  - $ref: "#/components/schemas/OpenAIErrorBody"
+        "503":
+          $ref: "#/components/responses/StudioUnavailable"
+
+  /studio/v1/image-models:
+    get:
+      tags: [studio]
+      summary: 可用于 image_generation 节点的图像模型
+      description: |
+        返回该用户可调用的图像模型，以及部署自己的生图（`image_generation` 节点不指定模型时使用）
+        是否已配置。
+      operationId: studioListImageModels
+      security:
+        - studioSession: []
+      responses:
+        "200":
+          description: 图像模型列表
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StudioImageModelList"
+        "401":
+          $ref: "#/components/responses/StudioUnauthorized"
+        "503":
+          $ref: "#/components/responses/StudioUnavailable"
+
+  /studio/v1/workflow-templates:
+    get:
+      tags: [studio]
+      summary: 可用于 comfyui_template 节点的已发布工作流模板
+      description: 该用户所在租户可运行的模板，只带输入与输出声明，从不带工作流图。
+      operationId: studioListWorkflowTemplates
+      security:
+        - studioSession: []
+      responses:
+        "200":
+          description: 模板列表
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StudioWorkflowTemplateList"
+        "401":
+          $ref: "#/components/responses/StudioUnauthorized"
+        "503":
+          $ref: "#/components/responses/StudioUnavailable"
+
 components:
   securitySchemes:
     bearerAuth:
@@ -435,6 +1212,16 @@ components:
       type: http
       scheme: bearer
       description: 部署级运维密钥（AISW_GATEWAY_ADMIN_TOKEN），与租户 API Key 无关。
+    studioSession:
+      type: http
+      scheme: bearer
+      description: |
+        控制面会话令牌（Authorization: Bearer <session token>），只用于 `/studio/v1/*`。
+        该前门**不接受**租户 API Key（形如 API Key 的凭据直接 401，不会被送往控制面），
+        反之 `/v1/*` 也不接受会话令牌。令牌无效、过期、被吊销、属于平台运维账号或租户已暂停，
+        统一为 401 `unauthorized`；控制面无法校验时为 503 `verification_unavailable`。
+        所有 Studio 请求同样受租户限流约束：超限时为 429，**错误体是 OpenAI 形状**
+        （`{error:{message,type,code}}`）并带 `Retry-After`。
 
   parameters:
     WorkflowID:
@@ -449,6 +1236,46 @@ components:
       required: true
       schema:
         type: string
+    StudioConversationID:
+      name: id
+      in: path
+      required: true
+      description: 对话 id，`cnv_` 开头，总长不超过 40；形状不合法的 id 直接 404
+      schema:
+        type: string
+        example: cnv_0123456789abcdef
+    StudioFlowID:
+      name: id
+      in: path
+      required: true
+      description: 编排 id，`flw_` 开头，总长不超过 40；形状不合法的 id 直接 404
+      schema:
+        type: string
+        example: flw_0123456789abcdef
+    StudioRunID:
+      name: id
+      in: path
+      required: true
+      description: 运行 id，`frn_` 开头，总长不超过 40；形状不合法的 id 直接 404
+      schema:
+        type: string
+        example: frn_0123456789abcdef
+    StudioCursor:
+      name: cursor
+      in: query
+      required: false
+      description: 上一页响应的 `next`；原样回传，不透明，最长 512 字节（超过则 400）
+      schema:
+        type: string
+        maxLength: 512
+    StudioLimit:
+      name: limit
+      in: query
+      required: false
+      description: 每页条数；缺省或非数字按缺省处理，负数为 400，上限与缺省值由控制面决定
+      schema:
+        type: integer
+        minimum: 0
 
   responses:
     OpenAIError:
@@ -466,6 +1293,78 @@ components:
             properties:
               error:
                 type: string
+    StudioUnauthorized:
+      description: 缺少或无法通过认证的会话令牌（`unauthorized`）
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/StudioErrorBody"
+    StudioPaymentRequired:
+      description: 账户余额耗尽（`insufficient_balance`），或仅限订阅账户且订阅已过期（`account_subscription_expired`）；只对发送消息与启动运行返回
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/StudioErrorBody"
+    StudioNotFound:
+      description: 对象不存在、不属于当前用户或 id 形状不合法（`not_found`）
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/StudioErrorBody"
+    StudioInvalidRequest:
+      description: 请求无效。code 常见为 `invalid_request`（查询参数、请求体或其内容不合法），发送消息时还可能是 `model_unavailable`
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/StudioErrorBody"
+    StudioConflict:
+      description: |
+        冲突。code 为 `limit_reached`（对话/消息/编排/版本数已达上限）、`conflict`（对话已变化，
+        需重新加载）、`flow_changed`（编排已在别处保存）、`run_elsewhere` 或 `run_finished`
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/StudioErrorBody"
+    StudioTooLarge:
+      description: 请求体超过该端点的上限（`too_large`）
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/StudioErrorBody"
+    StudioRateLimited:
+      description: |
+        被拒绝。可能是 Studio 形状的 `run_limit`（进行中的运行数已达上限），也可能是租户限流的
+        OpenAI 形状错误体（带 `Retry-After`）
+      headers:
+        Retry-After:
+          description: 租户限流拒绝时给出，单位秒
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: "#/components/schemas/StudioErrorBody"
+              - $ref: "#/components/schemas/OpenAIErrorBody"
+    StudioUnavailable:
+      description: |
+        依赖暂不可用。code 为 `verification_unavailable`（控制面无法校验会话）、
+        `storage_unavailable`（控制面无法读写对话/编排/运行）或 `unavailable`（本副本正在关闭）
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/StudioErrorBody"
+    StudioIssuesError:
+      description: |
+        请求无效。多数情况下与 StudioInvalidRequest 相同（普通 Studio 错误体）；与编排定义或运行
+        输入有关时，code 为 `invalid_flow`、`model_unavailable` 或 `invalid_inputs`，并附带
+        `issues` 问题列表（最多 50 条，`truncated` 表示还有更多被丢弃）
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: "#/components/schemas/StudioIssuesErrorBody"
+              - $ref: "#/components/schemas/StudioErrorBody"
 
   schemas:
     OpenAIErrorBody:
@@ -949,3 +1848,701 @@ components:
               artifact_ids:
                 type: array
                 items: { type: string }
+
+    # ---- Studio API ----
+    StudioErrorBody:
+      type: object
+      description: |
+        Studio 的错误体，与 `/v1` 的 OpenAI 形状不同：`error.code` 是稳定的机读值
+        （由 Studio 映射成自己的文案），`error.message` 供阅读原始响应，从不携带请求内容。
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              example: not_found
+            message:
+              type: string
+
+    FlowIssue:
+      type: object
+      description: 编排定义或运行输入中的一个问题，定位到所属节点。
+      required: [code, message]
+      properties:
+        node:
+          type: string
+          description: 所属节点 id；输入声明的问题归在 input 节点，输出声明的问题归在 output 节点；整份定义或运行输入的问题为空
+        field:
+          type: string
+          description: 节点或定义内部以点分隔的路径，如 `config.prompt`、`inputs.topic.default`；运行输入的问题为 `inputs.<名称>`
+          example: config.prompt
+        code:
+          type: string
+          description: |
+            稳定的问题码。定义校验：`too_large`、`invalid_json`、`too_many`、`invalid_name`、
+            `duplicate_name`、`invalid_label`、`invalid_type`、`invalid_default`、`invalid_config`、
+            `required`、`out_of_range`、`invalid_template`、`unknown_reference`、
+            `reference_not_upstream`、`missing_node`、`multiple_nodes`、`invalid_edge`、`cycle`、
+            `unreachable`、`artifact_reference`；运行输入：`required`、`invalid_value`、
+            `unknown_input`、`unsupported_file_type`、`not_found`、`artifact_storage_unavailable`；
+            运行前的可用性检查：`model_unavailable`、
+            `image_generation_unavailable`、`template_unavailable`
+        message:
+          type: string
+          description: 只写标识符，从不引用模板、标签或取值
+
+    StudioIssuesErrorBody:
+      type: object
+      description: 带问题列表的 400 错误体。
+      required: [error, issues]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum: [invalid_flow, model_unavailable, invalid_inputs]
+            message:
+              type: string
+        issues:
+          type: array
+          items:
+            $ref: "#/components/schemas/FlowIssue"
+        truncated:
+          type: boolean
+          description: 为 true 表示问题多于 50 条，多出的被丢弃
+
+    StudioMe:
+      type: object
+      required: [tenant_id, user_id, role]
+      properties:
+        tenant_id: { type: string }
+        user_id: { type: string }
+        role: { type: string, description: 该用户在租户内的角色 }
+
+    StudioModel:
+      type: object
+      required: [id, name]
+      properties:
+        id: { type: string }
+        name: { type: string, description: 展示名；没有展示名时与 id 相同 }
+
+    StudioModelList:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/StudioModel"
+
+    StudioImageModelList:
+      type: object
+      required: [data, default_available]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/StudioModel"
+        default_available:
+          type: boolean
+          description: 部署自己的生图工作流是否已配置并注册；为 false 时不指定 model 的 image_generation 节点无法运行
+
+    StudioUsage:
+      type: object
+      description: token 用量。也是对话 SSE `usage` 帧的载荷。
+      required: [prompt_tokens, completion_tokens]
+      properties:
+        prompt_tokens: { type: integer, format: int64 }
+        completion_tokens: { type: integer, format: int64 }
+
+    StudioConversation:
+      type: object
+      required: [id, title, model, system_prompt, created_at, updated_at]
+      properties:
+        id: { type: string, example: cnv_0123456789abcdef }
+        title: { type: string }
+        model: { type: string }
+        system_prompt: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    StudioConversationPage:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/StudioConversation"
+        next:
+          type: string
+          description: 下一页游标；最后一页缺省
+
+    StudioConversationCreate:
+      type: object
+      description: 全部字段可选，未知字段被拒绝。
+      properties:
+        title: { type: string }
+        model: { type: string }
+        system_prompt: { type: string }
+
+    StudioConversationPatch:
+      type: object
+      description: 只修改出现且非 null 的字段，未知字段被拒绝。
+      properties:
+        title: { type: string, nullable: true }
+        model: { type: string, nullable: true }
+        system_prompt: { type: string, nullable: true }
+
+    StudioMessage:
+      type: object
+      required: [id, seq, role, content, status, created_at]
+      properties:
+        id: { type: string, example: msg_0123456789abcdef }
+        seq: { type: integer, format: int64, description: 消息在对话内的序号，递增 }
+        role: { type: string, enum: [user, assistant] }
+        content: { type: string }
+        reasoning:
+          type: string
+          description: 模型的思考过程；没有时缺省
+        status:
+          type: string
+          description: 助手回复的状态：`complete`、`incomplete`（客户端中途离开或流被截断）、`error`；用户消息为 `complete`
+          enum: [complete, incomplete, error]
+        model: { type: string, description: 生成该回复的模型；缺省表示未记录 }
+        usage:
+          $ref: "#/components/schemas/StudioUsage"
+        error_code:
+          type: string
+          description: status 为 error 时的稳定错误码
+        created_at: { type: string, format: date-time }
+
+    StudioMessageList:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/StudioMessage"
+
+    StudioSendMessageRequest:
+      type: object
+      description: |
+        `content` 与 `regenerate` 二选一（`content` 须含非空白字符）；`regenerate` 不能与
+        `replace_from_message_id` 同用。未知字段被拒绝。
+      required: [model]
+      properties:
+        model:
+          type: string
+          description: 必须是 `GET /studio/v1/models` 当前列出的模型
+        content:
+          type: string
+          description: 要发送的用户消息
+        regenerate:
+          type: boolean
+          description: 为 true 时用最后一个问题重新生成回复
+        replace_from_message_id:
+          type: string
+          description: 与 `content` 同用：替换这条用户消息及其之后的所有消息（`msg_` 开头）
+
+    StudioMessageStartFrame:
+      type: object
+      description: 对话 SSE `message_start` 帧的载荷，流的第一帧。
+      required: [conversation, user_message, message_id, model]
+      properties:
+        conversation:
+          $ref: "#/components/schemas/StudioConversation"
+        user_message:
+          $ref: "#/components/schemas/StudioMessage"
+        message_id:
+          type: string
+          description: 即将生成的助手消息 id（`msg_` 开头）
+        model: { type: string }
+
+    StudioDeltaFrame:
+      type: object
+      description: 对话 SSE `text_delta`（回复文本增量）与 `thinking_delta`（思考过程增量）帧的载荷；运行 SSE `node_delta` 帧另带 `node_id`。
+      required: [delta]
+      properties:
+        delta: { type: string }
+
+    StudioStreamErrorFrame:
+      type: object
+      description: 对话 SSE `error` 帧的载荷（HTTP 状态仍为 200）。message 是固定文案，从不透传上游消息。
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum: [model_unavailable, insufficient_balance, account_subscription_expired, rate_limited, timeout, invalid_request, upstream_error]
+        message: { type: string }
+
+    StudioMessageStopFrame:
+      type: object
+      description: 对话 SSE `message_stop` 帧的载荷，流的最后一帧。
+      required: [message_id, status]
+      properties:
+        message_id: { type: string }
+        status: { type: string, enum: [complete, incomplete, error] }
+        error_code: { type: string }
+
+    # ---- 编排定义（common/flowdef）----
+    FlowDefinition:
+      type: object
+      description: |
+        一份编排的内容，由控制面保存前与 Gateway 运行前各校验一次（结构校验，不判断模型当前是否可用）。
+        未知字段被拒绝。规则概要：恰好一个 `input` 节点（无入边）与一个 `output` 节点（无出边）；
+        中间可有 `llm`、`template`、`condition`、`image_generation`、`comfyui_template` 节点，
+        且都能从 input 节点到达；不能有环；至多 50 个节点、200 条边、20 个输入、20 个输出，整份定义不超过 1 MiB。
+
+        模板字符串中以 `{{inputs.<名称>}}` 引用运行输入，以 `{{<节点id>.<字段>}}` 引用**上游**节点的输出字段：
+        llm/template 节点有 `text`（llm 声明了 `json_fields` 时还有各结构化字段），condition 节点有 `result`
+        （`"true"`/`"false"`），image_generation 节点有 `image`，comfyui_template 节点有 `image` 与 `artifacts`。
+        产物字段（`image`、`artifacts`）只能作为某个输出 `ref` 的全部内容，不能嵌入其他模板或参与比较。
+        节点 id 与输入/字段名只含字母、数字与下划线，不超过 64 字节，节点 id 不能是 `inputs`。
+      required: [inputs, nodes, edges, outputs]
+      properties:
+        inputs:
+          type: array
+          description: 运行时变量，由 input 节点提供
+          items:
+            $ref: "#/components/schemas/FlowInput"
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/FlowNode"
+        edges:
+          type: array
+          items:
+            $ref: "#/components/schemas/FlowEdge"
+        outputs:
+          type: array
+          description: 一次运行收集的结果字段，由 output 节点收集
+          items:
+            $ref: "#/components/schemas/FlowOutput"
+
+    FlowInput:
+      type: object
+      required: [name, type, required]
+      properties:
+        name: { type: string }
+        label: { type: string, description: 展示标签，至多 100 个字符 }
+        type:
+          type: string
+          enum: [text, number, boolean, image, file]
+          description: |
+            `image` 与 `file` 的取值是上传的文件（见 `POST /studio/v1/flows/{id}/runs`），以产物 id
+            替换进模板。它们只能作为输出 ref 的全部内容被引用，或作为 comfyui_template 某个输入的
+            全部内容（交给模板的文件型输入），其他位置报 `artifact_reference`。
+        required: { type: boolean, description: 为 true 时最终必须得到非空白的取值 }
+        default:
+          description: 默认值，类型须与 `type` 一致（text 为字符串，number 为数字，boolean 为布尔）；null 视为未设置。image 与 file 输入不能有默认值（`invalid_default`）
+          nullable: true
+
+    FlowNode:
+      type: object
+      required: [id, type, position]
+      properties:
+        id: { type: string }
+        type:
+          type: string
+          enum: [input, llm, template, condition, image_generation, comfyui_template, output]
+        label: { type: string, description: 展示标签，至多 100 个字符 }
+        config:
+          description: |
+            形状取决于 `type`，未知字段被拒绝：`llm` 为 FlowLLMConfig，`template` 为
+            FlowTemplateConfig，`condition` 为 FlowConditionConfig，`image_generation` 为
+            FlowImageConfig，`comfyui_template` 为 FlowComfyUIConfig；`input` 与 `output` 节点不带 config
+          oneOf:
+            - $ref: "#/components/schemas/FlowLLMConfig"
+            - $ref: "#/components/schemas/FlowTemplateConfig"
+            - $ref: "#/components/schemas/FlowConditionConfig"
+            - $ref: "#/components/schemas/FlowImageConfig"
+            - $ref: "#/components/schemas/FlowComfyUIConfig"
+        position:
+          type: object
+          description: 节点在画布上的位置，不影响执行
+          required: [x, y]
+          properties:
+            x: { type: number }
+            y: { type: number }
+
+    FlowEdge:
+      type: object
+      required: [from, to]
+      properties:
+        from: { type: string }
+        to: { type: string }
+        branch:
+          type: string
+          enum: ["true", "false"]
+          description: 只有从 condition 节点出发的边才设置，且取值须是 `true` 或 `false`
+
+    FlowOutput:
+      type: object
+      required: [name, ref]
+      properties:
+        name: { type: string }
+        ref:
+          type: string
+          description: 模板，通常是单个引用，如 `{{summary.text}}`；基于 output 节点上游的节点求值
+          example: "{{summary.text}}"
+
+    FlowLLMConfig:
+      type: object
+      description: llm 节点：调用对话模型。
+      required: [model, prompt]
+      properties:
+        model:
+          type: string
+          description: 固定的模型名（不是模板），至多 256 字节
+        system: { type: string, description: 系统提示词模板 }
+        prompt: { type: string, description: 提示词模板 }
+        temperature: { type: number, minimum: 0, maximum: 2 }
+        max_tokens: { type: integer, minimum: 1 }
+        json_fields:
+          type: array
+          description: 非空表示要求结构化输出，每个字段可作为 `{{<节点>.<字段>}}` 引用；至多 20 个，名称不能是 `text`
+          items:
+            type: object
+            required: [name, type]
+            properties:
+              name: { type: string }
+              type: { type: string, enum: [text, number, boolean] }
+              description: { type: string, description: 作为提示传给模型，至多 500 个字符 }
+
+    FlowTemplateConfig:
+      type: object
+      description: template 节点：渲染一个模板，结果即 `{{<节点>.text}}`。
+      required: [template]
+      properties:
+        template: { type: string }
+
+    FlowConditionConfig:
+      type: object
+      description: condition 节点：比较两个模板的渲染结果，结果为 `true` 或 `false`，据此选择出边的 `branch`。
+      required: [left, op]
+      properties:
+        left: { type: string, description: 左操作数模板 }
+        op:
+          type: string
+          enum: [equals, not_equals, contains, not_contains, gt, gte, lt, lte, empty, not_empty]
+          description: gt/gte/lt/lte 把两侧按数字比较；empty/not_empty 不能带 `right`
+        right: { type: string, description: 右操作数模板；empty 与 not_empty 不使用 }
+
+    FlowImageConfig:
+      type: object
+      description: image_generation 节点：生成图片，输出字段 `image` 是产物 id。
+      required: [prompt]
+      properties:
+        model:
+          type: string
+          description: 固定的图像模型名（见 `GET /studio/v1/image-models`）；为空时使用部署自己的生图工作流
+        prompt: { type: string, description: 提示词模板 }
+        size:
+          type: string
+          description: "`<宽>x<高>`，每边 1 到 16384 的十进制整数；推理图像模型不支持指定尺寸"
+          example: 1024x1024
+
+    FlowComfyUIConfig:
+      type: object
+      description: comfyui_template 节点：运行已发布的工作流模板，输出字段 `image`（第一张图片的产物 id）与 `artifacts`（全部产物，JSON 数组字符串）。
+      required: [template]
+      properties:
+        template:
+          type: string
+          description: 固定的工作流模板 id（见 `GET /studio/v1/workflow-templates`），不是模板字符串，至多 256 字节
+        inputs:
+          type: object
+          description: |
+            以模板输入名为键、以模板字符串为值；未列出的输入取工作流模板自己的默认值，至多 50 个。
+            模板的 `file` 型输入取值必须恰好是一个文件引用：image/file 运行输入
+            （`{{inputs.<名称>}}`），或上游节点的 `image`（`{{<节点>.image}}`）；节点运行时把该文件
+            作为 multipart 文件分片提交给模板。文本型输入给了文件、文件型输入给了文本、或必填
+            文件输入没有取值，节点以 `invalid_input` 失败；文件已不存在（如过了保留期）以
+            `not_found` 失败。
+          additionalProperties:
+            type: string
+
+    StudioFlow:
+      type: object
+      required: [id, name, version, created_at, updated_at]
+      properties:
+        id: { type: string, example: flw_0123456789abcdef }
+        name: { type: string }
+        version: { type: integer, format: int64, description: 最新版本号，从 1 起 }
+        definition:
+          $ref: "#/components/schemas/FlowDefinition"
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    StudioFlowPage:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          description: 列表中的编排不带 definition
+          items:
+            $ref: "#/components/schemas/StudioFlow"
+        next:
+          type: string
+          description: 下一页游标；最后一页缺省
+
+    StudioFlowCreate:
+      type: object
+      required: [name, definition]
+      properties:
+        name: { type: string }
+        definition:
+          $ref: "#/components/schemas/FlowDefinition"
+
+    StudioFlowPatch:
+      type: object
+      description: name 与 definition 都可选；未知字段被拒绝。
+      properties:
+        name: { type: string, nullable: true }
+        definition:
+          $ref: "#/components/schemas/FlowDefinition"
+        base_version:
+          type: integer
+          format: int64
+          description: 为正时表示编辑器开始编辑时所基于的版本；编排此后已在别处保存则 409 `flow_changed`
+
+    StudioFlowVersion:
+      type: object
+      required: [version, definition, created_at]
+      properties:
+        version: { type: integer, format: int64 }
+        definition:
+          $ref: "#/components/schemas/FlowDefinition"
+        created_at: { type: string, format: date-time }
+
+    # ---- 运行 ----
+    StudioRunStartRequest:
+      type: object
+      description: |
+        启动运行的请求体（JSON）。请求体可为空（视为 `{}`），未知字段被拒绝。
+        单独成组件，便于后续扩展新的输入形式。
+      properties:
+        inputs:
+          type: object
+          description: |
+            以输入名为键的取值，须与定义中声明的输入一一对应：未声明的名称为 `unknown_input`；
+            缺省或 null 使用该输入的默认值；`required` 的输入最终必须非空白。
+            取值类型：text 为字符串（至多 64 KiB），number 为数字，boolean 为布尔；image 与 file
+            输入以 multipart 文件分片上传，或以 StudioRunReusedFile 复用更早运行的文件。
+          additionalProperties:
+            nullable: true
+            oneOf:
+              - type: string
+              - type: number
+              - type: boolean
+              - $ref: "#/components/schemas/StudioRunReusedFile"
+        version:
+          type: integer
+          format: int64
+          minimum: 1
+          description: 要运行的版本；缺省或 0 表示最新版本
+
+    StudioRunReusedFile:
+      type: object
+      description: 复用本人更早的运行收到过的输入文件；文件被复制到新运行之下。未知字段被拒绝。
+      required: [run_id, artifact_id]
+      properties:
+        run_id: { type: string, example: frn_0123456789abcdef }
+        artifact_id: { type: string, description: 该运行 `inputs` 中 StudioRunFileValue 的 `artifact_id` }
+
+    StudioRunFileValue:
+      type: object
+      description: 运行记录中 image 或 file 输入的取值。
+      required: [artifact_id, filename]
+      properties:
+        artifact_id:
+          type: string
+          description: 以 `sart_` 开头，经 `GET /studio/v1/runs/{id}/artifacts/{artifact_id}` 下载
+        filename:
+          type: string
+          description: 上传时的文件名（不含路径）
+
+    StudioRunStep:
+      type: object
+      description: 一个节点的结束情况；也是 SSE `node_finished` 与 `node_skipped` 帧的载荷。
+      required: [node_id, node_type, status, started_at, finished_at]
+      properties:
+        node_id: { type: string }
+        node_type:
+          type: string
+          enum: [input, llm, template, condition, image_generation, comfyui_template, output]
+        status: { type: string, enum: [succeeded, failed, canceled, skipped] }
+        error_code:
+          type: string
+          description: status 为 failed 时的稳定错误码，见 StudioRun 的 `error_code`
+        model:
+          type: string
+          description: llm 与 image_generation 节点的模型，comfyui_template 节点的工作流模板
+        inputs:
+          type: object
+          description: 节点实际求值的内容（渲染后的提示词、操作数、提示词与尺寸、模板输入等）；过长的值被截断并以「…」结尾
+          additionalProperties: { type: string }
+        outputs:
+          type: object
+          description: |
+            节点的输出字段。产物字段中，`image` 为产物 id，`artifacts` 为
+            `[{"artifact_id","filename","kind"}]` 的 JSON 字符串（kind 为 image/video/file）；
+            产物 id 用 `GET /studio/v1/runs/{id}/artifacts/{artifact_id}` 下载。过长的值被截断并以「…」结尾
+          additionalProperties: { type: string }
+        usage:
+          $ref: "#/components/schemas/StudioUsage"
+        started_at: { type: string, format: date-time }
+        finished_at: { type: string, format: date-time }
+
+    StudioRun:
+      type: object
+      required: [id, flow_id, flow_version, status, usage, created_at]
+      properties:
+        id: { type: string, example: frn_0123456789abcdef }
+        flow_id: { type: string }
+        flow_version: { type: integer, format: int64 }
+        status:
+          type: string
+          enum: [running, succeeded, failed, canceled, interrupted]
+          description: |
+            `interrupted` 表示执行它的副本已失去租约（宕机或重启），运行不会再继续。
+        error_code:
+          type: string
+          description: |
+            status 为 failed 时的稳定错误码（非穷举）：`upstream_error`、`node_timeout`、`run_timeout`、
+            `invalid_json_output`、`not_a_number`、`value_too_large`、`no_image_produced`、
+            `model_unavailable`、`image_generation_unavailable`、`template_unavailable`、`invalid_input`、
+            `not_found`（模板节点要提交的文件已不存在）、`invalid_request`、`no_capable_node`、`queue_timeout`、
+            `generation_failed`、`out_of_memory`、`job_cancelled`、`artifact_storage_unavailable`、
+            `rate_limited`、`timeout`、`insufficient_balance`、`account_subscription_expired`
+        failed_node:
+          type: string
+          description: 失败的节点 id；因整体期限而失败时缺省
+        inputs:
+          type: object
+          description: 启动时的输入值；image 与 file 输入为 StudioRunFileValue，其余原样保存；列表中缺省
+        outputs:
+          type: object
+          description: 运行收集的结果字段（名称 → 文本）；列表中缺省，过长的值被截断并以「…」结尾
+          additionalProperties: { type: string }
+        usage:
+          $ref: "#/components/schemas/StudioUsage"
+        created_at: { type: string, format: date-time }
+        finished_at:
+          type: string
+          format: date-time
+          description: 结束时间；进行中缺省
+        steps:
+          type: array
+          description: 已结束的步骤，按结束顺序；列表中缺省
+          items:
+            $ref: "#/components/schemas/StudioRunStep"
+
+    StudioRunPage:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          description: 列表中的运行不带 inputs、outputs 与 steps
+          items:
+            $ref: "#/components/schemas/StudioRun"
+        next:
+          type: string
+          description: 下一页游标；最后一页缺省
+
+    StudioRunningNode:
+      type: object
+      description: 模型调用仍在进行中的节点与其迄今产出的文本。
+      required: [node_id, text]
+      properties:
+        node_id: { type: string }
+        text: { type: string }
+
+    StudioRunSnapshotFrame:
+      type: object
+      description: 运行 SSE `run_snapshot` 帧的载荷，流的第一帧。
+      required: [run, running]
+      properties:
+        run:
+          $ref: "#/components/schemas/StudioRun"
+        running:
+          type: array
+          items:
+            $ref: "#/components/schemas/StudioRunningNode"
+
+    StudioNodeStartedFrame:
+      type: object
+      description: 运行 SSE `node_started` 帧的载荷。
+      required: [node_id, started_at]
+      properties:
+        node_id: { type: string }
+        started_at: { type: string, format: date-time }
+
+    StudioNodeDeltaFrame:
+      type: object
+      description: 运行 SSE `node_delta` 帧的载荷：llm 节点的文本增量。
+      required: [node_id, delta]
+      properties:
+        node_id: { type: string }
+        delta: { type: string }
+
+    StudioRunFinishedFrame:
+      type: object
+      description: 运行 SSE `run_finished` 帧的载荷，流的最后一帧。
+      required: [status, usage]
+      properties:
+        status:
+          type: string
+          enum: [succeeded, failed, canceled, interrupted]
+        error_code: { type: string }
+        failed_node: { type: string }
+        outputs:
+          type: object
+          additionalProperties: { type: string }
+        usage:
+          $ref: "#/components/schemas/StudioUsage"
+        finished_at: { type: string, format: date-time }
+
+    StudioWorkflowTemplateList:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items:
+            type: object
+            required: [id, inputs, outputs]
+            properties:
+              id: { type: string }
+              description: { type: string }
+              inputs:
+                type: array
+                items:
+                  type: object
+                  required: [name, type, required]
+                  properties:
+                    name: { type: string }
+                    type: { type: string, description: 输入类型，如 string、integer、number、boolean、file }
+                    required: { type: boolean }
+                    default: {}
+                    max_length: { type: integer }
+                    min: { type: number }
+                    max: { type: number }
+              outputs:
+                type: array
+                items:
+                  type: object
+                  required: [name, type]
+                  properties:
+                    name: { type: string }
+                    type: { type: string }
+                    description: { type: string }

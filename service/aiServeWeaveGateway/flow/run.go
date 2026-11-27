@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"AIServeWeave/common/flowdef"
@@ -228,10 +229,25 @@ func (r *run) startTemplate(n *planNode, step Step) {
 			r.finish(n, step, NodeFailed, CodeValueTooLarge)
 			return
 		}
-		call.Inputs[name] = v
+		if !n.files[name] {
+			call.Inputs[name] = v
+			continue
+		}
+		if v = strings.TrimSpace(v); v != "" {
+			if call.Files == nil {
+				call.Files = map[string]string{}
+			}
+			call.Files[name] = v
+		}
 	}
 	step.Model = call.Template
-	step.Inputs = call.Inputs
+	step.Inputs = make(map[string]string, len(call.Inputs)+len(call.Files))
+	for name, v := range call.Inputs {
+		step.Inputs[name] = v
+	}
+	for name, v := range call.Files {
+		step.Inputs[name] = v
+	}
 	r.call(n, step, func(ctx context.Context, m *message) error {
 		var err error
 		m.media, err = r.p.cfg.Dispatcher.RunTemplate(ctx, call)

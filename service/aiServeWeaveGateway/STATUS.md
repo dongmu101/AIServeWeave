@@ -161,24 +161,40 @@ go run ./service/aiServeWeaveGateway -comfyui-managed-addr 127.0.0.1:8093 ...
 
 `InternalToken` 用 `AISW_CONTROL_PLANE_TOKEN` 环境变量传，不要用 `-control-plane-token` flag —— flag 在 `ps` 输出里可见。
 
+## Studio 编排的文件输入、保留期清理与 OpenAPI（2026-11-27）
+
+- **文件类运行输入**（`common/flowdef`、`httpapi/studio_inputs.go`）：编排输入新增类型 `image` 与 `file`，取值为 `{artifact_id, filename}`，不能有默认值。
+  - `POST /studio/v1/flows/{id}/runs` 另接受 `multipart/form-data`：`request` 字段是原来的 JSON（`{inputs, version?}`，未知字段报错），每个文件一个以输入名命名的分片。上限与工作流上传相同（`MaxWorkflowUploadBytes`，200 MiB），超出时 413 `too_large`。不带文件的 JSON 请求不变。
+  - 文件名与内容的检查复用工作流上传的 `validateUploadFilename`、`validateUploadContent`；`image` 输入只接受图片扩展名，否则问题码 `unsupported_file_type`。
+  - 重跑复用：`inputs` 中写 `{"run_id","artifact_id"}`。运行必须属于本成员，且其输入中有这个产物，否则问题码 `not_found`；文件在本运行下复制一份，原运行被清理不影响新运行。
+  - 字节写入 `-artifact-storage`，key 为 `studio/<租户>/<运行>/<产物 id>`，id 前缀 `sart_`。未配置对象存储时问题码 `artifact_storage_unavailable`；写入失败时 503 `storage_unavailable`。以上问题都以 400 `invalid_inputs` 附 `issues` 返回。运行最终未能启动时，已写入的文件被删除。
+  - 运行输入中的文件可经 `GET /studio/v1/runs/{id}/artifacts/{artifact_id}` 下载，文件名取上传时的名字。类型由开头字节嗅探，只声明图片、音频与视频，其余（含 SVG 与文本）为 `application/octet-stream`。
+- **引用规则**（`flowdef` 的 `artifact_reference`）：文件类引用（image/file 输入、节点的 `image`、`artifacts`）可以作为输出 ref 的全部内容；comfyui_template 的模板输入也可以整个引用**单个**文件（image/file 输入或节点的 `image`，不含 `artifacts`）。其余位置一律报 `artifact_reference`。
+- **模板节点带文件**（`httpapi/studio_template_files.go`）：引擎把这类输入放进 `TemplateCall.Files`。Gateway 读出文件（`sart_` 从对象存储读，其余按 job 产物读），经 `io.Pipe` 流式构造 multipart，在进程内调用 `submitRun`，不在内存中整体缓冲。文件在节点运行前已被清理时，节点以 `not_found` 失败。步骤输入中记录的是产物 id。原先的 `unsupported_input` 已删除。
+- **保留期清理**（`httpapi/studio_cleanup.go`）：同时开启 `-studio` 与 `-artifact-storage` 时，每小时扫描一次 `studio/` 前缀，删除超过 `-studio-artifact-retention`（新 flag，默认 30 天）的对象，覆盖推理生图与上传的运行输入。每轮以扫描间隔为期限，单个对象删除失败只记日志，Gateway 关闭时中止进行中的扫描。运行记录本身不受影响，已删除的文件下载时回 404。
+- **objectstore**：`Backend` 新增 `List(ctx, prefix, fn)`，按前缀列出对象（键、大小、修改时间），Local、S3（`ListObjectsV2` 分页）与 WebDAV（逐层 PROPFIND）都已实现。Local 的 `Delete` 会顺带删除变空的父目录，`List` 跳过 `.upload-` 临时文件；`Put` 在父目录被并发删除时重试。WebDAV 不删除变空的集合。
+- **`openapi.yaml`**：收录全部 `/studio/v1` 端点（`studio` tag、`studioSession` 安全方案），包括上面的 multipart 启动运行与下载说明。docsui 的 `SPEC_SHA256` 未更新，新增的 Studio 文本暂不进入 docsui 本地化。
+
+验证：flowdef、flow、objectstore、httpapi、Gateway 根包与控制面的默认测试通过。临时用例（已删除）覆盖：三种后端的 `List` 一致性（含 S3 前缀与分页、WebDAV 子目录）、Local 清空目录、跳过临时文件与符号链接，以及并发 `Put` 与清理（`-race`）；flowdef 的新校验与引用规则；引擎的文件拆分；清理器的扫描、按间隔运行与关闭（`-race`）；上传与复用的成功路径、18 种拒绝（拒绝后无残留对象）、413、无存储、存储故障、控制面启动失败后的清理；下载的类型降级；模板节点经假 ComfyUI 上传运行输入、上游 job 产物与音频，以及 5 种绑定失败与文件消失。上述 httpapi 用例在 `-race -count=5` 下稳定。未接真实 ComfyUI、S3/WebDAV 与 Studio 前端联调。
+
 ## Studio 编排的产物节点（2026-11-27）
 
 `image_generation` 与 `comfyui_template` 两类编排节点在 `httpapi/studio_media.go` 中实现，是 `studioFlowDispatcher` 的 `GenerateImage` 与 `RunTemplate`。两者都在进程内调用 API Key 前门的处理器，不另走一套调度：
 
 - **部署默认生图**（节点不指定模型）：调用 `imagesGenerations`，`response_format` 为 `url`，结果是普通 job 产物。部署未配置 `-images-workflow-id` 时节点以 `image_generation_unavailable` 失败。
 - **推理生图模型**（指定模型）：直接调用 `Scheduler.GenerateImage`，字节经有界流式写入 `-artifact-storage`，key 为 `studio/<租户>/<运行>/<产物 id>`，产物 id 前缀 `sart_`。不配置对象存储时以 `artifact_storage_unavailable` 失败；推理后端只接受提示词，设置了尺寸时以 `invalid_input` 失败。
-- **ComfyUI 模板**：调用 `submitRun`，然后每秒调用一次 `jobStatus`，直到 job 结束（连续 5 次询问失败才放弃），最后调用 `listArtifacts`，只保留 `output` 分区。节点渲染出的文本按模板声明的类型转换；渲染为空白的输入不传，由模板默认值或 `Bind` 的必填检查处理；模板有必填文件输入时以 `unsupported_input` 失败。节点被停止（取消、超时、兄弟节点失败）时调用 `cancelJob` 撤回该 job。
+- **ComfyUI 模板**：调用 `submitRun`，然后每秒调用一次 `jobStatus`，直到 job 结束（连续 5 次询问失败才放弃），最后调用 `listArtifacts`，只保留 `output` 分区。节点渲染出的文本按模板声明的类型转换；渲染为空白的输入不传，由模板默认值或 `Bind` 的必填检查处理。文件型模板输入取自整个引用单个文件的绑定，以 multipart 上传（见上一节）；文本绑给文件型输入、文件绑给文本型输入都以 `invalid_input` 失败。节点被停止（取消、超时、兄弟节点失败）时调用 `cancelJob` 撤回该 job。
 - 每次调用使用新的 request id，提交前经 `withQuota` 走租户限流，与模型调用相同。上游的 OpenAI 形状错误由 `openAIFailure` 映射为节点失败码：`template_unavailable`、`no_capable_node`、`queue_timeout`、`generation_failed`、`out_of_memory`、`job_cancelled`、`no_image_produced`、`invalid_input`、`rate_limited`，其余为 `upstream_error`。
 
 新端点（挂在编排端点旁）：
 
 - `GET /studio/v1/image-models`：`{data:[{id,name}], default_available}`。`data` 是本成员可调用、且有节点以生图能力发布的模型；`default_available` 表示部署默认生图已配置并已注册。
 - `GET /studio/v1/workflow-templates`：本租户可见、且通过校验的模板，带输入（名称、类型、必填、默认值、长度与数值范围）与输出声明，不含图，也不含输入写入的节点与字段。
-- `GET /studio/v1/runs/{id}/artifacts/{artifact_id}`：运行必须属于本成员，产物 id 必须出现在该运行某个产物节点的步骤输出里，否则 404 `not_found`，即使同租户拥有该产物。`sart_` 产物从对象存储读出，类型由开头字节嗅探，只声明图片类型；其余经 `serveJobArtifact`（`downloadArtifact` 的主体）读出。响应固定带 `X-Content-Type-Options: nosniff`、`Content-Security-Policy: sandbox`、`Cache-Control: private, no-store`。
+- `GET /studio/v1/runs/{id}/artifacts/{artifact_id}`：运行必须属于本成员，产物 id 必须出现在该运行某个产物节点的步骤输出里，否则 404 `not_found`，即使同租户拥有该产物。`sart_` 产物从对象存储读出，类型由开头字节嗅探，只声明图片、音频与视频类型；产物 id 也可以是该运行输入中的文件（见上一节）；其余经 `serveJobArtifact`（`downloadArtifact` 的主体）读出。响应固定带 `X-Content-Type-Options: nosniff`、`Content-Security-Policy: sandbox`、`Cache-Control: private, no-store`。
 
 `POST /studio/v1/flows/{id}/runs` 的事前检查从 llm 节点扩展到这两类节点：问题码分别为 `model_unavailable`、`image_generation_unavailable`、`template_unavailable`，整体仍回 400 `model_unavailable`。
 
-已知限制：推理生图写入对象存储的图片不受 `artifactcleanup` 管理，暂无保留期；编排还不能提供文件输入。
+推理生图写入对象存储的图片与上传的运行输入一样，由 Studio 保留期清理删除（见上一节）。
 
 ## Studio 编排与运行（2026-11-26）
 
@@ -195,7 +211,7 @@ go run ./service/aiServeWeaveGateway -comfyui-managed-addr 127.0.0.1:8093 ...
 - **租约与持久化**：运行以 `-replica-id` 加进程级随机后缀持有，租约 60 秒、每 20 秒续一次。每个节点结束后按顺序写入步骤（旁路、最多 3 次，输入与输出截断到每项 256 KiB 以内）。全部步骤写完后写终态，重试到成功、被拒或租约到期。控制面以 409 拒绝续租或写入（运行已结束、租约已过、编排已删除）、或连续一个租约周期续租失败时，本地立即停止该运行，且不写终态。Gateway 关闭时（`Server.Close`）取消本副本上的运行、不写终态，它们在租约过期后读作 `interrupted`。
 - **身份**：运行沿用启动请求时的会话身份、模型授权与节点策略。会话在运行中途登出或吊销时，已开始的运行继续执行完毕。运行中途余额耗尽不会中止已开始的运行（与一次长回复相同）。
 
-验证：`flow` 引擎单测（`-race`，覆盖率 93.5%）；`httpapi` 新增用例经进程内聊天路径与假节点走通执行、SSE 快照与实时帧、步骤与终态持久化、两次调用各自计入用量账本（request id 不同）、输入与模型的事前拒绝、402、429、取消、失去运行时停止且不写终态、其他副本的运行只给快照，在 `-race` 下重复 20 次稳定；Gateway 全部默认测试通过；控制面 e2e 用本客户端对真实控制面走通全部内部接口。未接真实模型与真实 Studio 前端联调；`openapi.yaml` 尚未收录 `/studio/v1`（对话端点同样未收录）。
+验证：`flow` 引擎单测（`-race`，覆盖率 93.5%）；`httpapi` 新增用例经进程内聊天路径与假节点走通执行、SSE 快照与实时帧、步骤与终态持久化、两次调用各自计入用量账本（request id 不同）、输入与模型的事前拒绝、402、429、取消、失去运行时停止且不写终态、其他副本的运行只给快照，在 `-race` 下重复 20 次稳定；Gateway 全部默认测试通过；控制面 e2e 用本客户端对真实控制面走通全部内部接口。未接真实模型与真实 Studio 前端联调。`openapi.yaml` 已于 2026-11-27 收录全部 `/studio/v1`。
 
 ## Studio API 与会话鉴权（2026-11-16）
 

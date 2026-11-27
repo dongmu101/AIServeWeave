@@ -81,7 +81,6 @@ const (
 	codeImagesUnavailable     = "image_generation_unavailable"
 	codeTemplateUnavailable   = "template_unavailable"
 	codeInvalidInput          = "invalid_input"
-	codeUnsupportedInput      = "unsupported_input"
 	codeNoCapableNode         = "no_capable_node"
 	codeQueueTimeout          = "queue_timeout"
 	codeGenerationFailed      = "generation_failed"
@@ -154,22 +153,29 @@ func (w *inprocResponse) errorCode() string {
 }
 
 // inproc calls handler as the route method+route would, with ctx's identity
-// and pathValues set as the mux would set them.
+// and pathValues set as the mux would set them, and body sent as JSON.
 //
-// inproc 像路由 method+route 那样调用 handler，带上 ctx 中的身份，并像 mux 那样设置
-// pathValues。
+// inproc 像路由 method+route 那样调用 handler，带上 ctx 中的身份，像 mux 那样设置
+// pathValues，并以 JSON 发送 body。
 func inproc(ctx context.Context, handler http.HandlerFunc, method, route string, pathValues map[string]string, body any) *inprocResponse {
+	if body == nil {
+		return inprocBody(ctx, handler, method, route, pathValues, "", http.NoBody, 0)
+	}
+	encoded, _ := json.Marshal(body)
+	return inprocBody(ctx, handler, method, route, pathValues, "application/json", bytes.NewReader(encoded), int64(len(encoded)))
+}
+
+// inprocBody is inproc with a body of the given type, of size bytes or -1.
+// inprocBody 是带指定类型请求体（size 字节，未知为 -1）的 inproc。
+func inprocBody(ctx context.Context, handler http.HandlerFunc, method, route string, pathValues map[string]string, contentType string, body io.Reader, size int64) *inprocResponse {
 	req := (&http.Request{Method: method, URL: &url.URL{Path: route}, Header: http.Header{}}).WithContext(ctx)
 	for k, v := range pathValues {
 		req.SetPathValue(k, v)
 	}
-	if body != nil {
-		encoded, _ := json.Marshal(body)
-		req.Header.Set("Content-Type", "application/json")
-		req.Body, req.ContentLength = io.NopCloser(bytes.NewReader(encoded)), int64(len(encoded))
-	} else {
-		req.Body = http.NoBody
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
 	}
+	req.Body, req.ContentLength = io.NopCloser(body), size
 	w := &inprocResponse{}
 	handler(w, req)
 	if w.status == 0 {
@@ -243,11 +249,25 @@ func (d studioFlowDispatcher) inferenceImage(ctx context.Context, call flow.Imag
 		d.h.logger.Warn("storing a studio image failed", slog.String("run_id", d.session), slog.Any("error", err))
 		return flow.MediaReply{}, &flow.Error{Code: codeArtifactStorage}
 	}
-	ext := ".png"
-	if exts, _ := mime.ExtensionsByType(meta.ContentType); len(exts) > 0 && imageArtifactExtensions[exts[0]] {
-		ext = exts[0]
+	return flow.MediaReply{Artifacts: []flow.Artifact{{ID: id, Filename: "image" + imageExtension(meta.ContentType), Kind: flow.ArtifactImage}}}, nil
+}
+
+// imageExtension is the image file extension for contentType, ".png" when
+// it names no image type this package treats as one. mime lists several
+// extensions per type in no useful order (".jfif" first for JPEG), so the
+// first one that is an image extension here is taken.
+//
+// imageExtension 是 contentType 对应的图片扩展名；它不是本包视为图片的类型时为
+// 「.png」。mime 对同一类型给出多个扩展名且顺序无用（JPEG 的第一个是「.jfif」），因此
+// 取其中第一个属于这里的图片扩展名的。
+func imageExtension(contentType string) string {
+	exts, _ := mime.ExtensionsByType(contentType)
+	for _, ext := range exts {
+		if imageArtifactExtensions[ext] {
+			return ext
+		}
 	}
-	return flow.MediaReply{Artifacts: []flow.Artifact{{ID: id, Filename: "image" + ext, Kind: flow.ArtifactImage}}}, nil
+	return ".png"
 }
 
 // imageStreamReader reads an image stream's byte chunks as an io.Reader,
@@ -293,7 +313,7 @@ func studioArtifactKey(tenantID, runID, artifactID string) (string, bool) {
 			return "", false
 		}
 	}
-	return "studio/" + tenantID + "/" + runID + "/" + artifactID, true
+	return studioStoragePrefix + "/" + tenantID + "/" + runID + "/" + artifactID, true
 }
 
 // workflowImage runs the deployment's image generation workflow through
@@ -354,15 +374,24 @@ func (d studioFlowDispatcher) RunTemplate(ctx context.Context, call flow.Templat
 		return flow.MediaReply{}, &flow.Error{Code: codeTemplateUnavailable}
 	}
 	tpl, _ := d.h.workflows.Lookup(call.Template)
-	inputs, code := templateInputs(tpl, call.Inputs)
+	inputs, code := templateInputs(tpl, call.Inputs, call.Files)
 	if code != "" {
 		return flow.MediaReply{}, &flow.Error{Code: code}
 	}
+	files, err := d.openFiles(ctx, identity.TenantID, call.Files)
+	defer files.close()
+	if err != nil {
+		return flow.MediaReply{}, err
+	}
 
 	var resp *inprocResponse
+	route, pathValues := "/v1/workflows/"+call.Template+"/runs", map[string]string{"workflow_id": call.Template}
 	if err := d.h.withQuota(ctx, func(ctx context.Context) {
-		resp = inproc(ctx, d.h.submitRun, http.MethodPost, "/v1/workflows/"+call.Template+"/runs",
-			map[string]string{"workflow_id": call.Template}, runRequest{Inputs: inputs})
+		if len(files) == 0 {
+			resp = inproc(ctx, d.h.submitRun, http.MethodPost, route, pathValues, runRequest{Inputs: inputs})
+			return
+		}
+		resp = submitWithFileParts(ctx, d.h.submitRun, route, pathValues, runRequest{Inputs: inputs}, files)
 	}); err != nil {
 		return flow.MediaReply{}, &flow.Error{Code: codeRateLimited}
 	}
@@ -407,19 +436,20 @@ func (d studioFlowDispatcher) RunTemplate(ctx context.Context, call flow.Templat
 }
 
 // templateInputs turns a node's rendered input values into the JSON values
-// tpl declares. A value that renders blank is left out, so the template's
-// default applies and a required input is reported by Bind. Flows cannot
-// supply files yet, so a template that needs one cannot run from a flow.
+// tpl declares, and checks that files go to its file inputs and only there.
+// A value that renders blank is left out, so the template's default applies
+// and a required input is reported by Bind.
 //
-// templateInputs 把节点渲染后的输入取值转换为 tpl 声明的 JSON 取值。渲染为空白的取值
-// 不传，从而使用模板的默认值，必填输入由 Bind 报告。编排暂不能提供文件，因此需要文件的
-// 模板无法从编排运行。
-func templateInputs(tpl *workflow.Template, values map[string]string) (map[string]json.RawMessage, string) {
+// templateInputs 把节点渲染后的输入取值转换为 tpl 声明的 JSON 取值，并检查文件只交给
+// 模板的文件输入。渲染为空白的取值不传，从而使用模板的默认值，必填输入由 Bind 报告。
+func templateInputs(tpl *workflow.Template, values, files map[string]string) (map[string]json.RawMessage, string) {
 	declared := make(map[string]workflow.Input, len(tpl.Inputs))
 	for _, in := range tpl.Inputs {
 		declared[in.Name] = in
-		if in.Type == workflow.InputFile && in.Required {
-			return nil, codeUnsupportedInput
+	}
+	for name := range files {
+		if in, ok := declared[name]; !ok || in.Type != workflow.InputFile {
+			return nil, codeInvalidInput
 		}
 	}
 	out := make(map[string]json.RawMessage, len(values))
@@ -449,7 +479,9 @@ func templateInputs(tpl *workflow.Template, values map[string]string) (map[strin
 			}
 			out[name] = json.RawMessage(strconv.FormatBool(b))
 		default:
-			return nil, codeUnsupportedInput
+			// A file input takes a file of the run, never typed text.
+			// 文件输入只接受运行中的文件，从不接受输入的文本。
+			return nil, codeInvalidInput
 		}
 	}
 	return out, ""
@@ -691,7 +723,8 @@ func (s *studioFlows) artifact(w http.ResponseWriter, r *http.Request) {
 	} else if run, ok = s.storedRun(w, r, owner, id); !ok {
 		return
 	}
-	if len(artifactID) > maxStudioArtifactIDBytes || !runHasArtifact(run, artifactID) {
+	filename, found := runArtifact(run, artifactID)
+	if len(artifactID) > maxStudioArtifactIDBytes || !found {
 		writeStudioError(w, http.StatusNotFound, codeStudioArtifactMissing, "no such artifact in this run")
 		return
 	}
@@ -702,7 +735,7 @@ func (s *studioFlows) artifact(w http.ResponseWriter, r *http.Request) {
 		s.h.serveJobArtifact(w, r, owner.TenantID, artifactID)
 		return
 	}
-	s.serveStoredImage(w, r, owner.TenantID, id, artifactID)
+	s.serveStoredObject(w, r, owner.TenantID, id, artifactID, filename)
 }
 
 func (s *studioFlows) storedRun(w http.ResponseWriter, r *http.Request, owner StudioOwner, id string) (StudioRun, bool) {
@@ -714,13 +747,16 @@ func (s *studioFlows) storedRun(w http.ResponseWriter, r *http.Request, owner St
 	return run, true
 }
 
-// serveStoredImage streams an inference image from object storage. Its type
-// is sniffed from its first bytes rather than trusted from storage, and only
-// an image type is ever declared.
+// serveStoredObject streams an object Studio stored for a run: an inference
+// image, or a file the run was started with, named filename (empty for an
+// image, which is then named by its type). Its type is sniffed from its
+// first bytes rather than trusted from storage or the uploader, and only an
+// image, audio or video type is ever declared.
 //
-// serveStoredImage 从对象存储流式发送一张推理图片。其类型从开头的字节嗅探而不是信任
-// 存储给出的类型，并且只会声明图片类型。
-func (s *studioFlows) serveStoredImage(w http.ResponseWriter, r *http.Request, tenantID, runID, artifactID string) {
+// serveStoredObject 流式发送 Studio 为某次运行存放的对象：推理图片，或运行启动时收到的
+// 名为 filename 的文件（图片为空，此时按类型命名）。其类型从开头的字节嗅探，而不是信任
+// 存储或上传者给出的类型，并且只会声明图片、音频或视频类型。
+func (s *studioFlows) serveStoredObject(w http.ResponseWriter, r *http.Request, tenantID, runID, artifactID, filename string) {
 	key, ok := studioArtifactKey(tenantID, runID, artifactID)
 	if !ok || s.h.storage == nil {
 		writeStudioError(w, http.StatusNotFound, codeStudioArtifactMissing, "no such artifact in this run")
@@ -740,34 +776,53 @@ func (s *studioFlows) serveStoredImage(w http.ResponseWriter, r *http.Request, t
 	head := make([]byte, 512)
 	n, _ := io.ReadFull(body, head)
 	head = head[:n]
-	contentType := http.DetectContentType(head)
-	if !strings.HasPrefix(contentType, "image/") || contentType == "image/svg+xml" {
-		contentType = "application/octet-stream"
-	}
-	ext := ".png"
-	if exts, _ := mime.ExtensionsByType(contentType); len(exts) > 0 {
-		ext = exts[0]
+	contentType := sniffedMediaType(head)
+	name := safeFilename(filename)
+	if name == "" {
+		name = "image" + imageExtension(contentType)
 	}
 	w.Header().Set("Content-Type", contentType)
 	if info.Size >= 0 {
 		w.Header().Set("Content-Length", strconv.FormatInt(info.Size, 10))
 	}
-	w.Header().Set("Content-Disposition", `attachment; filename="image`+ext+`"`)
+	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
 	if _, err := io.Copy(w, io.MultiReader(bytes.NewReader(head), body)); err != nil {
 		s.logger.Error("streaming a studio image failed", slog.String("run_id", runID), slog.Any("error", err))
 	}
 }
 
-// runHasArtifact reports whether a step of run produced artifactID.
-// runHasArtifact 报告 run 的某个步骤是否产出了 artifactID。
-func runHasArtifact(run StudioRun, artifactID string) bool {
+// sniffedMediaType is the type declared for a stored object whose first
+// bytes are head: an image (never SVG, which is a document), audio or video
+// type, or application/octet-stream.
+//
+// sniffedMediaType 是为开头字节为 head 的存储对象声明的类型：图片（绝不是 SVG，它是
+// 文档）、音频或视频类型，否则为 application/octet-stream。
+func sniffedMediaType(head []byte) string {
+	t := http.DetectContentType(head)
+	switch {
+	case t == "image/svg+xml":
+	case strings.HasPrefix(t, "image/"), strings.HasPrefix(t, "audio/"), strings.HasPrefix(t, "video/"):
+		return t
+	}
+	return "application/octet-stream"
+}
+
+// runArtifact reports whether artifactID is a file run was started with or
+// one a step of run produced, and returns its filename when known.
+//
+// runArtifact 报告 artifactID 是否是 run 启动时收到的文件或 run 的某个步骤产出的文件，
+// 已知时返回其文件名。
+func runArtifact(run StudioRun, artifactID string) (string, bool) {
 	if artifactID == "" {
-		return false
+		return "", false
+	}
+	if f, ok := runInputFiles(run)[artifactID]; ok {
+		return f.Filename, true
 	}
 	for _, step := range run.Steps {
 		t := flowdef.NodeType(step.NodeType)
 		if flowdef.IsArtifactField(t, flowdef.FieldImage) && step.Outputs[flowdef.FieldImage] == artifactID {
-			return true
+			return "", true
 		}
 		if !flowdef.IsArtifactField(t, flowdef.FieldArtifacts) {
 			continue
@@ -778,9 +833,9 @@ func runHasArtifact(run StudioRun, artifactID string) bool {
 		}
 		for _, a := range list {
 			if a.ID == artifactID {
-				return true
+				return a.Filename, true
 			}
 		}
 	}
-	return false
+	return "", false
 }

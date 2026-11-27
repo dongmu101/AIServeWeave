@@ -20,7 +20,7 @@ import { ArrowLeftIcon, CopyIcon, DownloadIcon, EllipsisIcon, HistoryIcon, PlayI
 import { toast } from "sonner";
 import { cn } from "cn";
 
-import { failureText, studioCall } from "@/components/studio/flows/api";
+import { failureText, startFlowRun, studioCall } from "@/components/studio/flows/api";
 import { ARIA_LABELS, FLOW_NODE_TYPES, NODE_KIND, type FlowCanvasNode } from "@/components/studio/flows/flow-node";
 import { NodeInspector } from "@/components/studio/flows/node-inspector";
 import { RunForm } from "@/components/studio/flows/run-form";
@@ -44,8 +44,8 @@ import {
   unavailableModels,
 } from "@/lib/studio/flow-graph";
 import { parseImageModels, parseWorkflowTemplates, type FlowCatalog, type ImageModelCatalog, type WorkflowTemplate } from "@/lib/studio/flow-catalog";
-import { issueText, parseFlow, parseRun, type Flow, type FlowDefinition, type FlowIssue, type NodeType } from "@/lib/studio/flows";
-import { flowFile } from "@/lib/studio/run-inputs";
+import { issueText, parseFlow, type Flow, type FlowDefinition, type FlowIssue, type NodeType } from "@/lib/studio/flows";
+import { flowFile, serverInputErrors, type BuiltRun } from "@/lib/studio/run-inputs";
 
 /**
  * FlowEditor is the canvas editor of one flow. The definition in memory is
@@ -262,21 +262,16 @@ function Editor({ flow, models, modelsError, imageModels: initialImageModels, te
     setRunOpen(true);
   }
 
-  async function startRun(inputs: Record<string, string | number | boolean>) {
+  async function startRun(built: BuiltRun) {
     setBusy("run");
-    const result = await studioCall("POST", `flows/${flow.id}/runs`, { inputs }, parseRun);
+    const result = await startFlowRun(flow.id, built);
     setBusy(null);
     if (result.ok) {
       router.push(`/flows/${flow.id}/runs/${result.data.id}`);
       return;
     }
     if (result.code === "invalid_inputs") {
-      const errors: Record<string, string> = {};
-      for (const issue of result.issues) {
-        const key = /^inputs\.([A-Za-z_][A-Za-z0-9_]*)$/.exec(issue.field)?.[1] ?? "";
-        errors[key] = issueText({ ...issue, field: "" });
-      }
-      setRunErrors(errors);
+      setRunErrors(serverInputErrors(result.issues));
       return;
     }
     if ((result.code === "model_unavailable" || result.code === "template_unavailable" || result.code === "image_generation_unavailable") && result.issues.length > 0) {
@@ -440,7 +435,7 @@ function Editor({ flow, models, modelsError, imageModels: initialImageModels, te
       </div>
 
       {runOpen ? (
-        <RunForm inputs={def.inputs} busy={busy === "run"} serverErrors={runErrors} onSubmit={(inputs) => void startRun(inputs)} onClose={() => setRunOpen(false)} />
+        <RunForm inputs={def.inputs} busy={busy === "run"} serverErrors={runErrors} onSubmit={(built) => void startRun(built)} onClose={() => setRunOpen(false)} />
       ) : null}
     </div>
   );

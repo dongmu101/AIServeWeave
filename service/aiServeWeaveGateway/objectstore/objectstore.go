@@ -33,6 +33,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 )
 
 // ErrNotFound is returned by Open and Stat when key names no object. It is a
@@ -106,6 +107,30 @@ type Backend interface {
 	// Delete 移除 key 对应的对象。key 本就不存在为何不算错误，见类型的
 	// 文档注释。
 	Delete(ctx context.Context, key string) error
+
+	// List calls fn once for every object whose key lies under prefix + "/",
+	// at any depth, in no particular order. A prefix nothing was ever written
+	// under lists nothing and is not an error. fn may Delete the object it is
+	// given; an error from fn stops the listing and is returned as is. An
+	// object written while the listing runs may or may not be seen. It exists
+	// for retention sweeps of key spaces no metadata row records.
+	//
+	// List 对 key 位于 prefix + "/" 之下（任意深度）的每个对象调用一次 fn，顺序
+	// 不定。从未写入过任何东西的前缀什么也列不出，不算错误。fn 可以 Delete 它拿到
+	// 的对象；fn 返回的错误会终止列举并原样返回。列举期间写入的对象可能被看到，
+	// 也可能看不到。它为没有元数据行记录的键空间的保留期清理而存在。
+	List(ctx context.Context, prefix string, fn func(ObjectEntry) error) error
+}
+
+// ObjectEntry is one object a List call found. ModTime is when the object
+// was last written, as the backend reports it.
+//
+// ObjectEntry 是一次 List 调用找到的一个对象。ModTime 是该对象最后一次写入的时间，
+// 以后端报告的为准。
+type ObjectEntry struct {
+	Key     string
+	Size    int64
+	ModTime time.Time
 }
 
 // validateKey rejects a key that could escape the storage root: empty,

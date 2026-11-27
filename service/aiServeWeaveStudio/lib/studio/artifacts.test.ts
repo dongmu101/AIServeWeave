@@ -6,8 +6,15 @@ import {
   artifactOutputs,
   artifactResponseHeaders,
   artifactURL,
+  downloadFailureText,
   downloadName,
+  kindOfFilename,
   parseArtifactList,
+  parseFileValue,
+  refArtifactShape,
+  refFileShape,
+  runInputFiles,
+  stepFileInputs,
 } from "./artifacts.ts";
 import type { FlowDefinition } from "./flows.ts";
 
@@ -129,4 +136,98 @@ test("a length is not passed when the body was re-encoded", () => {
   const out = artifactResponseHeaders(new Headers({ "Content-Length": "10", "Content-Encoding": "gzip" }));
   assert.equal(out.get("content-length"), null);
   assert.equal(artifactResponseHeaders(new Headers({ "Content-Length": "10", "Content-Encoding": "identity" })).get("content-length"), "10");
+});
+
+// ---- files a run was started with ----
+// ---- 运行启动时收到的文件 ----
+
+function withFiles(): FlowDefinition {
+  const base = def([]);
+  return {
+    ...base,
+    inputs: [
+      { name: "topic", type: "text", required: true },
+      { name: "photo", label: "照片", type: "image", required: true },
+      { name: "doc", type: "file", required: false },
+    ],
+    nodes: base.nodes.map((n) => (n.id === "flux" ? { ...n, config: { template: "t", inputs: { ref: "{{inputs.photo}}", sheet: " {{ inputs.doc }} ", prev: "{{img.image}}", list: "{{flux.artifacts}}", mixed: "a {{inputs.photo}}", txt: "{{inputs.topic}}" } } } : n)),
+  };
+}
+
+test("a file input is an artifact: an image input an image, a file input a file", () => {
+  const d = withFiles();
+  assert.equal(refArtifactShape(d, { scope: "inputs", field: "photo" }), "image");
+  assert.equal(refArtifactShape(d, { scope: "inputs", field: "doc" }), "file");
+  assert.equal(refArtifactShape(d, { scope: "inputs", field: "topic" }), null);
+  assert.equal(refArtifactShape(d, { scope: "inputs", field: "nope" }), null);
+  assert.equal(refArtifactShape(d, { scope: "flux", field: "artifacts" }), "list");
+  assert.equal(refArtifactShape(d, { scope: "txt", field: "text" }), null);
+});
+
+test("exactly one file: a file input or a node's image, never a list", () => {
+  const d = withFiles();
+  assert.equal(refFileShape(d, { scope: "inputs", field: "photo" }), "image");
+  assert.equal(refFileShape(d, { scope: "inputs", field: "doc" }), "file");
+  assert.equal(refFileShape(d, { scope: "img", field: "image" }), "image");
+  assert.equal(refFileShape(d, { scope: "flux", field: "image" }), "image");
+  assert.equal(refFileShape(d, { scope: "flux", field: "artifacts" }), null);
+  assert.equal(refFileShape(d, { scope: "txt", field: "image" }), null);
+});
+
+test("an output that is a sole reference to a file input is shown as that file", () => {
+  const d: FlowDefinition = { ...withFiles(), outputs: [
+    { name: "pic", ref: "{{inputs.photo}}" },
+    { name: "file", ref: "  {{ inputs.doc }}\n" },
+    { name: "mixed", ref: "see {{inputs.photo}}" },
+    { name: "text", ref: "{{inputs.topic}}" },
+  ] };
+  assert.deepEqual(artifactOutputs(d), { pic: "image", file: "file" });
+});
+
+test("a ComfyUI node's inputs that are one file are found, whatever else it holds", () => {
+  assert.deepEqual(stepFileInputs(withFiles(), "flux"), { ref: "image", sheet: "file", prev: "image" });
+  assert.deepEqual(stepFileInputs(withFiles(), "img"), {});
+  assert.deepEqual(stepFileInputs(withFiles(), "nope"), {});
+  assert.deepEqual(stepFileInputs(def([]), "flux"), {});
+});
+
+test("a run's input files are read from its recorded FileValues, in declaration order", () => {
+  const inputs = {
+    topic: "cats",
+    doc: { artifact_id: "sart_2", filename: "notes.pdf" },
+    photo: { artifact_id: "sart_1", filename: "cat.png" },
+  };
+  assert.deepEqual(runInputFiles(withFiles(), inputs), [
+    { name: "photo", label: "照片", type: "image", file: { artifactId: "sart_1", filename: "cat.png" } },
+    { name: "doc", label: "doc", type: "file", file: { artifactId: "sart_2", filename: "notes.pdf" } },
+  ]);
+  // an input never given, or a value that is not a FileValue, shows nothing
+  assert.deepEqual(runInputFiles(withFiles(), { photo: "sart_1", doc: null }), []);
+  assert.deepEqual(runInputFiles(withFiles(), {}), []);
+  // a text input holding something file-shaped is still text
+  assert.deepEqual(runInputFiles(withFiles(), { topic: { artifact_id: "sart_1", filename: "x" } }), []);
+});
+
+test("parseFileValue accepts only an object with a safe artifact id", () => {
+  assert.deepEqual(parseFileValue({ artifact_id: "sart_1", filename: "a.png" }), { artifactId: "sart_1", filename: "a.png" });
+  assert.deepEqual(parseFileValue({ artifact_id: "sart_1" }), { artifactId: "sart_1", filename: "" });
+  for (const bad of [null, undefined, "sart_1", 5, [], {}, { artifact_id: "" }, { artifact_id: "../x" }, { artifact_id: 7 }, { artifact_id: "a".repeat(129) }]) {
+    assert.equal(parseFileValue(bad), null, JSON.stringify(bad));
+  }
+});
+
+test("a file is shown by its extension", () => {
+  assert.equal(kindOfFilename("cat.PNG"), "image");
+  assert.equal(kindOfFilename("a.b.jpeg"), "image");
+  assert.equal(kindOfFilename("clip.mov"), "video");
+  assert.equal(kindOfFilename("song.mp3"), "file");
+  assert.equal(kindOfFilename("README"), "file");
+  assert.equal(kindOfFilename(""), "file");
+});
+
+test("a failed download explains an expired file, a dead session, and anything else", () => {
+  assert.match(downloadFailureText(404), /已不存在，可能超过保留期被清理/);
+  assert.match(downloadFailureText(401), /重新登录/);
+  assert.equal(downloadFailureText(500), downloadFailureText(0));
+  assert.match(downloadFailureText(500), /下载失败/);
 });

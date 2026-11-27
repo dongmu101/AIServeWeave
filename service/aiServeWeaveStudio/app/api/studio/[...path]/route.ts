@@ -1,8 +1,7 @@
-import { studioErrorCode } from "@/lib/studio/contract";
-import { parseIssues } from "@/lib/studio/flows";
 import { isTrustedWrite } from "@/lib/studio/request-origin";
 import { resolveStudioRoute } from "@/lib/studio/upstream-routes";
-import { errorResponse, jsonResponse, rawJsonResponse, readBoundedText } from "@/lib/server/responses";
+import { gatewayAnswer } from "@/lib/server/gateway-answer";
+import { errorResponse, readBoundedText } from "@/lib/server/responses";
 import { readSession } from "@/lib/server/session";
 import { callGateway } from "@/lib/server/upstream";
 
@@ -40,18 +39,7 @@ async function forward(request: Request, context: Context): Promise<Response> {
   }
   const result = await callGateway({ method: route.method, path: route.path, search: route.search, token: session.token, body });
   if (result.kind !== "response") return errorResponse(result.kind === "timeout" ? 504 : 502, "upstream");
-  if (result.status >= 200 && result.status < 300) return rawJsonResponse(result.status, result.text);
-  const code = studioErrorCode(result.text) || "upstream";
-  if (result.status === 400) {
-    let issues: ReturnType<typeof parseIssues> = [];
-    try {
-      issues = parseIssues(JSON.parse(result.text));
-    } catch {
-      issues = [];
-    }
-    if (issues.length > 0) return jsonResponse(400, { error: code, issues });
-  }
-  return errorResponse(result.status, code);
+  return gatewayAnswer(result.status, result.text);
 }
 
 export const GET = forward;

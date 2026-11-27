@@ -24,7 +24,8 @@ import {
   updateNode,
   type Reference,
 } from "@/lib/studio/flow-graph";
-import { issueText, type FlowDefinition, type FlowInput, type FlowIssue, type FlowOutput, type JSONField, type ValueType } from "@/lib/studio/flows";
+import { templateRefs } from "@/lib/studio/flow-template";
+import { isFileInput, issueText, type FlowDefinition, type FlowInput, type FlowIssue, type FlowOutput, type InputType, type JSONField, type ValueType } from "@/lib/studio/flows";
 
 /**
  * NodeInspector edits the selected node: its display name and its config,
@@ -40,6 +41,7 @@ const fieldClass =
   "w-full min-w-0 rounded-lg border border-input bg-background px-2.5 py-1.5 text-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 aria-invalid:border-destructive";
 
 const TYPE_LABEL: Record<ValueType, string> = { text: "文本", number: "数字", boolean: "是/否" };
+const INPUT_TYPE_LABEL: Record<InputType, string> = { ...TYPE_LABEL, image: "图片", file: "文件" };
 
 export function NodeInspector({
   def,
@@ -65,9 +67,13 @@ export function NodeInspector({
   const node = def.nodes.find((n) => n.id === nodeId);
   if (!node) return null;
   const kind = NODE_KIND[node.type];
-  // Only an output may reference an artifact, as the whole of a result field.
-  // 只有输出节点可以引用产物，且要作为结果字段的全部内容。
-  const references = referencesFor(def, node.id, node.type === "output");
+  // An artifact (a file input, or the image and files a node makes) may only be
+  // the whole of an output's result field, or of a ComfyUI template's file
+  // input; no other variable menu lists one.
+  // 产物（文件输入，或节点产出的图片与文件）只能作为输出结果字段的全部内容，或 ComfyUI 模板
+  // 文件型输入的全部内容；其他变量菜单都不列出它们。
+  const references = referencesFor(def, node.id, node.type === "output" ? "output" : "text");
+  const fileReferences = node.type === "comfyui_template" ? referencesFor(def, node.id, "file") : [];
   const config = (next: Record<string, unknown>) => onChange(setConfig(def, node.id, next));
   const invalid = (field: string) => issues.some((issue) => issue.field === field || issue.field.startsWith(`${field}.`));
 
@@ -122,7 +128,7 @@ export function NodeInspector({
       ) : null}
 
       {node.type === "comfyui_template" ? (
-        <ComfyForm config={comfyConfig(node)} templates={catalog.templates} references={references} invalid={invalid} onChange={config} />
+        <ComfyForm config={comfyConfig(node)} templates={catalog.templates} references={references} fileReferences={fileReferences} invalid={invalid} onChange={config} />
       ) : null}
 
       {node.type === "template" ? (
@@ -381,7 +387,9 @@ function ImageForm({
         <input className={cn(fieldClass, "font-mono")} value={config.size ?? ""} placeholder="1024x1024" aria-invalid={invalid("config.size") || sizeBad || undefined}
           onChange={(event) => set({ size: event.target.value.trim() === "" ? undefined : event.target.value.trim() })} />
       </Field>
-      <p className="text-xs text-muted-foreground">产出的图片是 {"{{节点ID.image}}"}，只能在输出节点的结果字段里整个引用，不能放进别的节点。</p>
+      <p className="text-xs text-muted-foreground">
+        产出的图片是 {"{{节点ID.image}}"}：可以在输出节点的结果字段里整个引用，或整个作为后续 ComfyUI 模板节点的文件型输入；不能放进提示词、模板或条件。
+      </p>
     </>
   );
 }
@@ -401,12 +409,17 @@ function ComfyForm({
   config,
   templates,
   references,
+  fileReferences,
   invalid,
   onChange,
 }: {
   config: ReturnType<typeof comfyConfig>;
   templates: WorkflowTemplate[] | null;
   references: Reference[];
+  /** the sources a file input may take: image and file inputs of the flow
+   * and the image of an upstream node
+   * 文件型输入可选的来源：编排的 image 与 file 输入，以及上游节点的 image */
+  fileReferences: Reference[];
   invalid: (field: string) => boolean;
   onChange: (config: Record<string, unknown>) => void;
 }) {
@@ -458,13 +471,8 @@ function ComfyForm({
           {template.inputs.length === 0 ? <p className="text-xs text-muted-foreground">这个模板没有输入。</p> : null}
           {template.inputs.map((input) =>
             input.type === "file" ? (
-              <div key={input.name} className={cn("grid gap-1 rounded-lg border border-dashed p-3 text-xs", input.required && "border-amber-500")}>
-                <p className="font-mono">{input.name}</p>
-                <p className="text-muted-foreground">{inputHint(input)}</p>
-                <p className={input.required ? "text-amber-600" : "text-muted-foreground"}>
-                  {input.required ? "编排暂时无法提供文件，这个模板不能在编排里运行。" : "编排暂时无法提供文件，这个输入会使用模板的默认值。"}
-                </p>
-              </div>
+              <FileSource key={input.name} input={input} value={config.inputs[input.name] ?? ""} sources={fileReferences} invalid={invalid(`config.inputs.${input.name}`)}
+                onChange={(value) => setInput(input.name, value)} />
             ) : (
               <TemplateField key={input.name} label={`${input.name}（${inputHint(input)}）`} rows={input.type === "string" ? 3 : 1} single={input.type !== "string"}
                 value={config.inputs[input.name] ?? ""} references={references} invalid={invalid(`config.inputs.${input.name}`)}
@@ -490,9 +498,59 @@ function ComfyForm({
         <p className="text-xs text-muted-foreground">选择模板后，在这里为它的输入赋值。</p>
       ) : null}
       <p className="text-xs text-muted-foreground">
-        第一张图片是 {"{{节点ID.image}}"}，全部产物是 {"{{节点ID.artifacts}}"}；它们只能在输出节点的结果字段里整个引用。
+        第一张图片是 {"{{节点ID.image}}"}，全部产物是 {"{{节点ID.artifacts}}"}。它们可以在输出节点的结果字段里整个引用；{"{{节点ID.image}}"} 还可以整个作为后续
+        ComfyUI 模板节点的文件型输入，{"{{节点ID.artifacts}}"} 不行。
       </p>
     </>
+  );
+}
+
+/** FileSource picks where a workflow template's file input gets its file: a
+ * file input of the flow, or the image an upstream node makes. It is a choice
+ * among those and nothing typed, since only one whole file may go there. A
+ * value that is no longer one of them (a removed input, a hand-written text)
+ * stays visible, marked, so it can be replaced.
+ *
+ * FileSource 选择工作流模板的文件型输入从哪里取文件：编排的文件输入，或上游节点产出的图片。
+ * 只能在这些里选而不能键入，因为那里只能整个放一个文件。不再属于它们的取值（已删除的输入、
+ * 手写的文本）仍保持可见并加以标注，以便替换。 */
+function FileSource({ input, value, sources, invalid, onChange }: { input: TemplateInput; value: string; sources: Reference[]; invalid: boolean; onChange: (value: string) => void }) {
+  const { refs, sole } = templateRefs(value);
+  // Written as {{ inputs.photo }}, it is still the source {{inputs.photo}}.
+  // 写成 {{ inputs.photo }} 时，它仍是来源 {{inputs.photo}}。
+  const canonical = sole ? `{{${refs[0].scope}.${refs[0].field}}}` : "";
+  const known = sources.some((source) => source.ref === canonical);
+  const chosen = known ? canonical : value;
+  const stale = value.trim() !== "" && !known;
+  const bad = invalid || stale || (input.required && input.default === undefined && value.trim() === "");
+  return (
+    <div className="grid gap-1.5">
+      <label className="grid gap-1.5">
+        <span className="text-xs font-medium text-muted-foreground">
+          <span className="font-mono">{input.name}</span>（{inputHint(input)}）
+        </span>
+        <select className={fieldClass} value={chosen} aria-invalid={bad || undefined} aria-label={`${input.name} 的文件来源`} onChange={(event) => onChange(event.target.value)}>
+          <option value="">{input.required && input.default === undefined ? "请选择文件来源" : "不设置（使用模板默认值）"}</option>
+          {stale ? <option value={value}>{value}（不是可用的文件来源）</option> : null}
+          {sources.map((source) => (
+            <option key={source.ref} value={source.ref}>
+              {source.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      {stale ? (
+        <p className="flex items-center gap-1.5 text-xs text-amber-600">
+          <TriangleAlertIcon className="size-3.5 shrink-0" />
+          这里只能选一个文件来源，请重新选择。
+        </p>
+      ) : null}
+      {sources.length === 0 ? (
+        <p className="text-xs text-muted-foreground">
+          还没有可选的文件来源：在输入节点添加一个图片或文件输入，或让图像生成、ComfyUI 模板节点连到这个节点之前。
+        </p>
+      ) : null}
+    </div>
   );
 }
 
@@ -536,7 +594,9 @@ function InputsEditor({ inputs, issues, onChange }: { inputs: FlowInput[]; issue
     <div className="grid gap-3">
       <div>
         <p className="text-xs font-medium text-muted-foreground">运行时输入</p>
-        <p className="mt-0.5 text-xs text-muted-foreground/80">每次运行时填写，在任何节点中以 {"{{inputs.名称}}"} 引用。</p>
+        <p className="mt-0.5 text-xs text-muted-foreground/80">
+          每次运行时填写，在任何节点中以 {"{{inputs.名称}}"} 引用。图片与文件输入在运行时上传，只能整个作为结果字段的取值，或整个填入 ComfyUI 模板的文件型输入。
+        </p>
       </div>
       {inputs.map((input, i) => {
         const invalid = issues.some((issue) => issue.field === `inputs.${input.name}` || issue.field.startsWith(`inputs.${input.name}.`) || issue.field.startsWith(`inputs[${i}]`));
@@ -546,10 +606,10 @@ function InputsEditor({ inputs, issues, onChange }: { inputs: FlowInput[]; issue
               <input className={cn(fieldClass, "font-mono")} value={input.name} aria-label="变量名" aria-invalid={!isIdentifier(input.name) || undefined}
                 onChange={(event) => update(i, { ...input, name: event.target.value })} />
               <select className={cn(fieldClass, "w-20")} value={input.type} aria-label="类型"
-                onChange={(event) => update(i, { ...input, type: event.target.value as ValueType, default: undefined })}>
-                {(Object.keys(TYPE_LABEL) as ValueType[]).map((type) => (
+                onChange={(event) => update(i, { ...input, type: event.target.value as InputType, default: undefined })}>
+                {(Object.keys(INPUT_TYPE_LABEL) as InputType[]).map((type) => (
                   <option key={type} value={type}>
-                    {TYPE_LABEL[type]}
+                    {INPUT_TYPE_LABEL[type]}
                   </option>
                 ))}
               </select>
@@ -564,7 +624,9 @@ function InputsEditor({ inputs, issues, onChange }: { inputs: FlowInput[]; issue
                 <input type="checkbox" checked={input.required} onChange={(event) => update(i, { ...input, required: event.target.checked })} />
                 必填
               </label>
-              {input.type === "boolean" ? (
+              {isFileInput(input) ? (
+                <span className="text-xs text-muted-foreground">运行时上传{input.type === "image" ? "图片" : "文件"}，不能设默认值。</span>
+              ) : input.type === "boolean" ? (
                 <label className="flex items-center gap-1.5 text-sm">
                   <input type="checkbox" checked={input.default === true} onChange={(event) => update(i, { ...input, default: event.target.checked })} />
                   默认为「是」
@@ -597,7 +659,7 @@ function OutputsEditor({ def, outputs, references, issues, onChange }: { def: Fl
     <div className="grid gap-3">
       <div>
         <p className="text-xs font-medium text-muted-foreground">结果字段</p>
-        <p className="mt-0.5 text-xs text-muted-foreground/80">运行结束后展示的内容，通常引用某个上游节点的结果。图片与文件结果只能在这里整个引用。</p>
+        <p className="mt-0.5 text-xs text-muted-foreground/80">运行结束后展示的内容，通常引用某个上游节点的结果。图片与文件结果要在这里整个引用，不能与其他文字混写。</p>
       </div>
       {outputs.map((output, i) => {
         const invalid = issues.some((issue) => issue.field.startsWith(`outputs.${output.name}`) || issue.field.startsWith(`outputs[${i}]`));
@@ -614,7 +676,7 @@ function OutputsEditor({ def, outputs, references, issues, onChange }: { def: Fl
               onChange={(ref) => update(i, { ...output, ref })} />
             {artifacts[output.name] ? (
               <p className="text-xs text-muted-foreground">
-                {artifacts[output.name] === "image" ? "这是一张图片" : "这是一组产物文件"}，运行结果里会直接展示并可下载。需要整个引用，不能和其他文字混写。
+                {artifacts[output.name] === "image" ? "这是一张图片" : artifacts[output.name] === "file" ? "这是一个文件" : "这是一组产物文件"}，运行结果里会直接展示并可下载。需要整个引用，不能和其他文字混写。
               </p>
             ) : null}
           </div>

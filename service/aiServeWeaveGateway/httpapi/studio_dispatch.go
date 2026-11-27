@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 
+	"AIServeWeave/common/flowdef"
 	"AIServeWeave/common/reqid"
 	"AIServeWeave/service/aiServeWeaveGateway/flow"
 )
@@ -38,6 +39,11 @@ type studioFlowDispatcher struct {
 	// prefer the node that has their prompts cached.
 	// session 是每次调用的 X-Session-Id，使同一运行的调用优先落到缓存了其提示的节点。
 	session string
+	// files are the run's input files by artifact id, already stored under
+	// the run; a comfyui_template node uploads them by their own names.
+	// files 是按产物 id 索引的运行输入文件，已存放在该运行之下；comfyui_template 节点以
+	// 它们自己的文件名上传它们。
+	files map[string]flowdef.FileValue
 }
 
 var _ flow.Dispatcher = studioFlowDispatcher{}

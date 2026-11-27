@@ -27,9 +27,11 @@
 //     "false"; no other edge carries a branch;
 //   - no cycles. A node may reference {{<node>.<field>}} only for a node
 //     upstream of it, so the value always exists by the time it runs.
-//   - the fields image_generation and comfyui_template nodes produce name
-//     artifacts, not text. They may only be referenced as the whole of an
-//     output's ref, so an artifact id is never fed to a model or compared.
+//   - the fields image_generation and comfyui_template nodes produce, and
+//     image and file inputs, name artifacts, not text. They may only be
+//     referenced as the whole of an output's ref or, when they name one
+//     file, of a comfyui_template input, so an artifact id is never fed to a
+//     model or compared.
 //
 // Flow contents — prompts, input values and outputs — are the same class of
 // secret as a chat message. Errors from this package name identifiers (node
@@ -59,8 +61,10 @@
 //     出边带 branch「true」或「false」，其他边都不带 branch；
 //   - 不能有环。节点只能以 {{<节点>.<字段>}} 引用它上游的节点，这样它运行时该值
 //     一定已经存在。
-//   - image_generation 与 comfyui_template 节点产出的字段指向产物而不是文本。它们
-//     只能作为输出 ref 的全部内容被引用，因此产物 id 永远不会被送进模型或参与比较。
+//   - image_generation 与 comfyui_template 节点产出的字段，以及 image 与 file 输入，
+//     指向产物而不是文本。它们只能作为输出 ref 的全部内容被引用；指向单个文件时，也
+//     可以作为 comfyui_template 某个输入的全部内容。因此产物 id 永远不会被送进模型或
+//     参与比较。
 //
 // 编排内容——提示词、输入值与输出——与对话消息属于同一类机密。本包的错误只写
 // 标识符（节点 id、输入名与字段名），从不引用模板、标签或取值。
@@ -134,12 +138,75 @@ const (
 // / ValueType 是运行时输入或 LLM 结构化输出字段的类型。
 type ValueType string
 
-// Value types. / 取值类型。
+// Value types. Image and file are input types only: their value is a
+// FileValue, and they have no default.
+//
+// 取值类型。image 与 file 只用于输入：其取值是 FileValue，且没有默认值。
 const (
 	TypeText    ValueType = "text"
 	TypeNumber  ValueType = "number"
 	TypeBoolean ValueType = "boolean"
+	TypeImage   ValueType = "image"
+	TypeFile    ValueType = "file"
 )
+
+// IsFileType reports whether t is an input type whose value is a file.
+// IsFileType 报告 t 是否是取值为文件的输入类型。
+func IsFileType(t ValueType) bool {
+	return t == TypeImage || t == TypeFile
+}
+
+// Bounds on a FileValue. / FileValue 的上限。
+const (
+	MaxArtifactIDLength = 128
+	MaxFilenameBytes    = 255
+)
+
+// FileValue is the run-time value of an image or file input: the artifact
+// the Gateway stored the file as, and the name it was uploaded under. A
+// template substitutes the artifact id.
+//
+// FileValue 是 image 或 file 输入的运行时取值：Gateway 存放该文件所用的产物 id，以及
+// 上传时的文件名。模板替换时代入产物 id。
+type FileValue struct {
+	ArtifactID string `json:"artifact_id"`
+	Filename   string `json:"filename"`
+}
+
+// ValidArtifactID reports whether s can be an artifact id: letters, digits,
+// "_" and "-", at most MaxArtifactIDLength bytes.
+//
+// ValidArtifactID 报告 s 能否作为产物 id：字母、数字、「_」与「-」，至多
+// MaxArtifactIDLength 字节。
+func ValidArtifactID(s string) bool {
+	if s == "" || len(s) > MaxArtifactIDLength {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !(c == '_' || c == '-' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9') {
+			return false
+		}
+	}
+	return true
+}
+
+// ValidFilename reports whether s can be an uploaded file's name: printable
+// UTF-8 of at most MaxFilenameBytes, with no path separator.
+//
+// ValidFilename 报告 s 能否作为上传文件的名称：至多 MaxFilenameBytes 字节的可打印
+// UTF-8，不含路径分隔符。
+func ValidFilename(s string) bool {
+	if s == "" || len(s) > MaxFilenameBytes || !utf8.ValidString(s) || s == "." || s == ".." {
+		return false
+	}
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f || r == '/' || r == '\\' {
+			return false
+		}
+	}
+	return true
+}
 
 // Branch labels an edge leaving a condition node.
 // / Branch 标记从条件节点出发的边。
@@ -208,6 +275,32 @@ func IsArtifactField(t NodeType, field string) bool {
 	return false
 }
 
+// RefersToFile reports whether r names exactly one file in d: an image or
+// file input, or the image field of a node that produces one. Only such a
+// reference may be the whole of a comfyui_template input.
+//
+// RefersToFile 报告 r 在 d 中是否恰好指向一个文件：image 或 file 输入，或产出图片的
+// 节点的 image 字段。只有这样的引用才能作为 comfyui_template 输入的全部内容。
+func (d Definition) RefersToFile(r Ref) bool {
+	if r.Scope == InputsScope {
+		for _, in := range d.Inputs {
+			if in.Name == r.Field {
+				return IsFileType(in.Type)
+			}
+		}
+		return false
+	}
+	if r.Field != FieldImage {
+		return false
+	}
+	for _, n := range d.Nodes {
+		if n.ID == r.Scope {
+			return IsArtifactField(n.Type, FieldImage)
+		}
+	}
+	return false
+}
+
 // Definition is one flow version's content, without its identity and
 // publication metadata (id, name, version), which the control plane owns.
 //
@@ -221,10 +314,11 @@ type Definition struct {
 }
 
 // Input declares one run-time variable. Default, when present, must be a
-// value of Type; JSON null counts as absent.
+// value of Type; JSON null counts as absent. Image and file inputs take no
+// default.
 //
 // Input 声明一个运行时变量。Default 存在时必须是 Type 类型的取值；JSON null 视为
-// 未设置。
+// 未设置。image 与 file 输入不能有默认值。
 type Input struct {
 	Name     string          `json:"name"`
 	Label    string          `json:"label,omitempty"`
@@ -532,17 +626,31 @@ type templateUse struct {
 	owner string
 	field string
 	tmpl  Template
-	// whole marks an output ref that is a single reference and nothing else,
-	// the one place an artifact field may be referenced.
-	whole bool
+	// slot is where the template's value goes, which decides whether it may
+	// reference an artifact.
+	slot useSlot
 }
+
+// useSlot is where a template's value goes.
+type useSlot int
+
+const (
+	// slotText is fed to a model, compared or shown as text: no artifacts.
+	slotText useSlot = iota
+	// slotOutput is an output ref that is a single reference and nothing
+	// else: any artifact field.
+	slotOutput
+	// slotTemplateInput is a comfyui_template input that is a single
+	// reference and nothing else: one file.
+	slotTemplateInput
+)
 
 type validator struct {
 	def       Definition
 	issues    []Issue
 	truncated bool
 
-	inputs    map[string]bool            // declared, well-named inputs
+	inputs    map[string]ValueType       // declared, well-named inputs
 	nodes     map[string]Node            // well-named, unique nodes
 	fields    map[string]map[string]bool // node id → referenceable fields
 	nodeTypes map[string]NodeType        // node id → type, for artifact fields
@@ -599,21 +707,25 @@ func (v *validator) run() {
 
 func (v *validator) checkInputs() {
 	at := v.inputID
-	v.inputs = make(map[string]bool, len(v.def.Inputs))
+	v.inputs = make(map[string]ValueType, len(v.def.Inputs))
 	for i, in := range v.def.Inputs {
 		path := fmt.Sprintf("inputs[%d]", i)
 		switch {
 		case !isIdent(in.Name):
 			v.add(at, path+".name", CodeInvalidName, "input name must be an identifier of letters, digits and underscores")
-		case v.inputs[in.Name]:
+		case v.inputs[in.Name] != "":
 			v.add(at, "inputs."+in.Name, CodeDuplicateName, "duplicate input %q", in.Name)
 		default:
-			v.inputs[in.Name] = true
+			v.inputs[in.Name] = in.Type
 			path = "inputs." + in.Name
 		}
 		v.checkLabel(at, path+".label", in.Label)
-		if !validValueType(in.Type) {
-			v.add(at, path+".type", CodeInvalidType, "input type must be text, number or boolean")
+		if !validValueType(in.Type) && !IsFileType(in.Type) {
+			v.add(at, path+".type", CodeInvalidType, "input type must be text, number, boolean, image or file")
+			continue
+		}
+		if IsFileType(in.Type) && !isNull(in.Default) {
+			v.add(at, path+".default", CodeInvalidDefault, "image and file inputs take no default")
 			continue
 		}
 		if !isNull(in.Default) {
@@ -880,7 +992,11 @@ func (v *validator) checkComfyUI(id string, n Node) {
 			v.add(id, "config.inputs", CodeInvalidName, "template input names must be printable text of at most %d bytes", MaxTemplateInputNameLength)
 			continue
 		}
-		v.template(id, "config.inputs."+name, c.Inputs[name], false)
+		if t, ok := v.template(id, "config.inputs."+name, c.Inputs[name], false); ok {
+			if _, sole := t.SoleRef(); sole {
+				v.uses[len(v.uses)-1].slot = slotTemplateInput
+			}
+		}
 	}
 }
 
@@ -1080,7 +1196,9 @@ func (v *validator) checkOutputs() {
 			path = "outputs." + o.Name
 		}
 		if t, ok := v.template(at, path+".ref", o.Ref, true); ok {
-			_, v.uses[len(v.uses)-1].whole = t.SoleRef()
+			if _, sole := t.SoleRef(); sole {
+				v.uses[len(v.uses)-1].slot = slotOutput
+			}
 		}
 	}
 }
@@ -1099,7 +1217,7 @@ func (v *validator) checkReferences(upstream map[string]map[string]bool) {
 			if reported[k] {
 				continue
 			}
-			if code, msg := v.checkRef(u.owner, r, u.whole, upstream); code != "" {
+			if code, msg := v.checkRef(u.owner, r, u.slot, upstream); code != "" {
 				reported[k] = true
 				v.add(u.owner, u.field, code, "{{%s}} %s", r, msg)
 			}
@@ -1107,10 +1225,14 @@ func (v *validator) checkReferences(upstream map[string]map[string]bool) {
 	}
 }
 
-func (v *validator) checkRef(owner string, r Ref, whole bool, upstream map[string]map[string]bool) (IssueCode, string) {
+func (v *validator) checkRef(owner string, r Ref, slot useSlot, upstream map[string]map[string]bool) (IssueCode, string) {
 	if r.Scope == InputsScope {
-		if !v.inputs[r.Field] {
+		t := v.inputs[r.Field]
+		switch {
+		case t == "":
 			return CodeUnknownReference, "names an input that is not declared"
+		case IsFileType(t) && slot == slotText:
+			return CodeArtifactReference, artifactRefMessage
 		}
 		return "", ""
 	}
@@ -1120,14 +1242,17 @@ func (v *validator) checkRef(owner string, r Ref, whole bool, upstream map[strin
 	if !v.fields[r.Scope][r.Field] {
 		return CodeUnknownReference, "names a field that node does not produce"
 	}
-	if !whole && IsArtifactField(v.nodeTypes[r.Scope], r.Field) {
-		return CodeArtifactReference, "names an artifact, which only an output can reference, as its whole ref"
+	if IsArtifactField(v.nodeTypes[r.Scope], r.Field) && (slot == slotText || slot == slotTemplateInput && r.Field != FieldImage) {
+		return CodeArtifactReference, artifactRefMessage
 	}
 	if upstream != nil && owner != "" && !upstream[owner][r.Scope] {
 		return CodeNotUpstream, "names a node that is not upstream of this one"
 	}
 	return "", ""
 }
+
+// artifactRefMessage explains CodeArtifactReference.
+const artifactRefMessage = "names an artifact, which only an output's ref, or a workflow template input when it is one file, may hold as its whole value"
 
 func validValueType(t ValueType) bool {
 	return t == TypeText || t == TypeNumber || t == TypeBoolean
@@ -1162,6 +1287,12 @@ func valueText(t ValueType, raw json.RawMessage) (string, error) {
 			return "", errors.New("must be a boolean")
 		}
 		return strconv.FormatBool(b), nil
+	case TypeImage, TypeFile:
+		var f FileValue
+		if decodeStrict(raw, &f) != nil || !ValidArtifactID(f.ArtifactID) || !ValidFilename(f.Filename) {
+			return "", errors.New("must be an uploaded file")
+		}
+		return f.ArtifactID, nil
 	default:
 		return "", fmt.Errorf("has unknown type")
 	}

@@ -235,6 +235,8 @@ func run() error {
 		"how long a persisted \"output\" artifact is kept before the cleanup sweep reaps it; zero uses httpapi.DefaultArtifactRetention")
 	artifactPreviewRetention := flag.Duration("artifact-preview-retention", 0,
 		"how long a persisted \"temp\" (preview/intermediate) artifact is kept, deliberately much shorter than -artifact-retention; zero uses httpapi.DefaultArtifactPreviewRetention")
+	studioArtifactRetention := flag.Duration("studio-artifact-retention", 0,
+		"how long the objects Studio writes to -artifact-storage itself (flow run inference images and uploaded run inputs) are kept before an hourly sweep deletes them; zero uses httpapi.DefaultStudioArtifactRetention. Keep it well above -studio run deadlines")
 	allowedUploadExtensions := flag.String("workflow-upload-allowed-extensions", "",
 		"comma-separated, dot-prefixed file extensions a workflow InputFile upload may use (STATUS.md's P04); empty uses httpapi.DefaultAllowedUploadExtensions, there is no way to disable the check")
 	agentDistDir := flag.String("agent-dist-dir", "",
@@ -635,6 +637,7 @@ func run() error {
 		httpCfg.StudioStore = conversations
 		httpCfg.StudioFlows = conversations
 		httpCfg.StudioReplicaID = id
+		httpCfg.StudioArtifactRetention = *studioArtifactRetention
 		logger.Info("serving the Studio API at /studio/v1")
 	}
 	front := httpapi.New(sched, httpCfg)

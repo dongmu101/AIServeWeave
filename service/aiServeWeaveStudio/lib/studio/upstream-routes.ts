@@ -17,19 +17,19 @@ interface Route {
   pattern: string[];
   query: string[];
   /** maxBody raises the request body bound for this route; others keep the
-   * default. Saving a flow carries its whole definition, and starting a run
-   * its input values.
-   * maxBody 为该路由放宽请求体上限；其他路由保持默认值。保存编排要带上完整定义，
-   * 启动运行要带上输入值。 */
+   * default. Saving a flow carries its whole definition. Starting a run is
+   * not here at all: it carries files, so it has its own streaming route
+   * (app/api/studio/flows/[id]/runs/start).
+   * maxBody 为该路由放宽请求体上限；其他路由保持默认值。保存编排要带上完整定义。启动运行
+   * 根本不在这里：它带文件，所以有自己的流式路由
+   * （app/api/studio/flows/[id]/runs/start）。 */
   maxBody?: number;
 }
 
 /** FLOW_BODY_BYTES fits a definition of common/flowdef's 1 MiB bound plus the
- * name; RUN_BODY_BYTES fits a run's input values.
- * FLOW_BODY_BYTES 容得下 common/flowdef 上限 1 MiB 的定义加名称；RUN_BODY_BYTES 容得下
- * 一次运行的输入值。 */
+ * name.
+ * FLOW_BODY_BYTES 容得下 common/flowdef 上限 1 MiB 的定义加名称。 */
 export const FLOW_BODY_BYTES = (1 << 20) + 64 * 1024;
-export const RUN_BODY_BYTES = 2 << 20;
 
 const ROUTES: Route[] = [
   { method: "GET", pattern: ["me"], query: [] },
@@ -47,7 +47,6 @@ const ROUTES: Route[] = [
   { method: "DELETE", pattern: ["flows", ":id"], query: [] },
   { method: "GET", pattern: ["flows", ":id", "versions", ":id"], query: [] },
   { method: "GET", pattern: ["flows", ":id", "runs"], query: ["cursor", "limit"] },
-  { method: "POST", pattern: ["flows", ":id", "runs"], query: [], maxBody: RUN_BODY_BYTES },
   { method: "GET", pattern: ["image-models"], query: [] },
   { method: "GET", pattern: ["workflow-templates"], query: [] },
   { method: "GET", pattern: ["runs", ":id"], query: [] },

@@ -204,21 +204,21 @@ func (rn *studioRunner) lookup(owner StudioOwner, id string) (*studioActiveRun, 
 	return run, true
 }
 
-// start records the run in storage and starts executing plan. ctx carries the
+// start records run id in storage and starts executing it. files are the
+// run's input files, already stored under id. ctx carries the
 // member's identity and scheduling access; its cancellation is not inherited,
 // so the run outlives the request that started it.
 //
-// start 在存储中记录运行并开始执行 plan。ctx 携带成员的身份与调度权限；它的取消不被继承，
-// 因此运行比启动它的请求活得更久。
-func (rn *studioRunner) start(ctx context.Context, owner StudioOwner, flowID string, version int64, inputs json.RawMessage, def flowdef.Definition, rawInputs map[string]json.RawMessage) (StudioRun, error) {
+// start 在存储中记录运行 id 并开始执行。files 是该运行的输入文件，已存放在 id 之下。
+// ctx 携带成员的身份与调度权限；它的取消不被继承，因此运行比启动它的请求活得更久。
+func (rn *studioRunner) start(ctx context.Context, owner StudioOwner, id, flowID string, version int64, inputs json.RawMessage, def flowdef.Definition, rawInputs map[string]json.RawMessage, files map[string]flowdef.FileValue) (StudioRun, error) {
 	rn.mu.Lock()
 	closed := rn.closed
 	rn.mu.Unlock()
 	if closed {
 		return StudioRun{}, errStudioShutdown
 	}
-	id := studioRunIDPrefix + idgen.New()
-	engine, err := flow.New(flow.Config{Dispatcher: studioFlowDispatcher{h: rn.h, session: id}, Clock: rn.h.clock})
+	engine, err := flow.New(flow.Config{Dispatcher: studioFlowDispatcher{h: rn.h, session: id, files: files}, Clock: rn.h.clock})
 	if err != nil {
 		return StudioRun{}, err
 	}

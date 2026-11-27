@@ -62,6 +62,15 @@ type Config struct {
 	// StudioReplicaID 是本副本持有编排运行时使用的名称，与它向 Agent 宣告的身份相同；
 	// 会追加一个进程级后缀。
 	StudioReplicaID string
+	// StudioArtifactRetention is how long the objects Studio writes to
+	// ArtifactStorage itself (inference images, uploaded run inputs) are
+	// kept. Zero uses DefaultStudioArtifactRetention. The sweep runs only
+	// when flows are mounted and ArtifactStorage is set.
+	//
+	// StudioArtifactRetention 是 Studio 自己写入 ArtifactStorage 的对象（推理图片、
+	// 上传的运行输入）的保留时长。为零时采用 DefaultStudioArtifactRetention。只有挂载了
+	// 编排且设置了 ArtifactStorage 时才运行清理扫描。
+	StudioArtifactRetention time.Duration
 	// APIKeys is the static set of accepted Bearer tokens, used when no
 	// Verifier is configured. Empty means authentication is disabled — see
 	// auth.go's warning about that.
@@ -686,8 +695,14 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 	if cfg.StudioSessions != nil {
 		front = withStudio(front, h.studioHandler(cfg.StudioSessions, cfg.StudioStore, cfg.StudioFlows, cfg.StudioReplicaID, logger))
 	}
+	var studioSweep *studioCleaner
+	if cfg.StudioSessions != nil && cfg.StudioFlows != nil && cfg.ArtifactStorage != nil {
+		studioSweep = newStudioCleaner(cfg.ArtifactStorage, clock, logger, 0, cfg.StudioArtifactRetention)
+		go studioSweep.run()
+	}
 	return &Server{
 		Handler:           withWriteDeadline(writeStallTimeout, front),
+		studioCleaner:     studioSweep,
 		handlers:          h,
 		syncer:            syncer,
 		persister:         persister,
@@ -719,6 +734,7 @@ type Server struct {
 	persister         *jobPersister
 	recoverer         *jobRecoverer
 	cleaner           *artifactCleaner
+	studioCleaner     *studioCleaner
 	requestLogPusher  *requestLogPusher
 	usageLedgerPusher *usageLedgerPusher
 	usageOutbox       *usageLedgerOutbox
@@ -777,6 +793,9 @@ func (s *Server) Close() {
 	}
 	if s.cleaner != nil {
 		s.cleaner.Stop()
+	}
+	if s.studioCleaner != nil {
+		s.studioCleaner.Stop()
 	}
 	if s.requestLogPusher != nil {
 		s.requestLogPusher.Stop()

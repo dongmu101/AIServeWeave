@@ -10,6 +10,11 @@ import { ContractError } from "./contract.ts";
  */
 
 export type ValueType = "text" | "number" | "boolean";
+/** InputType is a run-time input's type: the value types, and image and file,
+ * whose value is an uploaded file and which have no default.
+ * InputType 是运行时输入的类型：取值类型，加上 image 与 file——其取值是上传的文件，且没有
+ * 默认值。 */
+export type InputType = ValueType | "image" | "file";
 export type NodeType = "input" | "llm" | "template" | "condition" | "image_generation" | "comfyui_template" | "output";
 export type Branch = "true" | "false";
 export type Operator =
@@ -27,9 +32,23 @@ export type Operator =
 export interface FlowInput {
   name: string;
   label?: string;
-  type: ValueType;
+  type: InputType;
   required: boolean;
   default?: string | number | boolean;
+}
+
+/** isFileInput tells whether an input takes a file. / isFileInput 判断输入是否接收文件。 */
+export function isFileInput(input: Pick<FlowInput, "type">): boolean {
+  return input.type === "image" || input.type === "file";
+}
+
+/** FileValue is what a run records for an image or file input: the artifact
+ * the Gateway stored the file as, and the name it was uploaded under.
+ * FileValue 是运行为 image 或 file 输入记录的取值：Gateway 存放该文件所用的产物 id，以及
+ * 上传时的文件名。 */
+export interface FileValue {
+  artifactId: string;
+  filename: string;
 }
 
 export interface FlowNode {
@@ -170,7 +189,7 @@ export interface FlowIssue {
 }
 
 const NODE_TYPES: NodeType[] = ["input", "llm", "template", "condition", "image_generation", "comfyui_template", "output"];
-const VALUE_TYPES: ValueType[] = ["text", "number", "boolean"];
+const INPUT_TYPES: InputType[] = ["text", "number", "boolean", "image", "file"];
 const STEP_STATUSES: StepStatus[] = ["succeeded", "failed", "canceled", "skipped"];
 const RUN_STATUSES: RunStatus[] = ["running", "succeeded", "failed", "canceled", "interrupted"];
 const MAX_ISSUES = 50;
@@ -242,10 +261,10 @@ export function parseDefinition(value: unknown): FlowDefinition {
   const source = record(value);
   const inputs = list(source.inputs).map((item): FlowInput => {
     const input = record(item);
-    const out: FlowInput = { name: str(input, "name"), type: oneOf(str(input, "type"), VALUE_TYPES), required: input.required === true };
+    const out: FlowInput = { name: str(input, "name"), type: oneOf(str(input, "type"), INPUT_TYPES), required: input.required === true };
     if (typeof input.label === "string" && input.label !== "") out.label = input.label;
     const fallback = input.default;
-    if (typeof fallback === "string" || typeof fallback === "number" || typeof fallback === "boolean") out.default = fallback;
+    if (!isFileInput(out) && (typeof fallback === "string" || typeof fallback === "number" || typeof fallback === "boolean")) out.default = fallback;
     return out;
   });
   const nodes = list(source.nodes).map((item): FlowNode => {
@@ -372,7 +391,7 @@ const ISSUE_TEXT: Record<string, string> = {
   duplicate_name: "名称重复了。",
   invalid_label: "显示名称太长。",
   invalid_type: "类型不受支持。",
-  invalid_default: "默认值与类型不符。",
+  invalid_default: "默认值与类型不符；图片和文件输入不能设默认值。",
   invalid_config: "配置不正确。",
   required: "这一项必填。",
   out_of_range: "数值超出了允许范围。",
@@ -384,14 +403,16 @@ const ISSUE_TEXT: Record<string, string> = {
   invalid_edge: "这条连线无效。",
   cycle: "连线形成了环。",
   unreachable: "这个节点没有从输入节点连过来。",
-  unknown_input: "提交了未声明的输入。",
-  invalid_value: "输入值与类型不符。",
+  unknown_input: "提交了未声明的输入，或多出了没有对应输入的文件。",
+  invalid_value: "输入值与类型不符；文件输入不能同时上传新文件又沿用上次的文件。",
+  unsupported_file_type: "文件类型不受支持，或文件内容与扩展名不符；图片输入只接受 png、jpg、jpeg、webp、gif、bmp。",
+  not_found: "上次运行的这个文件已不存在或已过保留期，请重新选择文件。",
+  artifact_storage_unavailable: "部署没有配置文件存储，暂时不能上传文件。",
   model_unavailable: "所选模型当前不可用，请换一个。",
-  artifact_reference: "图片或文件结果只能整个作为结果字段的取值，不能放进提示词、模板或其他内容里。",
+  artifact_reference: "图片或文件只能整个作为结果字段的取值，或整个填入 ComfyUI 模板的文件型输入（ComfyUI 的 artifacts 不行），不能放进提示词、模板、条件，也不能与其他文字混写。",
   template_unavailable: "所选工作流模板当前不可用（未发布或对你不可见），请换一个。",
   image_generation_unavailable: "部署没有默认的图像生成，请选择一个图像模型。",
-  unsupported_input: "这个输入需要文件，编排暂时无法提供，所以这个模板还不能在编排里运行。",
-  invalid_input: "这个输入的值不符合模板的要求，或模板没有这个输入。",
+  invalid_input: "这个输入的值不符合模板的要求：文本输入不能绑定文件、文件输入只能选文件来源，或模板没有这个输入。",
 };
 
 const FIELD_TEXT: Record<string, string> = {
@@ -467,8 +488,11 @@ const RUN_ERROR_TEXT: Record<string, string> = {
   no_image_produced: "没有生成图片。",
   image_generation_unavailable: "部署没有默认的图像生成，请在图像生成节点里选择一个图像模型。",
   template_unavailable: "工作流模板当前不可用（未发布或对你不可见）。",
-  invalid_input: "填入的值不符合模板输入的类型或范围，或模板没有这个输入。",
+  invalid_input: "填入的值不符合模板输入的要求：类型或范围不对、文本输入绑了文件、文件输入绑了文本、必填的文件没有选，或模板没有这个输入。",
+  // Older runs may still carry this code; the Gateway no longer produces it.
+  // 历史运行里可能还有这个码；Gateway 已不再产生。
   unsupported_input: "模板需要文件输入，编排暂时无法提供。",
+  not_found: "这个节点用到的图片或文件已不存在，可能超过了保留期被清理。请重新运行并选择文件。",
   no_capable_node: "当前没有能运行这个工作流的节点。",
   queue_timeout: "排队等待运行的时间太久，已放弃。",
   generation_failed: "生成失败。",
@@ -504,7 +528,10 @@ export function flowErrorText(code: string, fallback: (code: string) => string):
     case "invalid_inputs":
       return "输入值有误，请按提示修改。";
     case "storage_unavailable":
-      return "编排存储暂不可用，请稍后重试。";
+      return "编排或上传文件的存储暂不可用，请稍后重试。";
+    case "too_large":
+    case "body_too_large":
+      return "内容太大，超过了上限：编排请删减内容，运行输入请换小一点的文件（整个请求最大 200 MiB）。";
     case "unavailable":
       return "服务器正在重启，请稍后重试。";
     default:
