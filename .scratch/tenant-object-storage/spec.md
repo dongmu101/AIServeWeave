@@ -1,6 +1,6 @@
 # 租户自有对象存储（S3 / WebDAV）
 
-状态：ready-for-human（2026-11-27 代码已交付、默认测试通过；尚未在真实 S3 与 Console 浏览器环境验收）
+状态：ready-for-human（2026-11-27 代码已交付、默认测试通过；已在 Cloudflare R2 上以进程内用例验证存储层、Gateway 与控制面保存；尚未在运行中的容器与 Console 浏览器环境验收）
 
 ## 目标
 

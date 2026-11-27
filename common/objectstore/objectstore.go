@@ -191,24 +191,69 @@ type boundedReader struct {
 }
 
 func (b *boundedReader) Read(p []byte) (int, error) {
-	// Ask the underlying reader for at most one byte more than still
-	// permitted, so a single Read call is enough to notice an overrun
-	// without ever reading arbitrarily far past the declared size.
+	// Never read past the declared size into p. Before handing over the
+	// chunk that completes it, read one byte more: a body that still has
+	// bytes fails here, and that chunk is withheld, so the receiver never
+	// sees a complete body and never stores a truncated object. (An HTTP
+	// client sending Content-Length stops reading at the declared size, so
+	// an overrun has to be found before then.)
 	//
-	// 向底层 reader 最多多要一个字节，这样一次 Read 调用就足以发现超限，
-	// 而不会读到远超声明大小之外的地方。
-	if remaining := b.want - b.read + 1; int64(len(p)) > remaining {
+	// 读进 p 的字节从不超过声明大小。在交出凑满声明大小的那一块之前，再多读一个字节：仍有字节的
+	// body 在这里失败，且这一块不交出，接收方因此永远收不到完整的 body，也就不会存下被截断的
+	// 对象。（发送 Content-Length 的 HTTP 客户端读到声明大小就停止读取，所以超长必须在那之前
+	// 发现。）
+	remaining := b.want - b.read
+	if remaining <= 0 {
+		if err := b.checkEnd(); err != nil {
+			return 0, err
+		}
+		return 0, io.EOF
+	}
+	if int64(len(p)) > remaining {
 		p = p[:remaining]
 	}
 	n, err := b.r.Read(p)
-	b.read += int64(n)
-	if b.read > b.want {
-		return n, fmt.Errorf("objectstore: body exceeds declared size %d", b.want)
-	}
-	if err == io.EOF && b.read < b.want {
+	if err == io.EOF && b.read+int64(n) < b.want {
+		b.read += int64(n)
 		return n, fmt.Errorf("objectstore: body ended after %d bytes, want %d", b.read, b.want)
 	}
+	// An io.EOF alongside the last bytes already proves the end.
+	// 与最后几个字节一同返回的 io.EOF 已经证明 body 结束。
+	if err == nil && b.read+int64(n) == b.want {
+		if cerr := b.checkEnd(); cerr != nil {
+			return 0, cerr
+		}
+	}
+	b.read += int64(n)
+	if b.read == b.want && err == nil {
+		err = io.EOF
+	}
 	return n, err
+}
+
+// checkEnd reads one byte past the declared size: nil at the end of the
+// body, the overrun error when a byte is still there, or the reader's own
+// error.
+// checkEnd 读取声明大小之后的一个字节：body 已结束时返回 nil，仍有字节时返回超长错误，否则
+// 返回 reader 自身的错误。
+func (b *boundedReader) checkEnd() error {
+	var one [1]byte
+	for {
+		n, err := b.r.Read(one[:])
+		if n > 0 {
+			return b.overrun()
+		}
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
+}
+
+func (b *boundedReader) overrun() error {
+	return fmt.Errorf("objectstore: body exceeds declared size %d", b.want)
 }
 
 func validateKey(key string) error {

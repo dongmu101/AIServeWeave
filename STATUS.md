@@ -1,6 +1,6 @@
 # 租户自有对象存储（2026-11-27）
 
-租户的 owner 或 admin 可以在 Console 为本租户配置自己的 S3 或 WebDAV，配置后该租户的 job 产物、Studio 运行输入文件与推理生图都写进租户的存储，保留期由租户自己设（0 表示平台从不删除）。部署默认关闭，填了主密钥才开启。代码与默认测试已通过，**未在真实 S3 上验证，Console 也未与真实控制面联调、未在浏览器里走通**。设计见 `.scratch/tenant-object-storage/spec.md`。
+租户的 owner 或 admin 可以在 Console 为本租户配置自己的 S3 或 WebDAV，配置后该租户的 job 产物、Studio 运行输入文件与推理生图都写进租户的存储，保留期由租户自己设（0 表示平台从不删除）。部署默认关闭，填了主密钥才开启。代码与默认测试已通过。objectstore、Gateway 的写入/下载/清理与控制面的保存检查已在 Cloudflare R2 上用进程内用例验证，并修正了两个 S3 写入缺陷（大小未知时 411、body 过长时截断写入），见 [Gateway STATUS](service/aiServeWeaveGateway/STATUS.md#租户自有对象存储2026-11-27)。**尚未在运行中的容器里验收，Console 也未与真实控制面联调、未在浏览器里走通**。设计见 `.scratch/tenant-object-storage/spec.md`。
 
 - **`common/objectstore`**：对象存储包从 Gateway 移到 `common/`，供控制面与 Gateway 共用。新增租户后端的构建、内网地址限制（拨号时检查，覆盖 DNS 重绑定与跳转，不用环境代理）、错误分类与连通性检查。见 [Gateway STATUS](service/aiServeWeaveGateway/STATUS.md#租户自有对象存储2026-11-27)。
 - **控制面**：新表 `tenant_storage`（base `0021`）；`GET`/`PUT`/`DELETE /admin/v1/storage`（owner/admin），保存前做连通性检查；凭据以 AES-256-GCM 加密保存，接口从不返回密钥；两个供 Gateway 使用的内部接口。新配置 `TenantStorage.MasterKey`/`MasterKeyFile`/`AllowPrivateEndpoints`。见 [ControlPlane STATUS](service/aiServeWeaveControlPlane/STATUS.md#租户自有对象存储2026-11-27)。

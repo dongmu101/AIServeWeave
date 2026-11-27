@@ -111,6 +111,8 @@ before upgrading; do not assume a `0.x` bump is safe by default.
 
 ### Fixed
 
+- Gateway 写 S3（部署存储与租户存储）时：大小未知的产物（节点未给 Content-Length）不再被 R2/AWS 以 411 `MissingContentLength` 拒绝，改为不足 8 MiB 一次写入、否则分片上传；body 比声明长度长时写入失败，不再以截断的内容写成功。见 [Gateway STATUS](service/aiServeWeaveGateway/STATUS.md#租户自有对象存储2026-11-27)。
+
 - Agent Codex 运行时误伤正常请求：
   - 长回答在约一万 token 处被截断：原因是每请求最多 10000 个 RPC 帧，现已去掉。
   - 长会话被拒为 400：注入历史的上限从 1 MiB 提高到 32 MiB，并取消 2048 条消息、128 个工具的上限。

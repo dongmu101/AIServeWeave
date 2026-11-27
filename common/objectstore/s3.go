@@ -1,6 +1,7 @@
 package objectstore
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -165,28 +166,110 @@ func NewS3(cfg S3Config) (*S3, error) {
 
 func (b *S3) fullKey(key string) string { return b.prefix + key }
 
-// Put uploads body under key. The SDK streams the body as it is read
-// (chunked transfer with a trailing checksum) rather than buffering it
-// whole, so this holds for large artifacts the same "never buffer a whole
-// object" property the package doc comment promises.
+// s3PartSize is the part size of a multipart upload, used when a body's size
+// is not known up front. A body smaller than one part is sent as one
+// PutObject instead. S3 and R2 require parts of at least 5 MiB except the
+// last.
 //
-// Put 把 body 上传到 key 下。SDK 会在读取的同时流式传输 body（分块传输 + 结尾
-// 校验和），而不是把它整体缓冲，因此对大产物同样保持包文档注释所承诺的
-// 「绝不整体缓冲一个对象」这条性质。
+// s3PartSize 是分片上传的分片大小，用于事先不知道 body 大小的情形。不足一个分片的 body 改为
+// 一次 PutObject 发送。S3 与 R2 要求除最后一片外每片至少 5 MiB。
+const s3PartSize = 8 << 20
+
+// Put uploads body under key, streaming it as it is read. A known size is
+// sent as one PutObject with that Content-Length. An unknown size (-1),
+// which S3 and R2 refuse on PutObject, is sent as a multipart upload of
+// s3PartSize parts, one at a time, so at most one part is held in memory; a
+// failed multipart upload is aborted so no parts are left behind.
+//
+// Put 把 body 上传到 key 下，边读边传。已知大小时以该 Content-Length 发送一次 PutObject。
+// 大小未知（-1）时 S3 与 R2 都拒绝 PutObject，因此改为按 s3PartSize 分片、逐片上传，内存中
+// 至多持有一个分片；分片上传失败时会中止，不留下分片。
 func (b *S3) Put(ctx context.Context, key string, body io.Reader, size int64) error {
 	if err := validateKey(key); err != nil {
 		return err
 	}
-	input := &s3.PutObjectInput{
-		Bucket: aws.String(b.bucket),
-		Key:    aws.String(b.fullKey(key)),
-		Body:   newBoundedReader(body, size),
+	if size < 0 {
+		return b.putUnknownSize(ctx, key, body)
 	}
-	if size >= 0 {
-		input.ContentLength = aws.Int64(size)
+	return b.putObject(ctx, key, newBoundedReader(body, size), size)
+}
+
+func (b *S3) putObject(ctx context.Context, key string, body io.Reader, size int64) error {
+	input := &s3.PutObjectInput{
+		Bucket:        aws.String(b.bucket),
+		Key:           aws.String(b.fullKey(key)),
+		Body:          body,
+		ContentLength: aws.Int64(size),
 	}
 	if _, err := b.client.PutObject(ctx, input); err != nil {
-		return &opError{class: s3Class(err), msg: fmt.Sprintf("objectstore: s3 put %q: %s", key, b.redact(err.Error()))}
+		return b.putError(key, err)
+	}
+	return nil
+}
+
+func (b *S3) putError(key string, err error) error {
+	return &opError{class: s3Class(err), msg: fmt.Sprintf("objectstore: s3 put %q: %s", key, b.redact(err.Error()))}
+}
+
+// putUnknownSize reads body one part at a time. A body that ends within the
+// first part is one PutObject; a longer one is a multipart upload.
+//
+// putUnknownSize 逐片读取 body。在第一片之内结束的 body 发送一次 PutObject；更长的发送分片上传。
+func (b *S3) putUnknownSize(ctx context.Context, key string, body io.Reader) error {
+	buf := make([]byte, s3PartSize)
+	n, err := io.ReadFull(body, buf)
+	if err == io.EOF || err == io.ErrUnexpectedEOF {
+		return b.putObject(ctx, key, bytes.NewReader(buf[:n]), int64(n))
+	}
+	if err != nil {
+		return fmt.Errorf("objectstore: s3 put %q: reading the body: %w", key, err)
+	}
+	created, err := b.client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
+		Bucket: aws.String(b.bucket),
+		Key:    aws.String(b.fullKey(key)),
+	})
+	if err != nil {
+		return b.putError(key, err)
+	}
+	abort := func(cause error) error {
+		_, _ = b.client.AbortMultipartUpload(context.WithoutCancel(ctx), &s3.AbortMultipartUploadInput{
+			Bucket: aws.String(b.bucket), Key: aws.String(b.fullKey(key)), UploadId: created.UploadId,
+		})
+		return cause
+	}
+	var parts []types.CompletedPart
+	for number := int32(1); ; number++ {
+		out, err := b.client.UploadPart(ctx, &s3.UploadPartInput{
+			Bucket:        aws.String(b.bucket),
+			Key:           aws.String(b.fullKey(key)),
+			UploadId:      created.UploadId,
+			PartNumber:    aws.Int32(number),
+			Body:          bytes.NewReader(buf[:n]),
+			ContentLength: aws.Int64(int64(n)),
+		})
+		if err != nil {
+			return abort(b.putError(key, err))
+		}
+		parts = append(parts, types.CompletedPart{ETag: out.ETag, PartNumber: aws.Int32(number)})
+		n, err = io.ReadFull(body, buf)
+		if err == io.EOF {
+			break
+		}
+		// io.ErrUnexpectedEOF is a short last part, uploaded by the next
+		// iteration; the read after it returns io.EOF.
+		// io.ErrUnexpectedEOF 表示不足一片的最后一片，由下一轮上传；再下一次读取返回 io.EOF。
+		if err != nil && err != io.ErrUnexpectedEOF {
+			return abort(fmt.Errorf("objectstore: s3 put %q: reading the body: %w", key, err))
+		}
+	}
+	_, err = b.client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
+		Bucket:          aws.String(b.bucket),
+		Key:             aws.String(b.fullKey(key)),
+		UploadId:        created.UploadId,
+		MultipartUpload: &types.CompletedMultipartUpload{Parts: parts},
+	})
+	if err != nil {
+		return abort(b.putError(key, err))
 	}
 	return nil
 }

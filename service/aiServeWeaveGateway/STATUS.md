@@ -170,6 +170,8 @@ go run ./service/aiServeWeaveGateway -comfyui-managed-addr 127.0.0.1:8093 ...
   - 错误分类：`ErrUnreachable`、`ErrAuth`、`ErrPermission`、`ErrContainerNotFound`、`ErrAddressNotAllowed`，S3 按错误码与 HTTP 状态、WebDAV 按 HTTP 状态归类，错误文本不含密钥。
   - `Probe`：写 16 字节到 `.aisw-probe/`，读回比对后删除。
   - `Put` 的 body 可寻址时，限长包装同样可寻址，S3 SDK 重试时能倒回 body。此前重试报「request stream is not seekable」，真实的网络错误因此丢失。
+  - S3 `Put` 在大小未知（`size < 0`，节点未给 Content-Length 时的 job 产物）时，不足 8 MiB 用一次 PutObject，否则用 8 MiB 一片的分片上传；中途失败会中止分片上传，不留下对象或未完成的上传。此前不带长度直接 PutObject，R2 与 AWS 都回 411 `MissingContentLength`，这类产物在 S3 上一直写不进去（部署存储同样受影响）。
+  - 限长包装在交出最后一段数据前先多读一个字节：body 比声明的长时，`Put` 失败且不留下对象。此前 HTTP 客户端按 Content-Length 读满即停，多出的部分被忽略，对象以截断的内容写成功。
 - **读写位置**（`httpapi/tenantstorage.go` 的 `fileStore`）：
   - 写：租户有自有存储时写它，否则写部署存储，两者都没有时与以前相同。读不到租户设置时写入失败，从不回退到部署存储：jobPersister 本轮记失败、下轮重试；Studio 上传回 503 `storage_unavailable`；推理生图节点以 `artifact_storage_unavailable` 失败。
   - 读：依次尝试租户存储与部署存储（覆盖配置自有存储之前写入的文件），job 产物之后照旧从节点实时拉取。读不到设置时仍会读部署存储。
@@ -192,7 +194,16 @@ go run ./service/aiServeWeaveGateway -comfyui-managed-addr 127.0.0.1:8093 ...
 - 清理器的保留期、两个前缀、不碰其他前缀、跳过保留期 0、未配置与构建失败、分页与倒退游标、删除失败与列举失败、`Stop` 中止阻塞的扫描。
 - 控制面客户端的 10 种响应与分页游标转义。
 
-`fileStore` 并发、清理器 `Stop` 与共享客户端在 `-race` 下稳定。未在真实 S3 上验证（本机无法拉取 MinIO 镜像）。
+`fileStore` 并发、清理器 `Stop` 与共享客户端在 `-race` 下稳定。
+
+在 Cloudflare R2（region `auto`、path-style）上用 `deploy/.env` 的凭据跑过临时用例（已删除，测试对象已清空）：
+- objectstore：探测、读写、覆盖、删除与缺失、中文与空格键名、0 字节、1 MiB 可寻址、64 MiB 流式；大小未知的 0、1 MiB、恰好 8 MiB、恰好 16 MiB、20 MiB；分片上传中途失败后无对象、无未完成上传；长度过短与过长都不留对象；1005 个对象的分页列举与边列边删；已取消的 context。
+- 租户后端的错误归类：密钥错与 key id 错归为 `auth`，桶不存在归为 `not_found`，账号域名错与域名不可解析归为 `network`，错误里不含密钥。
+- Gateway 启动路径：`buildArtifactStorage` 只靠环境变量里的凭据构建出部署存储并读写成功。
+- 端到端：jobPersister 把已知与未知大小（16 MiB）的产物写进租户的 R2，部署存储为空；经 `/v1/artifacts/{id}` 下载内容一致；保留期清理只删 `<租户>/` 与 `studio/<租户>/`，不碰其他前缀。
+- 控制面保存：真实探测下错误密钥、不存在的桶与 http 端点被拒，保存成功后不重填密钥再次保存也通过。
+
+这些用例在进程内运行，未重启 Gateway 容器，也未经 Console 页面操作。
 
 ## Studio 编排的文件输入、保留期清理与 OpenAPI（2026-11-27）
 
