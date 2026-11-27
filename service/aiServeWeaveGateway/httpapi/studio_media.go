@@ -18,11 +18,11 @@ import (
 
 	"AIServeWeave/common/flowdef"
 	"AIServeWeave/common/idgen"
+	"AIServeWeave/common/objectstore"
 	"AIServeWeave/common/reqid"
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/service/aiServeWeaveGateway/flow"
 	"AIServeWeave/service/aiServeWeaveGateway/jobqueue"
-	"AIServeWeave/service/aiServeWeaveGateway/objectstore"
 	"AIServeWeave/service/aiServeWeaveGateway/scheduler"
 	"AIServeWeave/service/aiServeWeaveGateway/workflow"
 )
@@ -206,24 +206,23 @@ func (d studioFlowDispatcher) GenerateImage(ctx context.Context, call flow.Image
 	if len(call.Prompt) > runtime.MaxImagePromptBytes || !utf8.ValidString(call.Prompt) {
 		return flow.MediaReply{}, &flow.Error{Code: codeInvalidInput}
 	}
-	if d.h.storage == nil {
+	identity, _ := IdentityFrom(ctx)
+	backend, err := d.h.files.writer(ctx, identity.TenantID)
+	if err != nil || backend == nil {
 		return flow.MediaReply{}, &flow.Error{Code: codeArtifactStorage}
 	}
-	var (
-		reply flow.MediaReply
-		err   error
-	)
-	if qerr := d.h.withQuota(ctx, func(ctx context.Context) { reply, err = d.inferenceImage(ctx, call) }); qerr != nil {
+	var reply flow.MediaReply
+	if qerr := d.h.withQuota(ctx, func(ctx context.Context) { reply, err = d.inferenceImage(ctx, call, backend) }); qerr != nil {
 		return flow.MediaReply{}, &flow.Error{Code: codeRateLimited}
 	}
 	return reply, err
 }
 
 // inferenceImage generates an image on an inference image model and writes
-// it to object storage, streaming: the image is never held whole here.
+// it to backend, streaming: the image is never held whole here.
 //
-// inferenceImage 在推理生图模型上生成图片并流式写入对象存储：图片从不在这里被完整持有。
-func (d studioFlowDispatcher) inferenceImage(ctx context.Context, call flow.ImageCall) (flow.MediaReply, error) {
+// inferenceImage 在推理生图模型上生成图片并流式写入 backend：图片从不在这里被完整持有。
+func (d studioFlowDispatcher) inferenceImage(ctx context.Context, call flow.ImageCall, backend objectstore.Backend) (flow.MediaReply, error) {
 	identity, _ := IdentityFrom(ctx)
 	meta, stream, _, err := d.h.sched.GenerateImage(ctx, runtime.ImageRequest{
 		Model: call.Model, Prompt: call.Prompt, TenantID: identity.TenantID, KeyID: identity.KeyID,
@@ -241,8 +240,8 @@ func (d studioFlowDispatcher) inferenceImage(ctx context.Context, call flow.Imag
 		return flow.MediaReply{}, &flow.Error{Code: flow.CodeUpstream}
 	}
 	body := &imageStreamReader{stream: stream, left: meta.Size}
-	if err := d.h.storage.Put(ctx, key, body, meta.Size); err != nil || body.left != 0 {
-		_ = d.h.storage.Delete(context.WithoutCancel(ctx), key)
+	if err := backend.Put(ctx, key, body, meta.Size); err != nil || body.left != 0 {
+		_ = backend.Delete(context.WithoutCancel(ctx), key)
 		if ctx.Err() != nil {
 			return flow.MediaReply{}, ctx.Err()
 		}
@@ -758,11 +757,11 @@ func (s *studioFlows) storedRun(w http.ResponseWriter, r *http.Request, owner St
 // 存储或上传者给出的类型，并且只会声明图片、音频或视频类型。
 func (s *studioFlows) serveStoredObject(w http.ResponseWriter, r *http.Request, tenantID, runID, artifactID, filename string) {
 	key, ok := studioArtifactKey(tenantID, runID, artifactID)
-	if !ok || s.h.storage == nil {
+	if !ok || !s.h.files.hasAny(tenantID) {
 		writeStudioError(w, http.StatusNotFound, codeStudioArtifactMissing, "no such artifact in this run")
 		return
 	}
-	body, info, err := s.h.storage.Open(r.Context(), key)
+	body, info, err := s.h.files.open(r.Context(), tenantID, key)
 	if err != nil {
 		if !errors.Is(err, objectstore.ErrNotFound) {
 			s.logger.Warn("reading a studio image failed", slog.String("run_id", runID), slog.Any("error", err))

@@ -379,6 +379,9 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 		{Method: http.MethodDelete, Path: "/admin/v1/apikeys/:id/permanent", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/apikeys/:id/permanent", requireSession(ctx, deleteAPIKey(ctx)))},
 		{Method: http.MethodGet, Path: "/admin/v1/tenants/current", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/tenants/current", requireSession(ctx, currentTenant(ctx)))},
 		{Method: http.MethodPut, Path: "/admin/v1/tenants/limits", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/tenants/limits", requireSession(ctx, setTenantLimits(ctx)))},
+		{Method: http.MethodGet, Path: "/admin/v1/storage", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/storage", requireSession(ctx, getTenantStorage(ctx)))},
+		{Method: http.MethodPut, Path: "/admin/v1/storage", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/storage", requireSession(ctx, putTenantStorage(ctx)))},
+		{Method: http.MethodDelete, Path: "/admin/v1/storage", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/storage", requireSession(ctx, deleteTenantStorage(ctx)))},
 		{Method: http.MethodGet, Path: "/admin/v1/audit", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/audit", requireSession(ctx, listAudit(ctx)))},
 		{Method: http.MethodGet, Path: "/operator/v1/audit", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/audit", requirePlatformSession(ctx, listAudit(ctx)))},
 		{Method: http.MethodGet, Path: "/operator/v1/metrics/history", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/metrics/history", requirePlatformSession(ctx, metricsHistory(ctx)))},
@@ -602,6 +605,18 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 			Method:  http.MethodPost,
 			Path:    "/internal/v1/studio/conversations/:id/replies",
 			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/studio/conversations/:id/replies", requireSharedSecret(ctx.Config.InternalToken, appendStudioReply(ctx))),
+		},
+		// Tenants' own object storage, read by the Gateway with credentials.
+		// 租户自有对象存储，由 Gateway 连同凭据读取。
+		{
+			Method:  http.MethodGet,
+			Path:    "/internal/v1/tenants/:tenant_id/storage",
+			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/tenants/:tenant_id/storage", requireSharedSecret(ctx.Config.InternalToken, internalTenantStorage(ctx))),
+		},
+		{
+			Method:  http.MethodGet,
+			Path:    "/internal/v1/tenant-storage/retained",
+			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/tenant-storage/retained", requireSharedSecret(ctx.Config.InternalToken, listRetainedTenantStorage(ctx))),
 		},
 		// Studio flows and their runs, written by the Gateway the same way.
 		// Studio 编排及其运行，同样由 Gateway 写入。

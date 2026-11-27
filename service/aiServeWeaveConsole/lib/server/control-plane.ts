@@ -47,6 +47,10 @@ export interface UpstreamCall {
   body?: string;
   /** maxResponseBytes bounds route publication responses. / maxResponseBytes 限制路由发布响应。 */
   maxResponseBytes?: number;
+  /** timeoutMs replaces the configured upstream timeout for a call that
+   * legitimately takes longer (saving tenant storage probes it first).
+   * timeoutMs 替换配置的上游超时，用于确实需要更久的调用（保存租户存储前会先探测它）。 */
+  timeoutMs?: number;
 }
 
 /**
@@ -83,7 +87,7 @@ export async function callControlPlane(
       headers,
       body: call.body,
       cache: "no-store",
-      signal: AbortSignal.timeout(config.timeoutMs),
+      signal: AbortSignal.timeout(call.timeoutMs ?? config.timeoutMs),
     });
     const text = call.maxResponseBytes === undefined ? await response.text() : await readBoundedText(response, call.maxResponseBytes);
     if (text === null) return { kind: "unreachable" };

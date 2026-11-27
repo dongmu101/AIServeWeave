@@ -528,6 +528,22 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 		}))
 	}
 
+	if cfg.TenantStorage.Enabled() {
+		var secrets *logic.ProviderSecrets
+		var err error
+		if cfg.TenantStorage.MasterKey != "" {
+			secrets, err = logic.ParseProviderSecrets(cfg.TenantStorage.MasterKey)
+		} else {
+			secrets, err = logic.LoadProviderSecrets(cfg.TenantStorage.MasterKeyFile)
+		}
+		if err != nil {
+			return nil, errors.Join(errors.New("TenantStorage master key"), err)
+		}
+		logicOpts = append(logicOpts, logic.WithTenantStorage(logic.TenantStorageConfig{
+			Secrets: secrets, AllowPrivateEndpoints: cfg.TenantStorage.AllowPrivateEndpoints, Logger: slog.Default(),
+		}))
+	}
+
 	svcLogic := logic.New(st, clock, logicOpts...)
 	// Compiled-in API reference pages are inserted or refreshed on every
 	// start, never overwriting a page an operator has edited. A failure here

@@ -410,6 +410,18 @@ const (
 	//
 	// ActionNodeProviderDelete 记录从节点上移除一个下发的托管供应商。
 	ActionNodeProviderDelete = "node.provider.delete"
+	// ActionTenantStorageUpdate records a tenant saving its own object
+	// storage. The detail names the kind, endpoint host, bucket and
+	// retention only, never a credential.
+	//
+	// ActionTenantStorageUpdate 记录租户保存自己的对象存储。详情只记种类、端点主机名、
+	// bucket 与保留天数，从不记凭据。
+	ActionTenantStorageUpdate = "tenant.storage.update"
+	// ActionTenantStorageDelete records a tenant removing its own object
+	// storage.
+	//
+	// ActionTenantStorageDelete 记录租户移除自己的对象存储。
+	ActionTenantStorageDelete = "tenant.storage.delete"
 	// ActionInstallCodeCreate records issuing an Agent install credential
 	// (a one-time code or a directly minted token) for a node. Neither the
 	// code nor the token is ever recorded.
@@ -659,3 +671,49 @@ type NodeProviderVersion struct {
 //
 // TableName 钉死表名，与 Tenant.TableName 同理。
 func (NodeProviderVersion) TableName() string { return "node_provider_versions" }
+
+// TenantStorage is the object storage a tenant configured for its own files
+// (job artifacts and Studio uploads and images). Endpoint is the S3 endpoint
+// (empty for AWS) or the WebDAV URL; Prefix is the S3 key prefix or the WebDAV
+// directory. The credentials are stored only as SecretCiphertext: a JSON
+// object sealed with AES-256-GCM under the control plane's tenant storage
+// master key, with the tenant id as associated data. SecretHint is the last
+// four characters of an S3 access key id. Version increments on every save,
+// so a Gateway can tell a cached copy is stale.
+//
+// TenantStorage 是租户为自己的文件（job 产物、Studio 上传与图片）配置的对象存储。Endpoint
+// 是 S3 端点（AWS 时为空）或 WebDAV URL；Prefix 是 S3 key 前缀或 WebDAV 目录。凭据只以
+// SecretCiphertext 保存：一个 JSON 对象，在控制面的租户存储主密钥下做 AES-256-GCM 加密，
+// 租户 id 作为附加数据。SecretHint 是 S3 access key id 的末四位。Version 每次保存加一，
+// Gateway 据此判断缓存是否过期。
+//
+// CreatedAt and UpdatedAt come from the service's clock, so GORM must not
+// set them itself. / CreatedAt 与 UpdatedAt 取自服务的时钟，GORM 不得自行设置。
+type TenantStorage struct {
+	TenantID         string    `gorm:"primaryKey;size:40"`
+	Kind             string    `gorm:"size:16;not null"`
+	Endpoint         string    `gorm:"size:2048;not null"`
+	Region           string    `gorm:"size:64;not null"`
+	Bucket           string    `gorm:"size:255;not null"`
+	Prefix           string    `gorm:"size:512;not null"`
+	PathStyle        bool      `gorm:"not null"`
+	Username         string    `gorm:"size:256;not null"`
+	SecretCiphertext string    `gorm:"type:text;not null"`
+	SecretHint       string    `gorm:"size:8;not null"`
+	RetentionDays    int       `gorm:"not null"`
+	Version          uint64    `gorm:"not null"`
+	UpdatedBy        string    `gorm:"size:40;not null"`
+	CreatedAt        time.Time `gorm:"not null;autoCreateTime:false"`
+	UpdatedAt        time.Time `gorm:"not null;autoUpdateTime:false"`
+}
+
+// TableName pins the table name, as Tenant.TableName does.
+//
+// TableName 钉死表名，与 Tenant.TableName 同理。
+func (TenantStorage) TableName() string { return "tenant_storage" }
+
+// Tenant storage kinds. / 租户存储种类。
+const (
+	TenantStorageS3     = "s3"
+	TenantStorageWebDAV = "webdav"
+)

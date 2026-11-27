@@ -1476,3 +1476,133 @@ type NodeProviderWriteResponse struct {
 	Version   uint64        `json:"version"`
 	Delivered bool          `json:"delivered"`
 }
+
+// -----------------------------------------------------------------------
+// Tenant object storage (/admin/v1/storage, /internal/v1/tenants/:id/storage)
+// 租户自有对象存储
+// -----------------------------------------------------------------------
+
+// TenantStorageS3 is the S3 part of a tenant's storage, without its secret.
+// TenantStorageS3 是租户存储的 S3 部分，不含密钥。
+type TenantStorageS3 struct {
+	Endpoint         string `json:"endpoint"`
+	Region           string `json:"region"`
+	Bucket           string `json:"bucket"`
+	Prefix           string `json:"prefix"`
+	PathStyle        bool   `json:"path_style"`
+	AccessKeyIDLast4 string `json:"access_key_id_last4"`
+}
+
+// TenantStorageWebDAV is the WebDAV part of a tenant's storage, without its
+// password.
+// TenantStorageWebDAV 是租户存储的 WebDAV 部分，不含密码。
+type TenantStorageWebDAV struct {
+	URL      string `json:"url"`
+	Dir      string `json:"dir"`
+	Username string `json:"username"`
+}
+
+// TenantStorage is a tenant's storage as its admins see it.
+// TenantStorage 是租户管理员看到的存储。
+type TenantStorage struct {
+	Kind          string               `json:"kind"`
+	S3            *TenantStorageS3     `json:"s3"`
+	WebDAV        *TenantStorageWebDAV `json:"webdav"`
+	RetentionDays int                  `json:"retention_days"`
+	UpdatedBy     string               `json:"updated_by"`
+	UpdatedAt     time.Time            `json:"updated_at"`
+}
+
+// TenantStorageResponse answers GET /admin/v1/storage.
+// TenantStorageResponse 是 GET /admin/v1/storage 的答复。
+type TenantStorageResponse struct {
+	Enabled               bool           `json:"enabled"`
+	AllowPrivateEndpoints bool           `json:"allow_private_endpoints"`
+	Storage               *TenantStorage `json:"storage"`
+}
+
+// TenantStorageS3Request is the S3 part of PUT /admin/v1/storage. Absent or
+// null keys keep the saved ones.
+// TenantStorageS3Request 是 PUT /admin/v1/storage 的 S3 部分。Key 缺省或为 null 表示保留。
+type TenantStorageS3Request struct {
+	Endpoint        string  `json:"endpoint"`
+	Region          string  `json:"region"`
+	Bucket          string  `json:"bucket"`
+	Prefix          string  `json:"prefix"`
+	PathStyle       bool    `json:"path_style"`
+	AccessKeyID     *string `json:"access_key_id"`
+	SecretAccessKey *string `json:"secret_access_key"`
+}
+
+// TenantStorageWebDAVRequest is the WebDAV part of PUT /admin/v1/storage. An
+// absent or null password keeps the saved one.
+// TenantStorageWebDAVRequest 是 PUT /admin/v1/storage 的 WebDAV 部分。密码缺省或为 null
+// 表示保留。
+type TenantStorageWebDAVRequest struct {
+	URL      string  `json:"url"`
+	Dir      string  `json:"dir"`
+	Username string  `json:"username"`
+	Password *string `json:"password"`
+}
+
+// TenantStorageRequest is the body of PUT /admin/v1/storage.
+// TenantStorageRequest 是 PUT /admin/v1/storage 的请求体。
+type TenantStorageRequest struct {
+	Kind          string                      `json:"kind"`
+	S3            *TenantStorageS3Request     `json:"s3"`
+	WebDAV        *TenantStorageWebDAVRequest `json:"webdav"`
+	RetentionDays int                         `json:"retention_days"`
+}
+
+// TenantStorageErrorResponse is a refused save: Code is stable, Reason
+// further classifies storage_unreachable.
+// TenantStorageErrorResponse 是被拒的保存：Code 稳定不变，Reason 进一步说明
+// storage_unreachable。
+type TenantStorageErrorResponse struct {
+	Error  string `json:"error"`
+	Code   string `json:"code"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// InternalTenantStorageS3 is the S3 part of a tenant's storage with its keys.
+// InternalTenantStorageS3 是带 Key 的租户存储 S3 部分。
+type InternalTenantStorageS3 struct {
+	Endpoint        string `json:"endpoint"`
+	Region          string `json:"region"`
+	Bucket          string `json:"bucket"`
+	Prefix          string `json:"prefix"`
+	PathStyle       bool   `json:"path_style"`
+	AccessKeyID     string `json:"access_key_id"`
+	SecretAccessKey string `json:"secret_access_key"`
+}
+
+// InternalTenantStorageWebDAV is the WebDAV part of a tenant's storage with
+// its password.
+// InternalTenantStorageWebDAV 是带密码的租户存储 WebDAV 部分。
+type InternalTenantStorageWebDAV struct {
+	URL      string `json:"url"`
+	Dir      string `json:"dir"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+// InternalTenantStorage answers the Gateway's read of a tenant's storage.
+// InternalTenantStorage 是 Gateway 读取租户存储的答复。
+type InternalTenantStorage struct {
+	TenantID              string                       `json:"tenant_id,omitempty"`
+	Configured            bool                         `json:"configured"`
+	AllowPrivateEndpoints bool                         `json:"allow_private_endpoints"`
+	Version               uint64                       `json:"version,omitempty"`
+	Kind                  string                       `json:"kind,omitempty"`
+	S3                    *InternalTenantStorageS3     `json:"s3,omitempty"`
+	WebDAV                *InternalTenantStorageWebDAV `json:"webdav,omitempty"`
+	RetentionDays         int                          `json:"retention_days"`
+}
+
+// InternalRetainedTenantStorageResponse is one page of storages with a
+// positive retention.
+// InternalRetainedTenantStorageResponse 是一页保留天数为正的存储。
+type InternalRetainedTenantStorageResponse struct {
+	Items []InternalTenantStorage `json:"items"`
+	Next  string                  `json:"next"`
+}

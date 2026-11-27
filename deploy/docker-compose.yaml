@@ -305,6 +305,9 @@ services:
       # upgrade.sh 会生成这两个值。
       AISW_GATEWAY_REMOTE_PROVIDERS_TOKEN: ${AISW_GATEWAY_REMOTE_PROVIDERS_TOKEN:?set it in deploy/.env — openssl rand -base64 32}
       AISW_PROVIDER_MASTER_KEY: ${AISW_PROVIDER_MASTER_KEY:?set it in deploy/.env — openssl rand -base64 32}
+      # Tenants' own object storage (controlplane.yaml's TenantStorage), off
+      # while empty. 租户自有对象存储（controlplane.yaml 的 TenantStorage），留空即关闭。
+      AISW_TENANT_STORAGE_MASTER_KEY: ${AISW_TENANT_STORAGE_MASTER_KEY:-}
       AISW_DODO_API_KEY: ${AISW_DODO_API_KEY:-}
       AISW_DODO_WEBHOOK_SECRET: ${AISW_DODO_WEBHOOK_SECRET:-}
       # 易支付 (EZFP) keys, referenced by controlplane.yaml's Billing.Ezfp.

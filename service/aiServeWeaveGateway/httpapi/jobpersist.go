@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"AIServeWeave/common/objectstore"
 	"AIServeWeave/common/runtime"
-	"AIServeWeave/service/aiServeWeaveGateway/objectstore"
 	"AIServeWeave/service/aiServeWeaveGateway/scheduler"
 )
 
@@ -213,7 +213,7 @@ type jobPersister struct {
 	// （STATUS.md 的 P04）时为 nil——这种情况下 persistArtifacts 上报产物
 	// 元数据的方式与 P04 出现之前完全一致。
 	opener  artifactOpener
-	storage objectstore.Backend
+	storage *fileStore
 
 	// poke wakes the loop early after a submit or an observation, so a
 	// healthy control plane sees a fresh job persisted within about one
@@ -236,7 +236,7 @@ type jobPersister struct {
 //
 // newJobPersister 用默认值填补 cfg 里的零值字段来构建一个持久化器。它不会
 // 启动后台循环，要启动需要以协程方式调用 run。
-func newJobPersister(jobs *jobStore, client JobPersistClient, opener artifactOpener, storage objectstore.Backend, clock runtime.Clock, logger *slog.Logger, cfg jobPersistConfig) *jobPersister {
+func newJobPersister(jobs *jobStore, client JobPersistClient, opener artifactOpener, storage *fileStore, clock runtime.Clock, logger *slog.Logger, cfg jobPersistConfig) *jobPersister {
 	if cfg.Interval <= 0 {
 		cfg.Interval = DefaultPersistInterval
 	}
@@ -449,9 +449,22 @@ func (jp *jobPersister) persistArtifacts(id string) {
 	for _, a := range artifacts {
 		sha256Hex, contentType, storageKey := "", "", ""
 		sizeBytes := int64(0)
-		if jp.storage != nil {
-			var err error
-			sha256Hex, contentType, storageKey, sizeBytes, err = jp.persistArtifactBytes(candidate, runID, tenantID, id, a)
+		// The tenant's own storage when it has one, else the deployment's.
+		// Settings that cannot be read fail this round rather than send the
+		// bytes somewhere the tenant did not choose.
+		// 租户有自有存储时写入它，否则写入部署存储。读不到设置时本轮失败，而不是把字节送到
+		// 租户没有选择的地方。
+		lookupCtx, lookupCancel := context.WithTimeout(context.Background(), jp.cfg.CallTimeout)
+		backend, err := jp.storage.writer(lookupCtx, tenantID)
+		lookupCancel()
+		if err != nil {
+			failed = true
+			jp.logger.Warn("the tenant's storage settings could not be read; this artifact's copy waits for the next round",
+				slog.String("job_id", id), slog.String("artifact_id", a.ArtifactID), slog.Any("error", err))
+			continue
+		}
+		if backend != nil {
+			sha256Hex, contentType, storageKey, sizeBytes, err = jp.persistArtifactBytes(backend, candidate, runID, tenantID, id, a)
 			if err != nil {
 				failed = true
 				jp.logger.Warn("copying an artifact into object storage failed; it remains downloadable live from the node, this copy is not yet durable",
@@ -461,7 +474,7 @@ func (jp *jobPersister) persistArtifacts(id string) {
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), jp.cfg.CallTimeout)
-		err := jp.client.CreateJobArtifact(ctx, id, a.ArtifactID, tenantID, a.Filename, a.Subfolder, a.Type, sha256Hex, contentType, storageKey, sizeBytes)
+		err = jp.client.CreateJobArtifact(ctx, id, a.ArtifactID, tenantID, a.Filename, a.Subfolder, a.Type, sha256Hex, contentType, storageKey, sizeBytes)
 		cancel()
 		if err != nil {
 			failed = true
@@ -494,7 +507,7 @@ func (jp *jobPersister) persistArtifacts(id string) {
 // 标识符，因此这个 key 里从不会带上调用方提供的任何东西。它借助包裹在 Put
 // 本就要做的那次读取之外的 countingReader，在复制字节的同时完成哈希与计数，
 // 而不必把产物再读一遍。
-func (jp *jobPersister) persistArtifactBytes(candidate scheduler.Candidate, runID, tenantID, jobID string, a pendingArtifact) (sha256Hex, contentType, storageKey string, size int64, err error) {
+func (jp *jobPersister) persistArtifactBytes(backend objectstore.Backend, candidate scheduler.Candidate, runID, tenantID, jobID string, a pendingArtifact) (sha256Hex, contentType, storageKey string, size int64, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), jp.cfg.ArtifactCopyTimeout)
 	defer cancel()
 
@@ -519,7 +532,7 @@ func (jp *jobPersister) persistArtifactBytes(candidate scheduler.Candidate, runI
 	hash := sha256.New()
 	counted := &countingReader{r: io.TeeReader(artifact.Body, hash)}
 	start := jp.clock.Now()
-	if err := jp.storage.Put(ctx, key, counted, artifact.Size); err != nil {
+	if err := backend.Put(ctx, key, counted, artifact.Size); err != nil {
 		jp.cfg.Metrics.ArtifactTransfer(ResultFailed, 0, jp.clock.Now().Sub(start))
 		return "", "", "", 0, err
 	}

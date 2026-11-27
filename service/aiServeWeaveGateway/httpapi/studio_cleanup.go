@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"time"
 
+	"AIServeWeave/common/objectstore"
 	"AIServeWeave/common/runtime"
-	"AIServeWeave/service/aiServeWeaveGateway/objectstore"
 )
 
 // Retention of the objects Studio writes to object storage itself, under

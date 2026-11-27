@@ -123,6 +123,12 @@ type Config struct {
 	// 监听器，以及静态加密 Key 的主密钥。它是可选的，且与其他转发配置相互独立。
 	RemoteProviders RemoteProvidersConf `json:",optional"`
 
+	// TenantStorage lets tenants configure their own S3 or WebDAV storage
+	// for their files. It is on once a master key is set.
+	//
+	// TenantStorage 允许租户为自己的文件配置自有的 S3 或 WebDAV 存储。设置主密钥后开启。
+	TenantStorage TenantStorageConf `json:",optional"`
+
 	// Registry configures this service's client to the Registry's TokenAdmin
 	// service (STATUS.md's P01): node approval, disable/enable and
 	// maintenance. Like Fleet, it is optional — a deployment with no
@@ -965,6 +971,40 @@ func (r RemoteProvidersConf) Enabled() bool {
 	return len(r.Gateways) > 0 || r.GatewayToken != "" || r.MasterKeyFile != "" || r.MasterKey != ""
 }
 
+// TenantStorageConf configures tenants' own object storage.
+//
+// TenantStorageConf 配置租户自有对象存储。
+type TenantStorageConf struct {
+	// MasterKeyFile holds the 32-byte key, as hex or base64, that encrypts
+	// tenants' storage credentials at rest. Losing it makes every saved
+	// credential unreadable; tenants then have to enter theirs again.
+	//
+	// MasterKeyFile 保存静态加密租户存储凭据的 32 字节密钥（十六进制或 base64）。丢失后
+	// 所有已保存的凭据都无法读取，租户需要重新填写。
+	MasterKeyFile string `json:",optional"`
+	// MasterKey is the same key given inline, usually as
+	// "${AISW_TENANT_STORAGE_MASTER_KEY}". Set at most one of the two.
+	//
+	// MasterKey 是直接给出的同一把密钥，通常写成 "${AISW_TENANT_STORAGE_MASTER_KEY}"。
+	// 两者至多设置一个。
+	MasterKey string `json:",optional"`
+	// AllowPrivateEndpoints lets tenants use endpoints on this host, private
+	// networks, link-local addresses (including cloud metadata) and plain
+	// http. Leave it off unless every tenant is trusted with the network the
+	// Gateway and control plane sit on, e.g. a single-tenant install whose NAS
+	// is on the LAN. The Gateway follows the same setting.
+	//
+	// AllowPrivateEndpoints 允许租户使用本机、私网、链路本地地址（含云元数据）以及明文 http
+	// 端点。除非每个租户都可以信任地访问 Gateway 与控制面所在的网络（例如 NAS 在局域网内的
+	// 单租户部署），否则保持关闭。Gateway 采用同一设置。
+	AllowPrivateEndpoints bool `json:",optional"`
+}
+
+// Enabled reports whether tenants may configure their own storage.
+//
+// Enabled 报告租户能否配置自有存储。
+func (t TenantStorageConf) Enabled() bool { return t.MasterKey != "" || t.MasterKeyFile != "" }
+
 // ComfyUIManagedConf configures forwarding STATUS.md's P2 ComfyUI Managed
 // Docker deployment subtask two's per-node lifecycle action trigger and
 // status calls.
@@ -1274,6 +1314,12 @@ func (c Config) Validate() error {
 		if len(c.ComfyUIManaged.GatewayToken) < minSecretLen {
 			return errors.New("config: ComfyUIManaged.GatewayToken must be at least 32 characters; generate one with `openssl rand -base64 32`")
 		}
+	}
+	if c.TenantStorage.MasterKey != "" && c.TenantStorage.MasterKeyFile != "" {
+		return errors.New("config: set at most one of TenantStorage.MasterKey and TenantStorage.MasterKeyFile; generate a key with `openssl rand -base64 32`")
+	}
+	if c.TenantStorage.AllowPrivateEndpoints && !c.TenantStorage.Enabled() {
+		return errors.New("config: TenantStorage.AllowPrivateEndpoints needs TenantStorage.MasterKey or TenantStorage.MasterKeyFile")
 	}
 	if c.RemoteProviders.Enabled() {
 		if len(c.RemoteProviders.Gateways) == 0 {

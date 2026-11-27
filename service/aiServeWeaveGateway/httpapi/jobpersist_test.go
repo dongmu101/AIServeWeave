@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"AIServeWeave/common/metrics/metricstest"
+	"AIServeWeave/common/objectstore"
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/service/aiServeWeaveGateway/internal/gatewaytest"
-	"AIServeWeave/service/aiServeWeaveGateway/objectstore"
 	"AIServeWeave/service/aiServeWeaveGateway/scheduler"
 )
 
@@ -492,7 +492,7 @@ func TestJobPersisterCopiesArtifactBytesIntoConfiguredStorage(t *testing.T) {
 
 	client := newFakePersistClient()
 	mx := metricstest.New()
-	p := newJobPersister(jobs, client, opener, storage, clock, discardLogger(), jobPersistConfig{Interval: time.Second, Metrics: newRecorder(mx)})
+	p := newJobPersister(jobs, client, opener, newFileStore(storage, nil, clock, discardLogger(), 0), clock, discardLogger(), jobPersistConfig{Interval: time.Second, Metrics: newRecorder(mx)})
 	p.tick()
 
 	client.mu.Lock()
@@ -595,7 +595,7 @@ func TestJobPersisterRetriesAnArtifactCopyFailureRatherThanReportingMetadataOnly
 		t.Fatalf("NewLocal: %v", err)
 	}
 	client := newFakePersistClient()
-	p := newJobPersister(jobs, client, opener, storage, clock, discardLogger(), jobPersistConfig{Interval: time.Second, MaxBackoff: 8 * time.Second})
+	p := newJobPersister(jobs, client, opener, newFileStore(storage, nil, clock, discardLogger(), 0), clock, discardLogger(), jobPersistConfig{Interval: time.Second, MaxBackoff: 8 * time.Second})
 
 	p.tick()
 	if n := len(client.artifactCalls); n != 0 {

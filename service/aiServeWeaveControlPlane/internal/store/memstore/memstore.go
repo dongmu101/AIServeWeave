@@ -51,6 +51,7 @@ type Store struct {
 	nodeProviders        map[nodeProviderKey]model.NodeProvider
 	nodeProviderVersions map[string]model.NodeProviderVersion
 	installCodes         map[string]model.AgentInstallCode
+	tenantStorage        map[string]model.TenantStorage
 	users                map[string]model.User
 	platformOperators    map[string]model.PlatformOperator
 	keys                 map[string]model.APIKey

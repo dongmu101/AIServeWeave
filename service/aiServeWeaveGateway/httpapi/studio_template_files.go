@@ -11,8 +11,8 @@ import (
 	"slices"
 	"strings"
 
+	"AIServeWeave/common/objectstore"
 	"AIServeWeave/service/aiServeWeaveGateway/flow"
-	"AIServeWeave/service/aiServeWeaveGateway/objectstore"
 )
 
 // A comfyui_template node whose template takes files submits the run as
@@ -78,10 +78,10 @@ func (d studioFlowDispatcher) openFile(ctx context.Context, tenantID, id string)
 		if !ok {
 			return nil, "", missing
 		}
-		if d.h.storage == nil {
+		if !d.h.files.hasAny(tenantID) {
 			return nil, "", &flow.Error{Code: codeArtifactStorage}
 		}
-		body, _, err := d.h.storage.Open(ctx, key)
+		body, _, err := d.h.files.open(ctx, tenantID, key)
 		if errors.Is(err, objectstore.ErrNotFound) {
 			return nil, "", missing
 		}
@@ -106,8 +106,8 @@ func (d studioFlowDispatcher) openFile(ctx context.Context, tenantID, id string)
 	if !ok {
 		return nil, "", missing
 	}
-	if rec.StorageKey != "" && d.h.storage != nil {
-		if body, _, err := d.h.storage.Open(ctx, rec.StorageKey); err == nil {
+	if rec.StorageKey != "" && d.h.files.hasAny(tenantID) {
+		if body, _, err := d.h.files.open(ctx, tenantID, rec.StorageKey); err == nil {
 			return body, rec.Ref.Filename, nil
 		}
 	}

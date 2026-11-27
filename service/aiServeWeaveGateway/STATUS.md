@@ -22,7 +22,7 @@
 | `messagesession/` | 已实现 | 经共享 `-redis-addr` 跨副本协调调用方工具续接，供 Claude Code 原生 Messages 使用；见「Claude Code 原生 Messages」 |
 | `jobqueue/` | 已实现（2026-11-14） | 工作流提交与 ComfyUI 图像生成的持久全集群队列：Redis 状态记录（意图标记、绑定、名次）+ asynq 至少一次投递，见「工作流 Job 的持久队列」 |
 | `waitqueue/` | 已实现（2026-11-14） | 新对话请求的全集群 Redis FIFO 等待（票据租约、头部窗口、停滞逃逸），实现 `scheduler.WaitQueue`，见「对话请求的全集群等待队列」 |
-| `objectstore/` | 已实现 | 产物与输入文件字节的存储后端：`local`、`s3`、`webdav` 三个实现，由 `-artifact-storage` 选择，留空关闭（P04）；见「工作流 Job」第十二条 |
+| `common/objectstore/`（2026-11-27 由 Gateway 移入 common，控制面也用它做连通性检查） | 已实现 | 产物与输入文件字节的存储后端：`local`、`s3`、`webdav` 三个实现，由 `-artifact-storage` 选择，留空关闭（P04）；见「工作流 Job」第十二条 |
 | `internal/gatewaytest/` | 测试辅助 | 内存 gRPC 流与节点证书，测试逐帧扮演 Agent，不需要监听端口 |
 | `e2e/` | 已实现 | 真实 TCP + mTLS 下三副本与真实 Agent 的联调测试 |
 | `main.go` | 已实现 | 装配隧道监听、HTTP 监听、Registry 名册订阅、`/metrics` 监听；`routes.go`/`workflows.go` 选择路由表与工作流模板的来源（文件或控制面），`local_inventory.go` 为运维清单发现本机后端，`docs.go` 在公开监听器上提供嵌入的 `GET /openapi.yaml` 与 Swagger UI `GET /docs/`（`docsui/`），不需要 API Key |
@@ -160,6 +160,37 @@ go run ./service/aiServeWeaveGateway -comfyui-managed-addr 127.0.0.1:8093 ...
 **控制面不可达时返回 503，不是 401。** 收到 401 的调用方会跑去重新生成 key，而如果只是控制面短暂宕机，那既浪费他们的时间也解决不了问题。这个区分由 `httpapi.ErrKeyRejected` 承载：只有它代表「这个 key 不行」，其余错误一律是「我们此刻答不了」。
 
 `InternalToken` 用 `AISW_CONTROL_PLANE_TOKEN` 环境变量传，不要用 `-control-plane-token` flag —— flag 在 `ps` 输出里可见。
+
+## 租户自有对象存储（2026-11-27）
+
+租户在 Console 配置了自己的 S3 或 WebDAV 后，该租户的 job 产物、Studio 运行输入文件与推理生图都写进租户的存储，不再写进 `-artifact-storage`。设计见 `.scratch/tenant-object-storage/spec.md`，控制面一侧见 [ControlPlane STATUS](../aiServeWeaveControlPlane/STATUS.md#租户自有对象存储2026-11-27)。没有新 flag：设置了 `-control-plane-addr` 时自动向控制面读取设置（令牌同 `-control-plane-token` / `AISW_CONTROL_PLANE_TOKEN`）。
+
+- **`common/objectstore`**：`objectstore` 包从 Gateway 移到 `common/`，控制面与 Gateway 共用。
+  - `NewTenant(cfg, allowPrivate)`：只接受 s3 与 webdav，使用共享的受限 HTTP 客户端。`GuardedHTTPClient` 在拨号时检查解析后的 IP（因此同样拦下 DNS 重绑定与跳转），不使用环境代理；`CheckEndpoint` 在保存时拒绝落在受限地址段的 IP 字面量，未放行时也拒绝 `http://`。部署自己的 `-artifact-storage` 不受这些限制。
+  - 错误分类：`ErrUnreachable`、`ErrAuth`、`ErrPermission`、`ErrContainerNotFound`、`ErrAddressNotAllowed`，S3 按错误码与 HTTP 状态、WebDAV 按 HTTP 状态归类，错误文本不含密钥。
+  - `Probe`：写 16 字节到 `.aisw-probe/`，读回比对后删除。
+  - `Put` 的 body 可寻址时，限长包装同样可寻址，S3 SDK 重试时能倒回 body。此前重试报「request stream is not seekable」，真实的网络错误因此丢失。
+- **读写位置**（`httpapi/tenantstorage.go` 的 `fileStore`）：
+  - 写：租户有自有存储时写它，否则写部署存储，两者都没有时与以前相同。读不到租户设置时写入失败，从不回退到部署存储：jobPersister 本轮记失败、下轮重试；Studio 上传回 503 `storage_unavailable`；推理生图节点以 `artifact_storage_unavailable` 失败。
+  - 读：依次尝试租户存储与部署存储（覆盖配置自有存储之前写入的文件），job 产物之后照旧从节点实时拉取。读不到设置时仍会读部署存储。
+  - 设置按租户缓存 30 秒；控制面暂时不可达时，已读到的设置最多再用 10 分钟。只有后端字段或 `allow_private_endpoints` 变化时才重建后端。
+  - 涉及的调用点：jobPersister、`/v1/artifacts/{id}` 下载、Studio 运行输入的上传与复用、推理生图、运行产物下载、模板节点读取文件。
+- **保留期清理**（`httpapi/tenantstorage_cleanup.go`）：每小时向控制面分页取设了保留期的租户，在其存储的 `<租户>/` 与 `studio/<租户>/` 两个前缀下删除修改时间超过 `retention_days` 的对象；保留期为 0 的租户从不扫描。每轮以间隔为期限，构建失败或列举失败的租户跳过到下一轮，Gateway 关闭时中止进行中的扫描。`-studio-artifact-retention` 与 artifactcleanup 只作用于部署存储。
+- **控制面客户端**（`controlplaneclient/tenantstorage.go`）：`TenantStorageClient` 读取 `GET /internal/v1/tenants/:id/storage` 与 `GET /internal/v1/tenant-storage/retained`。404 视为旧版控制面（未配置、空列表），不认识的 kind 视为读不到设置。
+
+升级须知：先升级控制面再升级 Gateway；顺序反过来时 Gateway 把 404 当作未配置，行为与以前相同。
+
+验证：objectstore、httpapi、controlplaneclient、Gateway 根包、flowdef 与 flow 的默认测试通过。临时用例（已删除）覆盖：
+- 受限地址段的 29 个边界地址（含 IPv4 映射）、18 种端点写法、拨号拦截 IP 与 localhost、环境代理不生效。
+- 构建 tenant 后端时替换调用方自带的 HTTP 客户端；S3 的 8 种与 WebDAV 的 5 种错误归类、密钥不出现在错误里、连不上时归为 `ErrUnreachable`（修正前为「not seekable」）。
+- `Probe` 的成功、各步失败与残留清理；限长包装的倒回与长短校验。
+- 在进程内的真实 WebDAV 服务器上探测成功、密码错误归为 `auth`、内网地址被拒。
+- `fileStore` 的写入选择、不回退、TTL、10 分钟陈旧上限、只在变化时重建、读取顺序与错误。
+- jobPersister 写进租户存储且部署存储为空、读不到设置时不登记产物；下载依次读租户与部署存储；Studio 上传写进租户存储、读不到设置时 503、两者都没有时的问题码、`discard` 清理。
+- 清理器的保留期、两个前缀、不碰其他前缀、跳过保留期 0、未配置与构建失败、分页与倒退游标、删除失败与列举失败、`Stop` 中止阻塞的扫描。
+- 控制面客户端的 10 种响应与分页游标转义。
+
+`fileStore` 并发、清理器 `Stop` 与共享客户端在 `-race` 下稳定。未在真实 S3 上验证（本机无法拉取 MinIO 镜像）。
 
 ## Studio 编排的文件输入、保留期清理与 OpenAPI（2026-11-27）
 

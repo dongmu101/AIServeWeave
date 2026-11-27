@@ -6,6 +6,7 @@ import {
   canCreateUser,
   canEditTenantLimits,
   canManageGatewayKey,
+  canManageStorage,
   canManageUsers,
   canPurchaseCredits,
   canRevokeApiKey,
@@ -91,5 +92,11 @@ test("only owners and admins see the controls that spend money", () => {
   ];
   for (const item of cases) {
     assert.equal(canPurchaseCredits(item.role), item.purchase, `${item.role || "(empty)"}: purchase credits`);
+  }
+});
+
+test("only owner and admin manage the tenant's object storage", () => {
+  for (const [role, want] of [["owner", true], ["admin", true], ["member", false], ["auditor", false], ["", false]] as const) {
+    assert.equal(canManageStorage(role), want, role);
   }
 });

@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	"AIServeWeave/service/aiServeWeaveGateway/objectstore"
+	"AIServeWeave/common/objectstore"
 )
 
 // newFakeS3Server is a minimal path-style S3 stand-in covering exactly the

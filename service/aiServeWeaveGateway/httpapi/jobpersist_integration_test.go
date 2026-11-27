@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"AIServeWeave/common/objectstore"
 	"AIServeWeave/service/aiServeWeaveGateway/httpapi"
 	"AIServeWeave/service/aiServeWeaveGateway/internal/gatewaytest"
-	"AIServeWeave/service/aiServeWeaveGateway/objectstore"
 )
 
 // fakeJobPersistClient is a minimal httpapi.JobPersistClient for asserting

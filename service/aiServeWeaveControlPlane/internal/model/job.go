@@ -149,7 +149,7 @@ func (j Job) Terminal() bool {
 // SHA256, SizeBytes, ContentType and StorageKey describe the copy of this
 // artifact's bytes a Gateway replica has (or has not yet) made into its
 // configured object storage backend (STATUS.md's P04; see
-// service/aiServeWeaveGateway/objectstore). They are empty/zero for an
+// common/objectstore). They are empty/zero for an
 // artifact recorded before that copy happens, or whenever byte persistence
 // is disabled — the same "accept the zero value until the feature lands"
 // tolerance WorkflowVersion already established on Job above, applied here
@@ -160,7 +160,7 @@ func (j Job) Terminal() bool {
 //
 // SHA256、SizeBytes、ContentType 与 StorageKey 描述的是 Gateway 副本是否
 // （或尚未）把这个产物的字节复制进了它配置的对象存储后端（STATUS.md 的
-// P04；见 service/aiServeWeaveGateway/objectstore）。对于这次复制发生之前
+// P04；见 common/objectstore）。对于这次复制发生之前
 // 记录的产物，或字节持久化被关闭时，它们为空/零值——与上面 Job 的
 // WorkflowVersion 已经确立的「在功能落地之前接受零值」的容忍度相同，只是
 // 这里的功能是在这一行本身已经存在之后才落地，而不是之前。StorageKey 是

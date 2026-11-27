@@ -6,7 +6,7 @@ import (
 
 	"golang.org/x/net/webdav"
 
-	"AIServeWeave/service/aiServeWeaveGateway/objectstore"
+	"AIServeWeave/common/objectstore"
 )
 
 // newWebDAVBackend serves objectstore.WebDAV's tests against a real WebDAV

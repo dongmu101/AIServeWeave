@@ -15,7 +15,7 @@ import (
 
 	"AIServeWeave/common/flowdef"
 	"AIServeWeave/common/idgen"
-	"AIServeWeave/service/aiServeWeaveGateway/objectstore"
+	"AIServeWeave/common/objectstore"
 )
 
 // Image and file inputs of a Studio flow run.
@@ -117,22 +117,23 @@ func (s *studioFlows) parseRunStart(w http.ResponseWriter, r *http.Request) (stu
 }
 
 // stagedInputs is what stageInputFiles wrote for one run: the input values
-// to bind, the run's input files by artifact id, and the keys to delete if
-// the run does not start after all.
+// to bind, the run's input files by artifact id, the storage they were
+// written to, and the keys to delete if the run does not start after all.
 //
 // stagedInputs 是 stageInputFiles 为一次运行写下的内容：要绑定的输入值、按产物 id 索引的
-// 运行输入文件，以及运行最终未能启动时要删除的 key。
+// 运行输入文件、写入的存储，以及运行最终未能启动时要删除的 key。
 type stagedInputs struct {
-	values map[string]json.RawMessage
-	files  map[string]flowdef.FileValue
-	keys   []string
+	values  map[string]json.RawMessage
+	files   map[string]flowdef.FileValue
+	backend objectstore.Backend
+	keys    []string
 }
 
 // discard deletes the objects staged for a run that did not start.
 // discard 删除为未能启动的运行暂存的对象。
 func (s *studioFlows) discard(ctx context.Context, staged stagedInputs) {
 	for _, key := range staged.keys {
-		if err := s.h.storage.Delete(context.WithoutCancel(ctx), key); err != nil {
+		if err := staged.backend.Delete(context.WithoutCancel(ctx), key); err != nil {
 			s.logger.Warn("deleting a staged studio input failed; the retention sweep removes it later", slog.String("key", key), slog.Any("error", err))
 		}
 	}
@@ -169,9 +170,23 @@ func (s *studioFlows) stageInputFiles(w http.ResponseWriter, r *http.Request, ow
 			issue(in.Name, string(flowdef.CodeInvalidValue), "give either an uploaded file or an earlier run's file, not both")
 			continue
 		}
-		if s.h.storage == nil {
-			issue(in.Name, codeArtifactStorage, "this deployment has no artifact storage for uploaded files")
-			continue
+		if staged.backend == nil {
+			// The tenant's own storage when it has one, else the
+			// deployment's; settings that cannot be read refuse the run
+			// rather than store its files where the tenant did not choose.
+			// 租户有自有存储时用它，否则用部署存储；读不到设置时拒绝运行，而不是把文件存到
+			// 租户没有选择的地方。
+			backend, err := s.h.files.writer(r.Context(), owner.TenantID)
+			if err != nil {
+				s.discard(r.Context(), staged)
+				writeStudioError(w, http.StatusServiceUnavailable, "storage_unavailable", "uploaded files cannot be stored right now")
+				return stagedInputs{}, false
+			}
+			if backend == nil {
+				issue(in.Name, codeArtifactStorage, "this deployment has no artifact storage for uploaded files")
+				continue
+			}
+			staged.backend = backend
 		}
 		var (
 			value flowdef.FileValue
@@ -297,7 +312,7 @@ func (s *studioFlows) stageReuse(ctx context.Context, owner StudioOwner, runID s
 	if !ok {
 		return flowdef.FileValue{}, codeStudioArtifactMissing, gone
 	}
-	body, info, err := s.h.storage.Open(ctx, key)
+	body, info, err := s.h.files.open(ctx, owner.TenantID, key)
 	if errors.Is(err, objectstore.ErrNotFound) {
 		return flowdef.FileValue{}, codeStudioArtifactMissing, gone
 	}
@@ -316,8 +331,8 @@ func (s *studioFlows) storeInputFile(ctx context.Context, owner StudioOwner, run
 	if !ok {
 		return flowdef.FileValue{}, "storage", ""
 	}
-	if err := s.h.storage.Put(ctx, key, body, size); err != nil {
-		_ = s.h.storage.Delete(context.WithoutCancel(ctx), key)
+	if err := staged.backend.Put(ctx, key, body, size); err != nil {
+		_ = staged.backend.Delete(context.WithoutCancel(ctx), key)
 		s.logger.Warn("storing a studio input file failed", slog.String("run_id", runID), slog.Any("error", err))
 		return flowdef.FileValue{}, "storage", ""
 	}

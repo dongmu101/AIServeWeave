@@ -35,6 +35,7 @@ import (
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
 	"AIServeWeave/common/localdiscovery"
 	"AIServeWeave/common/metrics"
+	"AIServeWeave/common/objectstore"
 	"AIServeWeave/common/tunnelwire"
 	"AIServeWeave/service/aiServeWeaveGateway/adminapi"
 	"AIServeWeave/service/aiServeWeaveGateway/agentdist"
@@ -44,7 +45,6 @@ import (
 	"AIServeWeave/service/aiServeWeaveGateway/jobqueue"
 	"AIServeWeave/service/aiServeWeaveGateway/messagesession"
 	"AIServeWeave/service/aiServeWeaveGateway/modelpullapi"
-	"AIServeWeave/service/aiServeWeaveGateway/objectstore"
 	"AIServeWeave/service/aiServeWeaveGateway/ratelimit"
 	"AIServeWeave/service/aiServeWeaveGateway/registryclient"
 	"AIServeWeave/service/aiServeWeaveGateway/remoteprovidersapi"
@@ -563,6 +563,20 @@ func run() error {
 		httpCfg.JobRecoveryClient = jobPersistence
 		httpCfg.ArtifactCleanupClient = jobPersistence
 		httpCfg.ArtifactRecoveryClient = jobPersistence
+	}
+	// Tenants' own object storage is read from the same control plane; a
+	// control plane that predates it answers that no tenant has any.
+	// 租户自有对象存储从同一个控制面读取；尚不支持它的控制面会答复所有租户都没有配置。
+	if *controlPlaneAddr != "" {
+		token := *controlPlaneToken
+		if token == "" {
+			token = os.Getenv(controlPlaneTokenEnv)
+		}
+		tenantStorage, err := controlplaneclient.NewTenantStorageClient(controlplaneclient.JobsClientConfig{Endpoint: *controlPlaneAddr, Token: token})
+		if err != nil {
+			return err
+		}
+		httpCfg.TenantStorage = tenantStorage
 	}
 	// Same guard, same reason: requestLogClient is a concrete
 	// *controlplaneclient.RequestLogsClient, and httpCfg.RequestLogClient is

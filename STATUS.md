@@ -1,3 +1,28 @@
+# 租户自有对象存储（2026-11-27）
+
+租户的 owner 或 admin 可以在 Console 为本租户配置自己的 S3 或 WebDAV，配置后该租户的 job 产物、Studio 运行输入文件与推理生图都写进租户的存储，保留期由租户自己设（0 表示平台从不删除）。部署默认关闭，填了主密钥才开启。代码与默认测试已通过，**未在真实 S3 上验证，Console 也未与真实控制面联调、未在浏览器里走通**。设计见 `.scratch/tenant-object-storage/spec.md`。
+
+- **`common/objectstore`**：对象存储包从 Gateway 移到 `common/`，供控制面与 Gateway 共用。新增租户后端的构建、内网地址限制（拨号时检查，覆盖 DNS 重绑定与跳转，不用环境代理）、错误分类与连通性检查。见 [Gateway STATUS](service/aiServeWeaveGateway/STATUS.md#租户自有对象存储2026-11-27)。
+- **控制面**：新表 `tenant_storage`（base `0021`）；`GET`/`PUT`/`DELETE /admin/v1/storage`（owner/admin），保存前做连通性检查；凭据以 AES-256-GCM 加密保存，接口从不返回密钥；两个供 Gateway 使用的内部接口。新配置 `TenantStorage.MasterKey`/`MasterKeyFile`/`AllowPrivateEndpoints`。见 [ControlPlane STATUS](service/aiServeWeaveControlPlane/STATUS.md#租户自有对象存储2026-11-27)。
+- **Gateway**：写入只写租户当前的存储，读不到租户设置时写入失败而不回退到部署存储；读取依次尝试租户存储、部署存储，job 产物再从节点实时拉取。每小时按租户保留期清理。没有新 flag，设置了 `-control-plane-addr` 即生效。
+- **Console**：`/console/settings` 新增「对象存储」卡片。见 [Console STATUS](service/aiServeWeaveConsole/STATUS.md)。
+- **部署**：`deploy/controlplane.example.yaml` 新增 `TenantStorage` 块，`deploy/.env.example` 与 `docker-compose.yaml` 新增 `AISW_TENANT_STORAGE_MASTER_KEY`（留空即关闭，安装脚本不自动生成）。
+
+升级须知：
+- 先迁移并升级控制面，再升级 Gateway 与 Console。顺序反过来不会出错：Gateway 把旧控制面的 404 当作「未配置」。
+- 要开启：在 `deploy/.env` 填 `AISW_TENANT_STORAGE_MASTER_KEY`（`openssl rand -base64 32`），并把示例中的 `TenantStorage` 块加进本机 `controlplane.yaml`。主密钥丢失或更换后，租户需要重新填写凭据，请备份 `deploy/.env`。
+- `AllowPrivateEndpoints` 放行内网地址与明文 http，只在每个租户都可信时打开。
+- 更换或删除配置不迁移旧文件：旧文件留在原来的存储里，平台不再读取。
+
+已通过的检查：
+- objectstore、控制面、Gateway、flowdef 与 flow 的默认测试。临时用例（已删除）覆盖三层的正常、边界、异常与并发，相关包在 `-race` 下稳定。
+- 在进程内的真实 WebDAV 服务器上走通了探测。
+- 在临时 PostgreSQL 18 与 MySQL 9.7 容器上跑了 tenant_storage 的 live 用例；MySQL 上全部既有 live 用例通过。
+- 由此修正了 S3 重试丢失错误原因、列类型、`updated_at` 被覆盖、MySQL 并发首次保存死锁四处问题。
+- Console 的 lint、类型检查、473 项单元测试与生产构建通过。
+
+已知问题（与本次无关，未修）：在干净的 PostgreSQL 上，控制面 `Migrate` 在迁移后的 schema 检查处误报 `tenant_nodes` 的索引不兼容并返回错误，既有的 `TestLiveRoutes`、`TestLiveSchemaComments` 因此失败（HEAD 上同样复现）。控制面放在 PostgreSQL 上的部署可能受影响；默认部署的控制面用 MySQL。详见 ControlPlane STATUS。
+
 # Studio 编排的文件输入、保留期清理与 OpenAPI（2026-11-27）
 
 编排运行可以带图片与文件，ComfyUI 模板的文件型输入可以从编排运行；Studio 写入对象存储的文件有了保留期；`openapi.yaml` 收录了 `/studio/v1`。代码与默认测试已通过，**未接真实 ComfyUI、S3/WebDAV 与 nginx/Cloudflare 联调，也未在浏览器里走通新界面**。

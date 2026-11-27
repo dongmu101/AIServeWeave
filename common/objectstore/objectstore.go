@@ -158,7 +158,30 @@ func newBoundedReader(r io.Reader, size int64) io.Reader {
 	if size < 0 {
 		return r
 	}
+	if rs, ok := r.(io.ReadSeeker); ok {
+		return &boundedReadSeeker{boundedReader: boundedReader{r: r, want: size}, seeker: rs}
+	}
 	return &boundedReader{r: r, want: size}
+}
+
+// boundedReadSeeker is a boundedReader over a body that can seek. Keeping it
+// seekable lets a client rewind the body to retry a request (the S3 SDK
+// does), so a retried failure reports its own cause rather than "cannot
+// rewind".
+//
+// boundedReadSeeker 是作用于可寻址 body 的 boundedReader。保持可寻址，客户端才能倒回 body
+// 重试请求（S3 SDK 会这样做），重试后的失败因此报告其真实原因，而不是「无法倒回」。
+type boundedReadSeeker struct {
+	boundedReader
+	seeker io.Seeker
+}
+
+func (b *boundedReadSeeker) Seek(offset int64, whence int) (int64, error) {
+	pos, err := b.seeker.Seek(offset, whence)
+	if err == nil {
+		b.read = pos
+	}
+	return pos, err
 }
 
 type boundedReader struct {

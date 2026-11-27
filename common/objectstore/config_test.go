@@ -3,7 +3,7 @@ package objectstore_test
 import (
 	"testing"
 
-	"AIServeWeave/service/aiServeWeaveGateway/objectstore"
+	"AIServeWeave/common/objectstore"
 )
 
 func TestNewDispatchesOnKind(t *testing.T) {

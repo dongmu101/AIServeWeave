@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"AIServeWeave/common/objectstore"
 	"AIServeWeave/service/aiServeWeaveGateway/internal/gatewaytest"
-	"AIServeWeave/service/aiServeWeaveGateway/objectstore"
 )
 
 // fakeArtifactCleanupClient answers ListExpiredJobArtifacts from a

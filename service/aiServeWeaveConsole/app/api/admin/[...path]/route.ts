@@ -1,5 +1,6 @@
 import { isPublicDocsRead } from "@/lib/console/public-docs";
 import { isTrustedWrite } from "@/lib/console/request-origin";
+import { sanitizeStorageError } from "@/lib/console/tenant-storage";
 import { resolveUpstream } from "@/lib/console/upstream-routes";
 import { callControlPlane } from "@/lib/server/control-plane";
 import {
@@ -33,6 +34,11 @@ import { clearSession, readSession } from "@/lib/server/session";
 interface RouteContext {
   params: Promise<{ path: string[] }>;
 }
+
+/** STORAGE_WRITE_TIMEOUT_MS bounds a tenant storage save, probe included.
+ *
+ * STORAGE_WRITE_TIMEOUT_MS 限定一次租户存储保存的时长，含探测在内。 */
+const STORAGE_WRITE_TIMEOUT_MS = 30_000;
 
 /** GET forwards a read.
  *
@@ -115,12 +121,19 @@ async function forward(
     body = raw;
   }
 
+  // Saving tenant storage probes the storage before it answers, which can
+  // outlast the default upstream timeout; its 400 carries a code and a reason
+  // the form needs, so those two (and only those) are passed on.
+  // 保存租户存储会先探测存储再回答，可能超过默认的上游超时；它的 400 带有表单需要的 code 与
+  // reason，只转交这两个字段。
+  const isStorageWrite = request.method === "PUT" && upstream.path === "/admin/v1/storage";
   const result = await callControlPlane({
     method: request.method,
     path: upstream.path,
     search: upstream.search,
     token: session?.token,
     body,
+    timeoutMs: isStorageWrite ? STORAGE_WRITE_TIMEOUT_MS : undefined,
   });
   if (result.kind !== "response") {
     return errorResponse(result.kind === "timeout" ? 504 : 502, "upstream");
@@ -138,6 +151,9 @@ async function forward(
   }
   if (result.status === 204) {
     return jsonResponse(204, null);
+  }
+  if (result.status === 400 && isStorageWrite) {
+    return jsonResponse(400, { error: "upstream_error", ...sanitizeStorageError(result.text) });
   }
   if (result.status >= 400) {
     return errorResponse(result.status, "upstream_error");

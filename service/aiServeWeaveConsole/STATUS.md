@@ -1,3 +1,14 @@
+## 租户自有对象存储（2026-11-27）
+
+配合控制面的 `/admin/v1/storage`（设计见 `.scratch/tenant-object-storage/spec.md`）：`/console/settings` 新增「对象存储」卡片，owner/admin 可为本租户配置 S3 或 WebDAV，配置后工作流产物与 Studio 文件写入其中；其他角色只看到说明，不发请求。
+
+- **界面**：类型（不使用 / S3 / WebDAV）；S3 的 endpoint（留空为 AWS）、region、bucket、prefix、path-style、Access Key ID、Secret；WebDAV 的 URL、目录、用户名、密码；保留天数（0 表示平台从不删除，由租户在存储侧管理）。密钥只写不读，已保存的显示「已保存（末四位 XXXX）」，留空保留（S3 的两个 Key 可以只改一个）；位置（类型、S3 的 endpoint/region/bucket、WebDAV 的 URL）变化时提示必须重填，并在保存前弹出确认，说明旧文件不会迁移；WebDAV 换了用户名时同样必须重填密码。`allow_private_endpoints` 为 false 时提示只接受公网 https，并在提交前拦下 http。保存按钮在连通性测试期间显示进行中。删除（或选「不使用」后停用）需要确认。每次尝试后清空已输入的密钥。
+- **错误**：`invalid_storage`、`credentials_required`、`endpoint_not_allowed`、`storage_unreachable`（按 `reason` 区分 network、auth、not_found、permission、endpoint_not_allowed、other）都映射为固定文案，未知码用通用文案，不显示后端 `error` 原文。`GET` 返回 404（旧控制面）或 `enabled:false` 都显示「本部署未开启」。
+- **请求链路**：白名单新增 `GET`/`PUT`/`DELETE /admin/v1/storage`。`app/api/admin/[...path]` 对该路径 `PUT` 的 400 只转交校验过的 `code` 与 `reason`（其余上游文本丢弃），`ApiError` 新增 `code`、`reason`；保存会先探测存储，所以该 `PUT` 在服务端的超时放宽到 30 秒、浏览器侧 35 秒（其他请求不变），仍只发送一次、不重试。
+- **实现**：`lib/console/tenant-storage.ts`（契约、草稿校验、请求体构造、错误映射）、`components/console/tenant-storage-panel.tsx`、`canManageStorage`；八种语言文案齐全，并把设置页副标题从「目前只有一项」改为「Gateway API Key 与对象存储」。
+
+验证：lint（仅 alerts 页既有警告）、TS7 类型检查、473 项单元测试（新增 `tenant-storage.test.ts`：响应解析、位置变化判断、保留密钥的条件（含 WebDAV 用户名）、草稿校验、请求体省略密钥、错误码与 reason 映射、请求层携带 code/reason 且不重试）与生产构建通过。Playwright 新增 `e2e/tenant-storage.spec.ts` 4 项（新建失败再成功、保留密钥与换位置重填、删除、未开启/404/403），与多语言、`console.spec` 合跑 215 项通过，`console.spec:145` 在改动前同样失败。另用桩控制面对生产构建验证了 400 只转交 code/reason、未知码与上游文本被丢弃、耗时 12 秒的 `PUT` 能成功。未验证：未与真实控制面联调（控制面已按同一契约交付，handler 级测试覆盖了相同的请求与错误形状）、未在真实 S3/WebDAV 上走通、未在真实浏览器里对真实后端验收。位置是否变化按去掉首尾空格后的字符串比较；Console 发送的正是去掉空格后的值，控制面按原样保存与比较（不归一化 URL 末尾斜杠），两边一致。
+
 ## 购买与赠送点数、注册赠送设置（2026-11-24）
 
 - 运维 `/operator/billing` 新增「设置」标签页，读写 `GET`/`PUT /operator/v1/billing/settings` 的注册赠送点数（默认 0，存控制面数据库，尚未保存时显示配置文件默认值）；两行白名单已加。

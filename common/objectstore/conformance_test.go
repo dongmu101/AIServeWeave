@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"AIServeWeave/service/aiServeWeaveGateway/objectstore"
+	"AIServeWeave/common/objectstore"
 )
 
 // TestBackendsConformance runs the same behavioral contract against every

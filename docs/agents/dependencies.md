@@ -33,8 +33,8 @@ viper 是团队明确要求的选择。当前只用它完成本地文件读写�
 | --- | --- |
 | `github.com/redis/go-redis/v9` | 共享租户限流计数、Redis 会话存储与两个跨副本队列（对话等待队列 `waitqueue/` 的 Lua 票据脚本、工作流队列 `jobqueue/` 的状态记录）；跨副本额度与排队顺序不能靠各副本独立计数保证 |
 | `github.com/hibiken/asynq` | 仅由 `jobqueue/transport.go` import：工作流提交与 ComfyUI 图像生成的持久、至少一次投递队列，含租约、崩溃后重新投递、延迟重试与按 id 检视/删除任务。只用 go-redis 自写需要重新实现租约回收与转发器，风险更高。固定 v0.25.1（v0.26 会连带把 Agent 的 viper 依赖 `spf13/cast` 升级），新增传递依赖 `robfig/cron/v3` 与 `golang.org/x/time`；`google/uuid`、protobuf 与 go-redis 已在仓库中。asynq 的键前缀固定为 `asynq:`，队列名是唯一隔离单位 |
-| AWS SDK for Go v2（含 credentials、service/s3）与 `github.com/aws/smithy-go` | `objectstore/` 的 S3 兼容存储与错误处理 |
-| `github.com/studio-b12/gowebdav` | `objectstore/` 的 WebDAV 存储，支持仅提供 WebDAV 的 NAS |
+| AWS SDK for Go v2（含 credentials、service/s3）与 `github.com/aws/smithy-go` | `common/objectstore/` 的 S3 兼容存储与错误处理 |
+| `github.com/studio-b12/gowebdav` | `common/objectstore/` 的 WebDAV 存储，支持仅提供 WebDAV 的 NAS |
 
 Redis 与对象存储是按配置启用的能力；未配置时的退回行为和副本边界见 [Gateway STATUS](../../service/aiServeWeaveGateway/STATUS.md)。`controlplaneclient/` 继续使用标准库 `net/http`，不引入控制面框架或 ORM。
 

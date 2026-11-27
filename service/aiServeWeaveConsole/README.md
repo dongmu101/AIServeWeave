@@ -138,7 +138,7 @@ app/console/models/  租户 AI 服务与模型：连接到 Gateway 的 Agent 上
 app/console/workflows/ 工作流菜单（租户）
 app/console/jobs/    当前运行（租户，实时视图）
 app/console/jobs/history/ 持久化历史与详情、图片/视频产物预览
-app/console/settings/ 租户 Gateway Key 设置
+app/console/settings/ 租户 Gateway Key 设置与对象存储（S3 / WebDAV，`/admin/v1/storage`）
 app/api/gateway-key/ Gateway Key 的会话内加密保存与清除
 app/api/gateway/     Job 取消、产物列举与流式下载
 app/api/session/     登录与退出：唯一取得控制面令牌的地方

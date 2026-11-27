@@ -106,6 +106,7 @@ async function installFixtures(page: Page, unexpected: string[]) {
       else if (path === "/admin/v1/apikeys") json = { items: [key], next_cursor: "" };
       else if (path === "/admin/v1/models") json = { collected_at: at, partial: false, services: [{ agent_id: "agent-fixture", service_id: "ollama-fixture", kind: "ollama", node_online: true, state: "healthy", models: [{ id: "fixture-model", capabilities: { chat: "supported" } }] }] };
       else if (path.endsWith("/usage/summary")) json = { items: [{ tenant_id: user.tenant_id, model: "fixture-model", prompt_tokens: 100, completion_tokens: 50, total_tokens: 150, request_count: 2 }] };
+      else if (path === "/admin/v1/storage") json = { enabled: true, allow_private_endpoints: false, storage: null };
       else if (path === "/admin/v1/usage/records") json = { items: [], next_cursor: "" };
       else if (path === "/admin/v1/billing/prices") json = { items: [] };
       else if (path.endsWith("/requests")) {

@@ -428,6 +428,40 @@ type NodeProviders interface {
 	ListNodeProviderVersions(ctx context.Context) ([]model.NodeProviderVersion, error)
 }
 
+// MaxRetainedTenantStorage bounds one page of ListRetainedTenantStorage.
+// MaxRetainedTenantStorage 限定 ListRetainedTenantStorage 的单页大小。
+const MaxRetainedTenantStorage = 500
+
+// TenantStorages persists each tenant's own object storage, at most one row
+// per tenant.
+//
+// TenantStorages 持久化每个租户自己的对象存储，每个租户至多一行。
+type TenantStorages interface {
+	// GetTenantStorage reads tenantID's row; ErrNotFound when it has none.
+	//
+	// GetTenantStorage 读取 tenantID 的行；没有时返回 ErrNotFound。
+	GetTenantStorage(ctx context.Context, tenantID string) (model.TenantStorage, error)
+	// PutTenantStorage inserts or replaces row, keeping an existing row's
+	// CreatedAt and setting row.Version to one more than the previous
+	// version (1 for a new row).
+	//
+	// PutTenantStorage 插入或替换 row：已有行的 CreatedAt 保持不变，row.Version 设为旧版本
+	// 加一（新行为 1）。
+	PutTenantStorage(ctx context.Context, row *model.TenantStorage) error
+	// DeleteTenantStorage removes tenantID's row; ErrNotFound when it has
+	// none.
+	//
+	// DeleteTenantStorage 删除 tenantID 的行；没有时返回 ErrNotFound。
+	DeleteTenantStorage(ctx context.Context, tenantID string) error
+	// ListRetainedTenantStorage reads up to limit rows (capped at
+	// MaxRetainedTenantStorage) whose RetentionDays is positive and whose
+	// tenant id sorts after after, in tenant id order.
+	//
+	// ListRetainedTenantStorage 读取至多 limit 行（上限 MaxRetainedTenantStorage）：
+	// RetentionDays 为正、租户 id 排在 after 之后，按租户 id 排序。
+	ListRetainedTenantStorage(ctx context.Context, after string, limit int) ([]model.TenantStorage, error)
+}
+
 // AgentInstallCodes persists one-time Agent install codes by the hash of the
 // code. The code itself is never stored.
 //
@@ -1129,6 +1163,7 @@ type Store interface {
 	NodeBilling
 	TenantNodes
 	NodeProviders
+	TenantStorages
 	AgentInstallCodes
 	Users
 	PlatformOperators

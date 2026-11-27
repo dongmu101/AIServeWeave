@@ -1,5 +1,6 @@
 "use client";
 
+import * as React from "react";
 import Link from "next/link";
 import { CheckIcon, ChevronDownIcon, MenuIcon, type LucideIcon } from "lucide-react";
 
@@ -10,6 +11,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { cn } from "@/lib/utils";
 
 export type NavLeaf = { href: string; label: string; icon: LucideIcon };
 export type NavEntry = NavLeaf | { label: string; children: readonly NavLeaf[] };
@@ -47,11 +49,12 @@ function navItemClass(active: boolean): string {
 
 /**
  * TopNav is the one-row navigation of an h-14 header: top-level links and
- * grouped dropdowns from xl up, a single menu button naming the current page
- * below that. Both forms list the same entries.
+ * grouped dropdowns from xl up when all entries fit, a single menu button
+ * naming the current page otherwise. Both forms list the same entries, and
+ * neither scrolls.
  *
- * TopNav 是 h-14 页首里的单行导航：xl 起为顶层链接与分组下拉，更窄时收成一个显示
- * 当前页面名称的菜单按钮。两种形态列出的条目相同。
+ * TopNav 是 h-14 页首里的单行导航：xl 起且所有条目能放下时显示顶层链接与分组下拉，
+ * 否则收成一个显示当前页面名称的菜单按钮。两种形态列出的条目相同，且都不产生滚动。
  */
 export function TopNav({
   entries,
@@ -70,9 +73,56 @@ export function TopNav({
   fallbackLabel: string;
 }) {
   const active = activeLeaf(entries, pathname);
+  const navRef = React.useRef<HTMLElement>(null);
+  const rowRef = React.useRef<HTMLDivElement>(null);
+  const [overflowing, setOverflowing] = React.useState(false);
+
+  const entriesKey = entries
+    .map((entry) =>
+      "children" in entry ? `${entry.label}:${entry.children.map((child) => child.label).join(",")}` : entry.label,
+    )
+    .join("|");
+
+  const measureFit = React.useCallback(() => {
+    const nav = navRef.current;
+    const row = rowRef.current;
+    if (!nav || !row || getComputedStyle(row).display === "none") {
+      setOverflowing((prev) => (prev ? false : prev));
+      return;
+    }
+    const next = row.scrollWidth > nav.clientWidth + 1;
+    setOverflowing((prev) => (prev === next ? prev : next));
+  }, []);
+
+  React.useLayoutEffect(() => {
+    measureFit();
+  }, [entriesKey, measureFit]);
+
+  React.useEffect(() => {
+    const nav = navRef.current;
+    const row = rowRef.current;
+    if (!nav || !row || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measureFit);
+    observer.observe(nav);
+    observer.observe(row);
+    return () => observer.disconnect();
+  }, [measureFit]);
+
   return (
-    <nav aria-label={label} className="flex min-w-0 flex-1 items-center justify-end sm:justify-start">
-      <div className="hidden min-w-0 items-center gap-0.5 overflow-x-auto [scrollbar-width:none] xl:flex">
+    <nav
+      ref={navRef}
+      aria-label={label}
+      className="relative flex h-full min-w-0 flex-1 items-center justify-end sm:justify-start"
+    >
+      <div
+        ref={rowRef}
+        aria-hidden={overflowing || undefined}
+        inert={overflowing || undefined}
+        className={cn(
+          "hidden h-full min-w-0 max-w-full items-center gap-0.5 overflow-x-clip xl:flex",
+          overflowing && "pointer-events-none invisible absolute inset-y-0 left-0",
+        )}
+      >
         {entries.map((entry) => {
           if (!("children" in entry)) {
             const current = entry.href === active?.href;
@@ -108,7 +158,10 @@ export function TopNav({
         })}
       </div>
       <DropdownMenu>
-        <DropdownMenuTrigger aria-label={menuLabel} render={<Button variant="ghost" className="min-w-0 shrink xl:hidden" />}>
+        <DropdownMenuTrigger
+          aria-label={menuLabel}
+          render={<Button variant="ghost" className={cn("min-w-0 shrink", !overflowing && "xl:hidden")} />}
+        >
           <MenuIcon />
           <span className="truncate">{active?.label ?? fallbackLabel}</span>
           <ChevronDownIcon className="size-3 text-muted-foreground" />

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -55,6 +56,12 @@ type S3Config struct {
 	// Prefix 被加在每个 key 前面，如果 Prefix 非空且不以 "/" 结尾会自动插入
 	// 一个——这样一个 bucket 可以被多个用途或环境共用而不撞 key。
 	Prefix string
+	// HTTPClient, when set, carries every request, e.g. GuardedHTTPClient
+	// for storage a tenant configured. Nil uses the SDK's default.
+	//
+	// HTTPClient 非 nil 时承载所有请求，例如租户自配存储使用的 GuardedHTTPClient。为 nil
+	// 时使用 SDK 默认值。
+	HTTPClient *http.Client
 }
 
 // S3 stores objects in an S3 or S3-compatible bucket. See S3Config and the
@@ -141,6 +148,9 @@ func NewS3(cfg S3Config) (*S3, error) {
 	if cfg.Endpoint != "" {
 		opts.BaseEndpoint = aws.String(cfg.Endpoint)
 	}
+	if cfg.HTTPClient != nil {
+		opts.HTTPClient = cfg.HTTPClient
+	}
 	prefix := cfg.Prefix
 	if prefix != "" && prefix[len(prefix)-1] != '/' {
 		prefix += "/"
@@ -176,7 +186,7 @@ func (b *S3) Put(ctx context.Context, key string, body io.Reader, size int64) er
 		input.ContentLength = aws.Int64(size)
 	}
 	if _, err := b.client.PutObject(ctx, input); err != nil {
-		return fmt.Errorf("objectstore: s3 put %q: %s", key, b.redact(err.Error()))
+		return &opError{class: s3Class(err), msg: fmt.Sprintf("objectstore: s3 put %q: %s", key, b.redact(err.Error()))}
 	}
 	return nil
 }
@@ -196,7 +206,7 @@ func (b *S3) Open(ctx context.Context, key string) (io.ReadCloser, ObjectInfo, e
 		if isS3NotFound(err) {
 			return nil, ObjectInfo{}, ErrNotFound
 		}
-		return nil, ObjectInfo{}, fmt.Errorf("objectstore: s3 get %q: %s", key, b.redact(err.Error()))
+		return nil, ObjectInfo{}, &opError{class: s3Class(err), msg: fmt.Sprintf("objectstore: s3 get %q: %s", key, b.redact(err.Error()))}
 	}
 	info := ObjectInfo{Size: -1}
 	if out.ContentLength != nil {
@@ -222,7 +232,7 @@ func (b *S3) Delete(ctx context.Context, key string) error {
 		Bucket: aws.String(b.bucket),
 		Key:    aws.String(b.fullKey(key)),
 	}); err != nil {
-		return fmt.Errorf("objectstore: s3 delete %q: %s", key, b.redact(err.Error()))
+		return &opError{class: s3Class(err), msg: fmt.Sprintf("objectstore: s3 delete %q: %s", key, b.redact(err.Error()))}
 	}
 	return nil
 }
@@ -244,7 +254,7 @@ func (b *S3) List(ctx context.Context, prefix string, fn func(ObjectEntry) error
 	for pages.HasMorePages() {
 		page, err := pages.NextPage(ctx)
 		if err != nil {
-			return fmt.Errorf("objectstore: s3 list %q: %s", prefix, b.redact(err.Error()))
+			return &opError{class: s3Class(err), msg: fmt.Sprintf("objectstore: s3 list %q: %s", prefix, b.redact(err.Error()))}
 		}
 		for _, obj := range page.Contents {
 			key := strings.TrimPrefix(aws.ToString(obj.Key), b.prefix)

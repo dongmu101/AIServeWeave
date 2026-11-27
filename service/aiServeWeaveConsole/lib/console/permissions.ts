@@ -117,6 +117,18 @@ export function canManageGatewayKey(role: string): boolean {
 }
 
 /**
+ * canManageStorage reports whether a role may see and change the tenant's own
+ * object storage (S3 or WebDAV). Owner and admin may; the control plane answers
+ * everyone else with 403, so the Console does not even ask.
+ *
+ * canManageStorage 报告某个角色是否可以查看并修改租户自有的对象存储（S3 或 WebDAV）。
+ * owner 与 admin 可以；控制面对其他角色回 403，所以 Console 连请求都不发。
+ */
+export function canManageStorage(role: string): boolean {
+  return role === "owner" || role === "admin";
+}
+
+/**
  * canPurchaseCredits reports whether a role may start a checkout or open the
  * payment provider's customer portal. Owner and admin may, mirroring
  * `Actor.canPurchase` in the control plane, which answers a member with 403.

@@ -5,12 +5,12 @@ import (
 	"net/http"
 	"time"
 
+	"AIServeWeave/common/objectstore"
 	"AIServeWeave/common/reqid"
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/common/workflowview"
 	"AIServeWeave/service/aiServeWeaveGateway/jobqueue"
 	"AIServeWeave/service/aiServeWeaveGateway/messagesession"
-	"AIServeWeave/service/aiServeWeaveGateway/objectstore"
 	"AIServeWeave/service/aiServeWeaveGateway/ratelimit"
 	"AIServeWeave/service/aiServeWeaveGateway/scheduler"
 	"AIServeWeave/service/aiServeWeaveGateway/workflow"
@@ -204,6 +204,16 @@ type Config struct {
 	// nil 时完全关闭字节持久化：产物元数据（文件名/子目录/类型）仍会照常
 	// 上报给控制面，下载也始终从节点实时拉取，与今天的行为完全一致。
 	ArtifactStorage objectstore.Backend
+
+	// TenantStorage reads the S3 or WebDAV storage a tenant configured for
+	// its own files (job artifacts, Studio uploads and images), which then
+	// replaces ArtifactStorage for that tenant. Nil keeps every tenant on
+	// ArtifactStorage. A tenant storage retention sweep runs when it is set.
+	//
+	// TenantStorage 读取租户为自己的文件（job 产物、Studio 上传与图片）配置的 S3 或 WebDAV
+	// 存储，该租户的文件随后改用它而不是 ArtifactStorage。为 nil 时所有租户都用
+	// ArtifactStorage。设置后运行租户存储的保留期清理。
+	TenantStorage TenantStorageSource
 	// ArtifactCopyTimeout bounds one artifact's node-to-storage byte copy.
 	// Zero uses DefaultArtifactCopyTimeout. It is deliberately separate from
 	// PersistCallTimeout, which bounds the lightweight metadata call to the
@@ -473,6 +483,7 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 		clock:                   clock,
 		limiter:                 cfg.Limiter,
 		storage:                 cfg.ArtifactStorage,
+		files:                   newFileStore(cfg.ArtifactStorage, cfg.TenantStorage, clock, logger, 0),
 		allowedUploadExtensions: normalizeAllowedExtensions(cfg.AllowedUploadExtensions),
 		artifactRecovery:        cfg.ArtifactRecoveryClient,
 		imagesWorkflowID:        cfg.ImagesWorkflowID,
@@ -509,7 +520,7 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 	// 循环。
 	var persister *jobPersister
 	if cfg.JobPersistClient != nil {
-		persister = newJobPersister(h.jobs, cfg.JobPersistClient, sched, cfg.ArtifactStorage, clock, logger, jobPersistConfig{
+		persister = newJobPersister(h.jobs, cfg.JobPersistClient, sched, h.files, clock, logger, jobPersistConfig{
 			Interval:            cfg.PersistInterval,
 			BatchSize:           cfg.PersistBatchSize,
 			Concurrency:         cfg.PersistConcurrency,
@@ -700,9 +711,15 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 		studioSweep = newStudioCleaner(cfg.ArtifactStorage, clock, logger, 0, cfg.StudioArtifactRetention)
 		go studioSweep.run()
 	}
+	var tenantSweep *tenantStorageCleaner
+	if cfg.TenantStorage != nil {
+		tenantSweep = newTenantStorageCleaner(cfg.TenantStorage, clock, logger, 0)
+		go tenantSweep.run()
+	}
 	return &Server{
 		Handler:           withWriteDeadline(writeStallTimeout, front),
 		studioCleaner:     studioSweep,
+		tenantCleaner:     tenantSweep,
 		handlers:          h,
 		syncer:            syncer,
 		persister:         persister,
@@ -735,6 +752,7 @@ type Server struct {
 	recoverer         *jobRecoverer
 	cleaner           *artifactCleaner
 	studioCleaner     *studioCleaner
+	tenantCleaner     *tenantStorageCleaner
 	requestLogPusher  *requestLogPusher
 	usageLedgerPusher *usageLedgerPusher
 	usageOutbox       *usageLedgerOutbox
@@ -796,6 +814,9 @@ func (s *Server) Close() {
 	}
 	if s.studioCleaner != nil {
 		s.studioCleaner.Stop()
+	}
+	if s.tenantCleaner != nil {
+		s.tenantCleaner.Stop()
 	}
 	if s.requestLogPusher != nil {
 		s.requestLogPusher.Stop()
@@ -887,6 +908,11 @@ type handlers struct {
 	// storage 在未配置 Config.ArtifactStorage 时为 nil，此时 downloadArtifact
 	// 照旧从节点实时拉取。写入侧见 jobpersist.go 的 persistArtifacts。
 	storage objectstore.Backend
+	// files resolves where a tenant's files are written and read: its own
+	// storage (Config.TenantStorage) or storage above (tenantstorage.go).
+	// files 决定租户文件写到哪里、从哪里读：其自有存储（Config.TenantStorage）或上面的
+	// storage（tenantstorage.go）。
+	files *fileStore
 	// artifactRecovery is nil when no Config.ArtifactRecoveryClient is
 	// configured, in which case listArtifacts and downloadArtifact answer a
 	// local miss exactly as they always have — see artifactrecovery.go.

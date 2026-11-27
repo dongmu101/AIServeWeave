@@ -122,6 +122,12 @@ const ROUTES: readonly UpstreamRoute[] = [
   { method: "GET", segments: [literal("admin"), literal("v1"), literal("nodes"), param(), literal("providers")], query: [] },
   { method: "PUT", segments: [literal("admin"), literal("v1"), literal("nodes"), param(), literal("providers"), param()], query: [] },
   { method: "DELETE", segments: [literal("admin"), literal("v1"), literal("nodes"), param(), literal("providers"), param()], query: [] },
+  // The tenant's own object storage (owner/admin; the control plane decides).
+  // PUT probes the storage first and is never retried.
+  // 租户自有对象存储（owner/admin，由控制面裁决）。PUT 会先探测存储，从不重试。
+  { method: "GET", segments: [literal("admin"), literal("v1"), literal("storage")], query: [] },
+  { method: "PUT", segments: [literal("admin"), literal("v1"), literal("storage")], query: [] },
+  { method: "DELETE", segments: [literal("admin"), literal("v1"), literal("storage")], query: [] },
   {
     method: "GET",
     segments: [

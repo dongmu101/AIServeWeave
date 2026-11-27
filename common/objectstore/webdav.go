@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"path"
 
 	"github.com/studio-b12/gowebdav"
@@ -26,6 +27,11 @@ type WebDAVConfig struct {
 	Username string
 	Password string
 	Dir      string
+	// HTTPClient, when set, supplies the transport every request uses, e.g.
+	// GuardedHTTPClient for storage a tenant configured.
+	//
+	// HTTPClient 非 nil 时提供所有请求使用的传输层，例如租户自配存储使用的 GuardedHTTPClient。
+	HTTPClient *http.Client
 }
 
 // WebDAV stores objects on a WebDAV server — the protocol most home and
@@ -55,8 +61,12 @@ func NewWebDAV(cfg WebDAVConfig) (*WebDAV, error) {
 	if dir == "/" {
 		dir = ""
 	}
+	client := gowebdav.NewClient(cfg.URL, cfg.Username, cfg.Password)
+	if cfg.HTTPClient != nil && cfg.HTTPClient.Transport != nil {
+		client.SetTransport(cfg.HTTPClient.Transport)
+	}
 	return &WebDAV{
-		client: gowebdav.NewClient(cfg.URL, cfg.Username, cfg.Password),
+		client: client,
 		dir:    dir,
 		redact: func(s string) string { return runtime.Redact(s, cfg.Password) },
 	}, nil
@@ -79,18 +89,18 @@ func (b *WebDAV) Put(ctx context.Context, key string, body io.Reader, size int64
 	full := b.fullPath(key)
 	if dir := path.Dir(full); dir != "/" && dir != "." {
 		if err := b.client.MkdirAll(dir, 0o755); err != nil {
-			return fmt.Errorf("objectstore: webdav mkdir %q: %s", dir, b.redact(err.Error()))
+			return &opError{class: webdavClass(err), msg: fmt.Sprintf("objectstore: webdav mkdir %q: %s", dir, b.redact(err.Error()))}
 		}
 	}
 	src := newBoundedReader(body, size)
 	if size >= 0 {
 		if err := b.client.WriteStreamWithLength(full, src, size, 0o644); err != nil {
-			return fmt.Errorf("objectstore: webdav put %q: %s", key, b.redact(err.Error()))
+			return &opError{class: webdavClass(err), msg: fmt.Sprintf("objectstore: webdav put %q: %s", key, b.redact(err.Error()))}
 		}
 		return nil
 	}
 	if err := b.client.WriteStream(full, src, 0o644); err != nil {
-		return fmt.Errorf("objectstore: webdav put %q: %s", key, b.redact(err.Error()))
+		return &opError{class: webdavClass(err), msg: fmt.Sprintf("objectstore: webdav put %q: %s", key, b.redact(err.Error()))}
 	}
 	return nil
 }
@@ -113,14 +123,14 @@ func (b *WebDAV) Open(ctx context.Context, key string) (io.ReadCloser, ObjectInf
 		if gowebdav.IsErrNotFound(err) {
 			return nil, ObjectInfo{}, ErrNotFound
 		}
-		return nil, ObjectInfo{}, fmt.Errorf("objectstore: webdav stat %q: %s", key, b.redact(err.Error()))
+		return nil, ObjectInfo{}, &opError{class: webdavClass(err), msg: fmt.Sprintf("objectstore: webdav stat %q: %s", key, b.redact(err.Error()))}
 	}
 	body, err := b.client.ReadStream(full)
 	if err != nil {
 		if gowebdav.IsErrNotFound(err) {
 			return nil, ObjectInfo{}, ErrNotFound
 		}
-		return nil, ObjectInfo{}, fmt.Errorf("objectstore: webdav read %q: %s", key, b.redact(err.Error()))
+		return nil, ObjectInfo{}, &opError{class: webdavClass(err), msg: fmt.Sprintf("objectstore: webdav read %q: %s", key, b.redact(err.Error()))}
 	}
 	return body, ObjectInfo{Size: info.Size()}, nil
 }
@@ -137,7 +147,7 @@ func (b *WebDAV) Delete(ctx context.Context, key string) error {
 		return err
 	}
 	if err := b.client.Remove(b.fullPath(key)); err != nil {
-		return fmt.Errorf("objectstore: webdav delete %q: %s", key, b.redact(err.Error()))
+		return &opError{class: webdavClass(err), msg: fmt.Sprintf("objectstore: webdav delete %q: %s", key, b.redact(err.Error()))}
 	}
 	return nil
 }
@@ -163,7 +173,7 @@ func (b *WebDAV) List(ctx context.Context, prefix string, fn func(ObjectEntry) e
 		if gowebdav.IsErrNotFound(err) {
 			return nil
 		}
-		return fmt.Errorf("objectstore: webdav list %q: %s", prefix, b.redact(err.Error()))
+		return &opError{class: webdavClass(err), msg: fmt.Sprintf("objectstore: webdav list %q: %s", prefix, b.redact(err.Error()))}
 	}
 	if !info.IsDir() {
 		return nil
@@ -180,7 +190,7 @@ func (b *WebDAV) walk(ctx context.Context, dir string, fn func(ObjectEntry) erro
 		if gowebdav.IsErrNotFound(err) {
 			return nil
 		}
-		return fmt.Errorf("objectstore: webdav list %q: %s", dir, b.redact(err.Error()))
+		return &opError{class: webdavClass(err), msg: fmt.Sprintf("objectstore: webdav list %q: %s", dir, b.redact(err.Error()))}
 	}
 	for _, e := range entries {
 		key := dir + "/" + e.Name()

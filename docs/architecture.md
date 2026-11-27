@@ -378,7 +378,7 @@ ComfyUI 的 `prompt_id` 是后端任务 ID，不能直接作为公开 ID。AISer
 P04 的核心链路已实现，文件流不直接存入关系数据库：
 
 - **输入上传**：客户端在提交工作流的同一次 `multipart/form-data` HTTP 请求里携带文件（`common/workflowtemplate` 的 `InputFile` 输入类型），Gateway 选定一个候选节点后经隧道新增的 `OPERATION_INPUT_UPLOAD` 把字节流式推给它，节点把文件写进本地 ComfyUI 的输入目录，返回的引用被织入提交的图；这次上传与提交固定在同一个候选节点、不做跨节点重试，细节见 Gateway README 数据面约束一节的第十三条。
-- **产物持久化**：生成完成后，Gateway 从 ComfyUI 流式拉取产物并写入可插拔的对象存储（`local`/`s3`-compatible/`webdav`，`service/aiServeWeaveGateway/objectstore`），下载接口优先读已持久化的副本、任何失败回退到经隧道向节点的实时代理；关系数据库保存文件元数据、哈希、大小、租户与存储位置，细节见同一节的第十二条。
+- **产物持久化**：生成完成后，Gateway 从 ComfyUI 流式拉取产物并写入可插拔的对象存储（`local`/`s3`-compatible/`webdav`，`common/objectstore`），下载接口优先读已持久化的副本、任何失败回退到经隧道向节点的实时代理；关系数据库保存文件元数据、哈希、大小、租户与存储位置，细节见同一节的第十二条。
 - **尚未交付**：预览图的单独处理、保留期与清理批次、下载接口的短期签名 URL 形态（当前是经鉴权的流式代理，未提供签名 URL）。
 
 ### ComfyUI 调度

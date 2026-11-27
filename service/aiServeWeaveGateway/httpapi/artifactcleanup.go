@@ -5,8 +5,8 @@ import (
 	"log/slog"
 	"time"
 
+	"AIServeWeave/common/objectstore"
 	"AIServeWeave/common/runtime"
-	"AIServeWeave/service/aiServeWeaveGateway/objectstore"
 )
 
 // Defaults for the background artifact cleanup sweeper (STATUS.md's P04).

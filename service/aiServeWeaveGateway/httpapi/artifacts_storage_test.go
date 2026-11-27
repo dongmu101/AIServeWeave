@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"AIServeWeave/common/objectstore"
 	"AIServeWeave/common/runtime"
-	"AIServeWeave/service/aiServeWeaveGateway/objectstore"
 )
 
 // TestDownloadArtifactPrefersStorageWhenPersisted seeds a jobStore artifact
@@ -40,7 +40,7 @@ func TestDownloadArtifactPrefersStorageWhenPersisted(t *testing.T) {
 	ids := jobs.recordArtifacts("job_1", []runtime.ArtifactRef{{RunID: "run-1", Filename: "out.png", Type: "output"}})
 	jobs.artifactStored(ids[0], "k", "image/png", int64(len(body)))
 
-	h := &handlers{jobs: jobs, storage: storage, logger: discardLogger()}
+	h := &handlers{jobs: jobs, storage: storage, files: newFileStore(storage, nil, runtime.NewSystemClock(), discardLogger(), 0), logger: discardLogger()}
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/artifacts/"+ids[0], nil)
 	req.SetPathValue("artifact_id", ids[0])

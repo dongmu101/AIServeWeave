@@ -237,6 +237,7 @@ type Service struct {
 	accountSales         bool
 	tenantNodes          *TenantNodeConfig
 	nodeProviders        *NodeProviderConfig
+	tenantStorage        *TenantStorageConfig
 	agentInstall         *AgentInstallConfig
 	priceCatalog         *PriceCatalogConfig
 	pricingCache         *usagePricingCache

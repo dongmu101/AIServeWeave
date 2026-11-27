@@ -19,6 +19,8 @@ before upgrading; do not assume a `0.x` bump is safe by default.
 
 ### Added
 
+- 租户自有对象存储：租户 owner/admin 可在 Console 为本租户配置 S3 或 WebDAV，job 产物与 Studio 文件随后写进租户的存储，保留期由租户设置。控制面新增 `GET`/`PUT`/`DELETE /admin/v1/storage`、表 `tenant_storage`（base 迁移 `0021`）与配置 `TenantStorage`（`MasterKey`/`MasterKeyFile`/`AllowPrivateEndpoints`，环境变量 `AISW_TENANT_STORAGE_MASTER_KEY`，默认关闭）；`objectstore` 包移到 `common/objectstore`。升级顺序：先控制面，再 Gateway 与 Console。见 [STATUS.md](STATUS.md#租户自有对象存储2026-11-27)。
+
 - Studio 编排新增「图像生成」（`image_generation`）与「ComfyUI 模板」（`comfyui_template`）节点，运行产出的图片与文件可在运行视图中查看与下载。Gateway 新增 `GET /studio/v1/image-models`、`GET /studio/v1/workflow-templates`、`GET /studio/v1/runs/{id}/artifacts/{artifact_id}`。产物字段只能作为输出 ref 的全部内容被引用（新问题码 `artifact_reference`）。推理生图节点需要 Gateway 配置 `-artifact-storage`。升级顺序：先控制面，再 Gateway 与 Studio。见 [STATUS.md](STATUS.md#studio-编排第二期节点2026-11-27)。
 
 - 跨地域隧道优化（Gateway + Agent，升级顺序不限，任一侧为旧版时对应项不生效）：

@@ -57,3 +57,50 @@ test("account logout preserves its failure handling and never retries automatica
   expect(writes, "failed logout must issue exactly one request").toBe(1);
   await expect(page).toHaveURL(/\/console\/keys$/);
 });
+
+test("desktop top navigation never scrolls vertically or clips labels", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/console");
+  const nav = page.getByRole("navigation", { name: "控制台导航", exact: true });
+  const link = nav.getByRole("link", { name: "概览", exact: true });
+  await expect(link).toBeVisible();
+  const scrollBefore = await nav.evaluate((el) => {
+    const row = el.firstElementChild as HTMLElement;
+    return {
+      clientHeight: row.clientHeight,
+      scrollHeight: row.scrollHeight,
+      clientWidth: row.clientWidth,
+      scrollWidth: row.scrollWidth,
+      scrollTop: row.scrollTop,
+      scrollLeft: row.scrollLeft,
+      overflowY: getComputedStyle(row).overflowY,
+    };
+  });
+  expect(scrollBefore.scrollHeight).toBeLessThanOrEqual(scrollBefore.clientHeight);
+  expect(scrollBefore.scrollWidth).toBeLessThanOrEqual(scrollBefore.clientWidth);
+  expect(scrollBefore.overflowY).toBe("visible");
+
+  await link.hover();
+  await page.mouse.wheel(0, 120);
+  const afterWheel = await nav.evaluate((el) => {
+    const row = el.firstElementChild as HTMLElement;
+    return { scrollTop: row.scrollTop, scrollLeft: row.scrollLeft };
+  });
+  expect(afterWheel).toEqual({ scrollTop: 0, scrollLeft: 0 });
+
+  const headerBox = await page.getByRole("banner").boundingBox();
+  const linkBox = await link.boundingBox();
+  expect(headerBox?.height).toBe(56);
+  expect(linkBox!.y).toBeGreaterThanOrEqual(headerBox!.y);
+  expect(linkBox!.y + linkBox!.height).toBeLessThanOrEqual(headerBox!.y + headerBox!.height);
+});
+
+test("desktop top navigation collapses instead of scrolling horizontally when labels overflow", async ({ page }) => {
+  await page.context().addCookies([{ name: "aisw_console_locale", value: "de-DE", url: "http://127.0.0.1:3100" }]);
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/console");
+  const banner = page.getByRole("banner");
+  const compact = banner.getByRole("button", { name: "Konsolennavigation öffnen", exact: true });
+  await expect(compact).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(1281);
+});

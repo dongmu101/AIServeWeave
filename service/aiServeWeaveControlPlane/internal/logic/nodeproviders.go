@@ -117,23 +117,38 @@ func providerAAD(nodeID, runtimeID string) []byte {
 }
 
 func (p *ProviderSecrets) seal(nodeID, runtimeID, key string) (string, error) {
+	return p.sealWith(providerAAD(nodeID, runtimeID), key)
+}
+
+func (p *ProviderSecrets) open(nodeID, runtimeID, ciphertext string) (string, error) {
+	return p.openWith(providerAAD(nodeID, runtimeID), ciphertext)
+}
+
+// sealWith encrypts plain with aad as associated data, returning base64 of
+// the nonce followed by the ciphertext.
+//
+// sealWith 以 aad 为附加数据加密 plain，返回 nonce 加密文的 base64。
+func (p *ProviderSecrets) sealWith(aad []byte, plain string) (string, error) {
 	nonce := make([]byte, p.aead.NonceSize())
 	if _, err := rand.Read(nonce); err != nil {
 		return "", err
 	}
-	out := p.aead.Seal(nonce, nonce, []byte(key), providerAAD(nodeID, runtimeID))
+	out := p.aead.Seal(nonce, nonce, []byte(plain), aad)
 	return base64.StdEncoding.EncodeToString(out), nil
 }
 
-func (p *ProviderSecrets) open(nodeID, runtimeID, ciphertext string) (string, error) {
+// openWith reverses sealWith. The error never contains plaintext.
+//
+// openWith 是 sealWith 的逆操作。错误从不包含明文。
+func (p *ProviderSecrets) openWith(aad []byte, ciphertext string) (string, error) {
 	raw, err := base64.StdEncoding.DecodeString(ciphertext)
 	if err != nil || len(raw) < p.aead.NonceSize() {
-		return "", errors.New("provider key ciphertext is malformed")
+		return "", errors.New("ciphertext is malformed")
 	}
 	n := p.aead.NonceSize()
-	plain, err := p.aead.Open(nil, raw[:n], raw[n:], providerAAD(nodeID, runtimeID))
+	plain, err := p.aead.Open(nil, raw[:n], raw[n:], aad)
 	if err != nil {
-		return "", errors.New("provider key does not open with the master key")
+		return "", errors.New("ciphertext does not open with the master key")
 	}
 	return string(plain), nil
 }

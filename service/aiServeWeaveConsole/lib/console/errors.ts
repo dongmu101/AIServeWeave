@@ -84,12 +84,25 @@ export class ApiError extends Error {
    * status 是 HTTP 状态码；在响应尚不存在时失败（连接中断、超时、取消）则为 0。
    */
   readonly status: number;
+  /**
+   * code and reason are the machine-readable parts of a 400 answer, set only
+   * where the Console server forwards them after checking them against a
+   * fixed vocabulary (the tenant storage endpoint). They are empty otherwise,
+   * and upstream error text is never carried.
+   *
+   * code 与 reason 是 400 响应里机器可读的部分，只在 Console 服务端对照固定词汇校验后才会
+   * 转交（租户对象存储端点）。其余情况为空，上游的错误文本从不携带。
+   */
+  readonly code: string;
+  readonly reason: string;
 
-  constructor(kind: ApiErrorKind, status = 0) {
+  constructor(kind: ApiErrorKind, status = 0, detail: { code?: string; reason?: string } = {}) {
     super(coreTranslator()(MESSAGE_KEYS[kind]));
     this.name = "ApiError";
     this.kind = kind;
     this.status = status;
+    this.code = detail.code ?? "";
+    this.reason = detail.reason ?? "";
   }
 }
 

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"AIServeWeave/service/aiServeWeaveGateway/objectstore"
+	"AIServeWeave/common/objectstore"
 )
 
 func newLocalBackend(t *testing.T) objectstore.Backend {

@@ -11,8 +11,8 @@ import (
 	"strconv"
 	"strings"
 
+	"AIServeWeave/common/objectstore"
 	"AIServeWeave/common/runtime"
-	"AIServeWeave/service/aiServeWeaveGateway/objectstore"
 	"AIServeWeave/service/aiServeWeaveGateway/scheduler"
 )
 
@@ -182,8 +182,8 @@ func (h *handlers) serveJobArtifact(w http.ResponseWriter, r *http.Request, tena
 		return
 	}
 
-	if rec.StorageKey != "" && h.storage != nil {
-		body, info, err := h.storage.Open(r.Context(), rec.StorageKey)
+	if rec.StorageKey != "" && h.files.hasAny(tenantID) {
+		body, info, err := h.files.open(r.Context(), tenantID, rec.StorageKey)
 		if err == nil {
 			defer body.Close()
 			contentType := rec.ContentType

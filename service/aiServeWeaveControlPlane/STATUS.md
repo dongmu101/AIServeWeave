@@ -1,3 +1,29 @@
+## 租户自有对象存储（2026-11-27）
+
+租户的 owner 或 admin 可以为本租户保存一套 S3 或 WebDAV 存储，Gateway 随后把该租户的 job 产物与 Studio 文件写进去。设计见 `.scratch/tenant-object-storage/spec.md`。实现在 `internal/logic/tenantstorage.go`、`internal/store/*/tenantstorage.go`、`internal/handler/tenantstorage.go`。
+
+- **配置** `TenantStorage`（默认关闭）：
+  - `MasterKey`（通常写成 `"${AISW_TENANT_STORAGE_MASTER_KEY}"`）或 `MasterKeyFile`，32 字节，hex 或 base64，两者至多设一个。设了才开启。
+  - `AllowPrivateEndpoints`：放行本机、私网、链路本地（含云元数据）地址与明文 http，必须同时设置主密钥。
+  - 密钥格式不对时控制面拒绝启动。
+- **数据**：新表 `tenant_storage`（base 命名空间 `0021`，MySQL 与 PostgreSQL，`CREATE TABLE IF NOT EXISTS`，表与列带中文注释），`sql/init.sql` 已同步。凭据只以 AES-256-GCM 密文保存，附加数据绑定租户 id，换到别的租户行上无法解密。
+- **租户接口**（会话，只有 owner 与 admin，其他角色 403；`Cache-Control: no-store`）：
+  - `GET /admin/v1/storage`：`{enabled, allow_private_endpoints, storage}`，从不含密钥，S3 只给 access key 末四位。
+  - `PUT /admin/v1/storage`：校验后先做连通性检查（写 16 字节、读回比对、删除，限时 20 秒），通过才保存。拒绝时 400 `{error, code, reason?}`，`code` 为 `invalid_storage`、`credentials_required`、`endpoint_not_allowed` 或 `storage_unreachable`（`reason`：network、auth、not_found、permission、endpoint_not_allowed、other），不回显上游原文。检查失败时已有配置不变。
+  - `DELETE /admin/v1/storage`：204；没有配置时 404。未开启时写接口都回 404。
+  - 密钥字段省略或为 null 表示保留：S3 在 kind、endpoint、region、bucket 都不变时两个 Key 可各自保留；WebDAV 在 url 与用户名都不变时保留密码。位置变化或主密钥更换导致已存密钥打不开时必须重填。
+  - 审计动作 `tenant.storage.update`（detail 含 kind、主机名、bucket、保留天数，不含密钥）与 `tenant.storage.delete`。
+- **内部接口**（`InternalToken`）：
+  - `GET /internal/v1/tenants/:tenant_id/storage`：带明文凭据的配置；没有配置或未开启时 `{"configured": false, …}`；密钥打不开时 503。
+  - `GET /internal/v1/tenant-storage/retained?after=&limit=`：保留天数为正的租户，按 tenant_id 升序分页，每页至多 500；打不开的跳过并记日志。
+- **并发**：保存是一条 upsert，在数据库里递增 version，同一租户的并发保存串行、各得一个 version，最后一次生效。
+
+升级须知：先迁移并升级控制面，再升级 Gateway（旧控制面对 Gateway 的新内部请求回 404，Gateway 视为未配置，因此顺序反过来也不会出错，只是功能不生效）。只新增表；旧版控制面会以「unknown database migration」拒绝启动，回退须恢复迁移前的备份。要开启，在 `deploy/.env` 填 `AISW_TENANT_STORAGE_MASTER_KEY`，并把 `deploy/controlplane.example.yaml` 的 `TenantStorage` 块加进本机 `controlplane.yaml`。主密钥丢失或更换后，租户需要重新填写凭据。
+
+验证：控制面全部默认测试通过。临时用例（已删除）覆盖：角色与未开启；36 种字段校验（长度临界、控制字符、前缀穿越、内网与 http、保留期 0/36500/36501）；15 种保留与重填密钥的组合；主密钥更换后的读取 503、只能整套重填、密文换租户无法解密；7 种连通性失败的 reason 且不泄露原文；审计内容；分页与跳过坏密钥；handler 的状态码、400 只带 code/reason、内部令牌、`limit` 校验；配置校验与示例 yaml 解析；并发保存在 `-race` 下稳定。gormstore 在临时 PostgreSQL 18 与 MySQL 9.7 容器上跑了租户存储 live 用例（字段上限、version 与 created_at、16 路并发保存、8 路并发首次保存、分页），MySQL 上全部既有 live 用例通过。这一过程发现并修正了三处问题：`retention_days` 列类型与模型不符、GORM 保存时用真实时间覆盖 `updated_at`、MySQL 上并发首次保存因间隙锁死锁（改为 upsert）。
+
+已知问题（与本次改动无关，未修）：在干净的 PostgreSQL（16/17/18）上，schema 检查误报 `tenant_nodes.idx_tenant_nodes_tenant_created is missing or incompatible`，原因是 GORM postgres 驱动的 `GetIndexes` 查询没有按索引列顺序排序。`Migrate` 因此返回错误，已确认既有的 `TestLiveRoutes` 与 `TestLiveSchemaComments` 在 PostgreSQL 上失败（HEAD 上同样复现）；索引本身在数据库里是正确的。`readIndexes` 对所有 PostgreSQL 表改用它已有的按 `indkey` 排序的查询即可修复。
+
 ## Studio 编排存储（2026-11-25）
 
 新增 `studio_flows`、`studio_flow_versions`、`studio_flow_runs`、`studio_flow_run_steps`（迁移命名空间 `studio`，`0004`–`0007`，MySQL 与 PostgreSQL，均为 `CREATE TABLE IF NOT EXISTS`，表与列带注释），`sql/init.sql` 已同步。实现在 `internal/logic/studioflows.go`、`internal/store/*/studioflows.go`、`internal/handler/studioflows.go`。Gateway 侧还没有调用方。

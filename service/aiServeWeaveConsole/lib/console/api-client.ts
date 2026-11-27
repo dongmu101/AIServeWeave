@@ -85,6 +85,12 @@ export interface RequestSpec<T> {
   body?: unknown;
   parse: (value: unknown) => T;
   signal?: AbortSignal;
+  /** timeoutMs overrides REQUEST_TIMEOUT_MS for a call the control plane
+   * legitimately takes longer to answer, such as a save that probes storage.
+   *
+   * timeoutMs 覆盖 REQUEST_TIMEOUT_MS，用于控制面确实需要更久才能回答的调用，例如要探测
+   * 存储的保存操作。 */
+  timeoutMs?: number;
 }
 
 /**
@@ -277,14 +283,19 @@ async function attemptRequest<T>(
     doFetch,
     url,
     { method: spec.method, body: spec.body },
-    spec.signal
+    spec.signal,
+    spec.timeoutMs
   );
 
   if (response.status === 204) {
     return spec.parse(null);
   }
   if (!response.ok) {
-    throw new ApiError(kindForStatus(response.status), response.status);
+    throw new ApiError(
+      kindForStatus(response.status),
+      response.status,
+      response.status === 400 ? await readErrorDetail(response) : {}
+    );
   }
   return spec.parse(await readJson(response));
 }
@@ -296,9 +307,10 @@ async function send(
   doFetch: typeof fetch,
   url: string,
   init: { method: string; body?: unknown },
-  signal: AbortSignal | undefined
+  signal: AbortSignal | undefined,
+  timeoutMs: number = REQUEST_TIMEOUT_MS
 ): Promise<Response> {
-  const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+  const timeout = AbortSignal.timeout(timeoutMs);
   const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
   try {
     return await doFetch(url, {
@@ -350,6 +362,26 @@ async function readJson(response: Response): Promise<unknown> {
     return await response.json();
   } catch {
     throw new ApiError("contract", response.status);
+  }
+}
+
+/**
+ * readErrorDetail picks the short machine-readable `code` and `reason` out of
+ * a failed answer, when the Console server forwarded them. Anything that does
+ * not look like a short identifier is dropped, so no free text gets through.
+ *
+ * readErrorDetail 在 Console 服务端转交了 `code` 与 `reason` 时，从失败的响应里取出这两个
+ * 简短的机器可读字段。看起来不像短标识符的内容一律丢弃，因此不会有自由文本漏过去。
+ */
+async function readErrorDetail(response: Response): Promise<{ code?: string; reason?: string }> {
+  try {
+    const body: unknown = await response.json();
+    if (!body || typeof body !== "object") return {};
+    const { code, reason } = body as Record<string, unknown>;
+    const ident = (value: unknown) => (typeof value === "string" && /^[a-z_]{1,48}$/.test(value) ? value : undefined);
+    return { code: ident(code), reason: ident(reason) };
+  } catch {
+    return {};
   }
 }
 
