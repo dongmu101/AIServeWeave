@@ -19,6 +19,8 @@ before upgrading; do not assume a `0.x` bump is safe by default.
 
 ### Added
 
+- 文件登记表：Gateway 写进对象存储的每个文件都在控制面新表 `files`（base 迁移 `0022`，按月分区）登记，记下存储、key、所属业务对象（`biz_type` + `biz_id`）、大小与 sha256；`job_artifacts` 新增 `file_id`（jobs 迁移 `0008`）。新增内部接口 `/internal/v1/files`。升级顺序：先控制面，再 Gateway。见 [STATUS.md](STATUS.md#文件登记表-files2026-11-27)。
+
 - 租户自有对象存储：租户 owner/admin 可在 Console 为本租户配置 S3 或 WebDAV，job 产物与 Studio 文件随后写进租户的存储，保留期由租户设置。控制面新增 `GET`/`PUT`/`DELETE /admin/v1/storage`、表 `tenant_storage`（base 迁移 `0021`）与配置 `TenantStorage`（`MasterKey`/`MasterKeyFile`/`AllowPrivateEndpoints`，环境变量 `AISW_TENANT_STORAGE_MASTER_KEY`，默认关闭）；`objectstore` 包移到 `common/objectstore`。部署存储（Gateway `-artifact-storage`）可在 `deploy/.env` 用 `AISW_ARTIFACT_STORAGE*` 开启，凭据可从环境变量读取。升级顺序：先控制面，再 Gateway 与 Console。见 [STATUS.md](STATUS.md#租户自有对象存储2026-11-27)。
 
 - Studio 编排新增「图像生成」（`image_generation`）与「ComfyUI 模板」（`comfyui_template`）节点，运行产出的图片与文件可在运行视图中查看与下载。Gateway 新增 `GET /studio/v1/image-models`、`GET /studio/v1/workflow-templates`、`GET /studio/v1/runs/{id}/artifacts/{artifact_id}`。产物字段只能作为输出 ref 的全部内容被引用（新问题码 `artifact_reference`）。推理生图节点需要 Gateway 配置 `-artifact-storage`。升级顺序：先控制面，再 Gateway 与 Studio。见 [STATUS.md](STATUS.md#studio-编排第二期节点2026-11-27)。
@@ -78,6 +80,8 @@ before upgrading; do not assume a `0.x` bump is safe by default.
 - P06 Key 吊销通知：ControlPlane 以 Redis generation 长轮询唤醒 Gateway；健康链路 1 秒内清缓存，通知异常时 Gateway 立即停用正向缓存并逐请求校验。
 
 ### Changed
+
+- Gateway 的 Studio 与租户存储保留期清理改为按控制面 `files` 表进行，不再按前缀列举对象存储；保留期规则不变。`file_id` 非空的 job 产物随文件一起清理，原有 artifactcleanup 只处理 `file_id` 为空的产物。登记不可达时 Gateway 不写入文件（jobPersister 下轮重试，Studio 上传回 503）。
 
 - CLI 订阅额度调度行为变化：
   - Gateway 的「紧张」档改为同时看距重置的时间：已用超过 `-quota-low-percent`，但剩余额度足以按均匀速度撑到重置的窗口不再降级（例如五小时窗口 92%、3 分钟后重置）。多个紧张账户之间，有空闲槽的优先，其次会话的钉选账户，再次已用比例低的优先（所有账户都紧张时，对话不会随各账户已用比例交叉而来回切换）。

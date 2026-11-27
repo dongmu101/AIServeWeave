@@ -207,22 +207,22 @@ func (d studioFlowDispatcher) GenerateImage(ctx context.Context, call flow.Image
 		return flow.MediaReply{}, &flow.Error{Code: codeInvalidInput}
 	}
 	identity, _ := IdentityFrom(ctx)
-	backend, err := d.h.files.writer(ctx, identity.TenantID)
-	if err != nil || backend == nil {
+	target, err := d.h.files.writer(ctx, identity.TenantID)
+	if err != nil || target.backend == nil {
 		return flow.MediaReply{}, &flow.Error{Code: codeArtifactStorage}
 	}
 	var reply flow.MediaReply
-	if qerr := d.h.withQuota(ctx, func(ctx context.Context) { reply, err = d.inferenceImage(ctx, call, backend) }); qerr != nil {
+	if qerr := d.h.withQuota(ctx, func(ctx context.Context) { reply, err = d.inferenceImage(ctx, call, target) }); qerr != nil {
 		return flow.MediaReply{}, &flow.Error{Code: codeRateLimited}
 	}
 	return reply, err
 }
 
 // inferenceImage generates an image on an inference image model and writes
-// it to backend, streaming: the image is never held whole here.
+// it to target, streaming: the image is never held whole here.
 //
-// inferenceImage 在推理生图模型上生成图片并流式写入 backend：图片从不在这里被完整持有。
-func (d studioFlowDispatcher) inferenceImage(ctx context.Context, call flow.ImageCall, backend objectstore.Backend) (flow.MediaReply, error) {
+// inferenceImage 在推理生图模型上生成图片并流式写入 target：图片从不在这里被完整持有。
+func (d studioFlowDispatcher) inferenceImage(ctx context.Context, call flow.ImageCall, target fileTarget) (flow.MediaReply, error) {
 	identity, _ := IdentityFrom(ctx)
 	meta, stream, _, err := d.h.sched.GenerateImage(ctx, runtime.ImageRequest{
 		Model: call.Model, Prompt: call.Prompt, TenantID: identity.TenantID, KeyID: identity.KeyID,
@@ -240,15 +240,23 @@ func (d studioFlowDispatcher) inferenceImage(ctx context.Context, call flow.Imag
 		return flow.MediaReply{}, &flow.Error{Code: flow.CodeUpstream}
 	}
 	body := &imageStreamReader{stream: stream, left: meta.Size}
-	if err := backend.Put(ctx, key, body, meta.Size); err != nil || body.left != 0 {
-		_ = backend.Delete(context.WithoutCancel(ctx), key)
+	filename := "image" + imageExtension(meta.ContentType)
+	_, err = d.h.files.put(ctx, target, FileRecord{
+		ID: id, TenantID: identity.TenantID, ObjectKey: key, BizType: fileBizStudioRun, BizID: d.session,
+		Kind: fileKindImage, Filename: filename, ContentType: meta.ContentType,
+	}, body, meta.Size)
+	if err == nil && body.left != 0 {
+		d.h.files.remove(ctx, target, id, key)
+		err = errors.New("httpapi: the image stream ended before its announced size")
+	}
+	if err != nil {
 		if ctx.Err() != nil {
 			return flow.MediaReply{}, ctx.Err()
 		}
 		d.h.logger.Warn("storing a studio image failed", slog.String("run_id", d.session), slog.Any("error", err))
 		return flow.MediaReply{}, &flow.Error{Code: codeArtifactStorage}
 	}
-	return flow.MediaReply{Artifacts: []flow.Artifact{{ID: id, Filename: "image" + imageExtension(meta.ContentType), Kind: flow.ArtifactImage}}}, nil
+	return flow.MediaReply{Artifacts: []flow.Artifact{{ID: id, Filename: filename, Kind: flow.ArtifactImage}}}, nil
 }
 
 // imageExtension is the image file extension for contentType, ".png" when

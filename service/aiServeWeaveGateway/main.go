@@ -230,13 +230,13 @@ func run() error {
 	artifactCopyTimeout := flag.Duration("artifact-copy-timeout", 0,
 		"bound on one artifact's node-to-storage byte copy; zero uses httpapi.DefaultArtifactCopyTimeout, sized for moving real file bytes rather than a JSON round trip")
 	artifactCleanupInterval := flag.Duration("artifact-cleanup-interval", 0,
-		"how often the artifact retention sweep runs (STATUS.md's P04); zero uses httpapi.DefaultArtifactCleanupInterval. Only runs when a control plane is configured (-control-plane-addr), the same as job persistence")
+		"how often the artifact and file retention sweeps run (STATUS.md's P04); zero uses httpapi.DefaultArtifactCleanupInterval. Only runs when a control plane is configured (-control-plane-addr), the same as job persistence")
 	artifactRetention := flag.Duration("artifact-retention", 0,
 		"how long a persisted \"output\" artifact is kept before the cleanup sweep reaps it; zero uses httpapi.DefaultArtifactRetention")
 	artifactPreviewRetention := flag.Duration("artifact-preview-retention", 0,
 		"how long a persisted \"temp\" (preview/intermediate) artifact is kept, deliberately much shorter than -artifact-retention; zero uses httpapi.DefaultArtifactPreviewRetention")
 	studioArtifactRetention := flag.Duration("studio-artifact-retention", 0,
-		"how long the objects Studio writes to -artifact-storage itself (flow run inference images and uploaded run inputs) are kept before an hourly sweep deletes them; zero uses httpapi.DefaultStudioArtifactRetention. Keep it well above -studio run deadlines")
+		"how long the objects Studio writes to -artifact-storage itself (flow run inference images and uploaded run inputs) are kept before the file cleanup deletes them; zero uses httpapi.DefaultStudioArtifactRetention. Keep it well above -studio run deadlines")
 	allowedUploadExtensions := flag.String("workflow-upload-allowed-extensions", "",
 		"comma-separated, dot-prefixed file extensions a workflow InputFile upload may use (STATUS.md's P04); empty uses httpapi.DefaultAllowedUploadExtensions, there is no way to disable the check")
 	agentDistDir := flag.String("agent-dist-dir", "",
@@ -577,6 +577,14 @@ func run() error {
 			return err
 		}
 		httpCfg.TenantStorage = tenantStorage
+		// Every file written is recorded in the control plane's files
+		// table, and the file cleanup deletes expired ones by those records.
+		// 写入的每个文件都记录到控制面的 files 表，文件清理按这些记录删除过期文件。
+		files, err := controlplaneclient.NewFilesClient(controlplaneclient.JobsClientConfig{Endpoint: *controlPlaneAddr, Token: token})
+		if err != nil {
+			return err
+		}
+		httpCfg.FileRegistry = files
 	}
 	// Same guard, same reason: requestLogClient is a concrete
 	// *controlplaneclient.RequestLogsClient, and httpCfg.RequestLogClient is

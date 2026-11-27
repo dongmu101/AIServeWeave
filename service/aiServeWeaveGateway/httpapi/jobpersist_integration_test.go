@@ -53,7 +53,7 @@ func (f *fakeJobPersistClient) UpdateJobState(context.Context, string, string, s
 	return true, nil
 }
 
-func (f *fakeJobPersistClient) CreateJobArtifact(_ context.Context, jobID, artifactID, _, _, _, _, sha256, contentType, storageKey string, sizeBytes int64) error {
+func (f *fakeJobPersistClient) CreateJobArtifact(_ context.Context, jobID, artifactID, _, _, _, _, sha256, contentType, storageKey string, sizeBytes int64, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.artifacts = append(f.artifacts, artifactPersistCall{jobID, artifactID, sha256, contentType, storageKey, sizeBytes})

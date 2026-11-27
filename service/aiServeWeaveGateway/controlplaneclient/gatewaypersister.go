@@ -69,7 +69,7 @@ func (g *GatewayPersister) UpdateJobState(ctx context.Context, tenantID, jobID, 
 }
 
 // CreateJobArtifact implements httpapi.JobPersistClient.
-func (g *GatewayPersister) CreateJobArtifact(ctx context.Context, jobID, artifactID, tenantID, filename, subfolder, artifactType, sha256, contentType, storageKey string, sizeBytes int64) error {
+func (g *GatewayPersister) CreateJobArtifact(ctx context.Context, jobID, artifactID, tenantID, filename, subfolder, artifactType, sha256, contentType, storageKey string, sizeBytes int64, fileID string) error {
 	_, err := g.client.CreateJobArtifact(ctx, jobID, CreateJobArtifactRequest{
 		ArtifactID:  artifactID,
 		TenantID:    tenantID,
@@ -80,6 +80,7 @@ func (g *GatewayPersister) CreateJobArtifact(ctx context.Context, jobID, artifac
 		SizeBytes:   sizeBytes,
 		ContentType: contentType,
 		StorageKey:  storageKey,
+		FileID:      fileID,
 	})
 	return err
 }

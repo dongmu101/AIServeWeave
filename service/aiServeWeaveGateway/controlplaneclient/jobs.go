@@ -368,6 +368,10 @@ type CreateJobArtifactRequest struct {
 	SizeBytes   int64
 	ContentType string
 	StorageKey  string
+	// FileID names the files row of the stored bytes; empty is omitted, so
+	// a control plane that predates it is not sent the field.
+	// FileID 指向所存字节的 files 行；为空时省略，因此不会把该字段发给更早的控制面。
+	FileID string
 }
 
 // CreateJobArtifact records one artifact a run produced. Like CreateJob, a
@@ -386,7 +390,9 @@ func (c *JobsClient) CreateJobArtifact(ctx context.Context, jobID string, req Cr
 		SizeBytes   int64  `json:"size_bytes,omitempty"`
 		ContentType string `json:"content_type,omitempty"`
 		StorageKey  string `json:"storage_key,omitempty"`
+		FileID      string `json:"file_id,omitempty"`
 	}
+	wire.FileID = req.FileID
 	wire.ArtifactID, wire.TenantID, wire.Filename, wire.Subfolder, wire.Type =
 		req.ArtifactID, req.TenantID, req.Filename, req.Subfolder, req.Type
 	wire.SHA256, wire.SizeBytes, wire.ContentType, wire.StorageKey =

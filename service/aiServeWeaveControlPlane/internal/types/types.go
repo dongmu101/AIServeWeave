@@ -938,6 +938,55 @@ type CreateJobArtifactRequest struct {
 	SizeBytes   int64  `json:"size_bytes,omitempty"`
 	ContentType string `json:"content_type,omitempty"`
 	StorageKey  string `json:"storage_key,omitempty"`
+	// FileID names the files row of the stored bytes, omitted when there
+	// are none. / FileID 指向所存字节的 files 行；没有字节时省略。
+	FileID string `json:"file_id,omitempty"`
+}
+
+// RegisterFileRequest is the body of PUT /internal/v1/files/:id.
+// RegisterFileRequest 是 PUT /internal/v1/files/:id 的请求体。
+type RegisterFileRequest struct {
+	TenantID    string `json:"tenant_id"`
+	Storage     string `json:"storage"`
+	ObjectKey   string `json:"object_key"`
+	BizType     string `json:"biz_type"`
+	BizID       string `json:"biz_id"`
+	Kind        string `json:"kind"`
+	Filename    string `json:"filename,omitempty"`
+	ContentType string `json:"content_type,omitempty"`
+}
+
+// CompleteFileRequest is the body of POST /internal/v1/files/:id/complete.
+// CompleteFileRequest 是 POST /internal/v1/files/:id/complete 的请求体。
+type CompleteFileRequest struct {
+	SizeBytes   int64  `json:"size_bytes"`
+	SHA256      string `json:"sha256,omitempty"`
+	ContentType string `json:"content_type,omitempty"`
+}
+
+// InternalFile is one files row, for the Gateway only: it carries the object
+// key. / InternalFile 是一行 files，只供 Gateway 使用：其中带有对象 key。
+type InternalFile struct {
+	ID          string    `json:"id"`
+	TenantID    string    `json:"tenant_id"`
+	Storage     string    `json:"storage"`
+	ObjectKey   string    `json:"object_key"`
+	BizType     string    `json:"biz_type"`
+	BizID       string    `json:"biz_id"`
+	Kind        string    `json:"kind"`
+	Filename    string    `json:"filename"`
+	ContentType string    `json:"content_type"`
+	SizeBytes   int64     `json:"size_bytes"`
+	SHA256      string    `json:"sha256"`
+	Status      string    `json:"status"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// ListFilesResponse is one page of GET /internal/v1/files.
+// ListFilesResponse 是 GET /internal/v1/files 的一页。
+type ListFilesResponse struct {
+	Items []InternalFile `json:"items"`
 }
 
 // JobArtifactResponse is one recorded artifact. It is shared by the

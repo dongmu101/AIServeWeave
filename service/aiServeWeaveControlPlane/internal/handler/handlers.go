@@ -2298,6 +2298,7 @@ func createJobArtifact(ctx *svc.ServiceContext) http.HandlerFunc {
 			SizeBytes:   req.SizeBytes,
 			ContentType: req.ContentType,
 			StorageKey:  req.StorageKey,
+			FileID:      req.FileID,
 		})
 		if err != nil {
 			respondErr(w, err)

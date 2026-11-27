@@ -53,10 +53,12 @@ func (u partitionUnit) suffix(t time.Time) string {
 
 // partitionedTable describes one time-partitioned table. This list is the
 // single source the migration expansion, maintenance, retention and the schema
-// check all read, so the five tables can never disagree about their layout.
+// check all read, so the tables can never disagree about their layout. base
+// marks the tables of the base namespace, which a base-only check covers.
 //
 // partitionedTable 描述一张按时间分区的表。迁移展开、分区维护、保留期清理与 schema
-// 检查都只读这一份清单，五张表的布局因此不会在各处出现分歧。
+// 检查都只读这一份清单，各表的布局因此不会在各处出现分歧。base 标记 base 分组中的表，
+// 只检查 base 时覆盖这些表。
 type partitionedTable struct {
 	name   string
 	column string
@@ -64,6 +66,7 @@ type partitionedTable struct {
 	// ahead is how many periods past the current one stay pre-created.
 	// ahead 是当前周期之后始终预建的周期数。
 	ahead int
+	base  bool
 }
 
 const (
@@ -81,7 +84,11 @@ const (
 )
 
 var partitionedTables = []partitionedTable{
-	{name: "audit_logs", column: "created_at", unit: unitMonth, ahead: 2},
+	{name: "audit_logs", column: "created_at", unit: unitMonth, ahead: 2, base: true},
+	// files is never aged out by dropping partitions: a row goes only after
+	// its object is deleted.
+	// files 从不通过删除分区清理：只有对象删除之后行才会删除。
+	{name: "files", column: "created_at", unit: unitMonth, ahead: 2, base: true},
 	{name: "metrics_history_points", column: "bucket_at", unit: unitDay, ahead: 7},
 	{name: "request_logs", column: "created_at", unit: unitDay, ahead: 7},
 	{name: "response_turns", column: "created_at", unit: unitDay, ahead: 7},

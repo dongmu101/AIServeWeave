@@ -2,15 +2,11 @@ package httpapi
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"io"
 	"log/slog"
 	"path"
 	"sync"
 	"time"
 
-	"AIServeWeave/common/objectstore"
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/service/aiServeWeaveGateway/scheduler"
 )
@@ -108,7 +104,7 @@ type JobPersistClient interface {
 	// 两种情况下都用同一种方式调用本方法，因此无论是尚未套用 P04 新列的控制面，
 	// 还是未配置对象存储的 Gateway，得到的都仍是 P04 之前这次调用本就携带的
 	// 那份仅有元数据的记录。
-	CreateJobArtifact(ctx context.Context, jobID, artifactID, tenantID, filename, subfolder, artifactType, sha256, contentType, storageKey string, sizeBytes int64) error
+	CreateJobArtifact(ctx context.Context, jobID, artifactID, tenantID, filename, subfolder, artifactType, sha256, contentType, storageKey string, sizeBytes int64, fileID string) error
 }
 
 // artifactOpener is the one scheduler method the persister needs to pull an
@@ -447,7 +443,7 @@ func (jp *jobPersister) persistArtifacts(id string) {
 
 	failed := false
 	for _, a := range artifacts {
-		sha256Hex, contentType, storageKey := "", "", ""
+		sha256Hex, contentType, storageKey, fileID := "", "", "", ""
 		sizeBytes := int64(0)
 		// The tenant's own storage when it has one, else the deployment's.
 		// Settings that cannot be read fail this round rather than send the
@@ -455,7 +451,7 @@ func (jp *jobPersister) persistArtifacts(id string) {
 		// 租户有自有存储时写入它，否则写入部署存储。读不到设置时本轮失败，而不是把字节送到
 		// 租户没有选择的地方。
 		lookupCtx, lookupCancel := context.WithTimeout(context.Background(), jp.cfg.CallTimeout)
-		backend, err := jp.storage.writer(lookupCtx, tenantID)
+		target, err := jp.storage.writer(lookupCtx, tenantID)
 		lookupCancel()
 		if err != nil {
 			failed = true
@@ -463,8 +459,8 @@ func (jp *jobPersister) persistArtifacts(id string) {
 				slog.String("job_id", id), slog.String("artifact_id", a.ArtifactID), slog.Any("error", err))
 			continue
 		}
-		if backend != nil {
-			sha256Hex, contentType, storageKey, sizeBytes, err = jp.persistArtifactBytes(backend, candidate, runID, tenantID, id, a)
+		if target.backend != nil {
+			sha256Hex, contentType, storageKey, fileID, sizeBytes, err = jp.persistArtifactBytes(target, candidate, runID, tenantID, id, a)
 			if err != nil {
 				failed = true
 				jp.logger.Warn("copying an artifact into object storage failed; it remains downloadable live from the node, this copy is not yet durable",
@@ -474,7 +470,7 @@ func (jp *jobPersister) persistArtifacts(id string) {
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), jp.cfg.CallTimeout)
-		err = jp.client.CreateJobArtifact(ctx, id, a.ArtifactID, tenantID, a.Filename, a.Subfolder, a.Type, sha256Hex, contentType, storageKey, sizeBytes)
+		err = jp.client.CreateJobArtifact(ctx, id, a.ArtifactID, tenantID, a.Filename, a.Subfolder, a.Type, sha256Hex, contentType, storageKey, sizeBytes, fileID)
 		cancel()
 		if err != nil {
 			failed = true
@@ -497,24 +493,22 @@ func (jp *jobPersister) persistArtifacts(id string) {
 // and copies them into jp.storage under a key derived from tenantID, jobID
 // and the artifact's own public id — three already-safe, internally
 // generated identifiers, so the key never carries anything a caller
-// supplied. It hashes and counts the bytes as they are copied, through
-// countingReader wrapping the same read Put already does, rather than
-// reading the artifact a second time.
+// supplied. fileStore.put registers the file, and hashes and counts the
+// bytes as they are copied rather than reading the artifact a second time.
 //
 // persistArtifactBytes 从产出某个产物的节点拉取它的字节（经由 jp.opener，
 // 与一次实时下载所用的 OpenArtifact 相同），并复制进 jp.storage，key 由
 // tenantID、jobID 与产物自己的公开 id 派生——三者都已经是安全的、内部生成的
-// 标识符，因此这个 key 里从不会带上调用方提供的任何东西。它借助包裹在 Put
-// 本就要做的那次读取之外的 countingReader，在复制字节的同时完成哈希与计数，
-// 而不必把产物再读一遍。
-func (jp *jobPersister) persistArtifactBytes(backend objectstore.Backend, candidate scheduler.Candidate, runID, tenantID, jobID string, a pendingArtifact) (sha256Hex, contentType, storageKey string, size int64, err error) {
+// 标识符，因此这个 key 里从不会带上调用方提供的任何东西。fileStore.put 登记
+// 文件，并在复制字节的同时完成哈希与计数，而不必把产物再读一遍。
+func (jp *jobPersister) persistArtifactBytes(target fileTarget, candidate scheduler.Candidate, runID, tenantID, jobID string, a pendingArtifact) (sha256Hex, contentType, storageKey, fileID string, size int64, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), jp.cfg.ArtifactCopyTimeout)
 	defer cancel()
 
 	ref := runtime.ArtifactRef{RunID: runID, Filename: a.Filename, Subfolder: a.Subfolder, Type: a.Type}
 	artifact, err := jp.opener.OpenArtifact(ctx, candidate, ref)
 	if err != nil {
-		return "", "", "", 0, err
+		return "", "", "", "", 0, err
 	}
 	defer artifact.Body.Close()
 
@@ -529,34 +523,35 @@ func (jp *jobPersister) persistArtifactBytes(backend objectstore.Backend, candid
 	// 折叠掉，而不会产生一个开头的 "/"，进而被 objectstore.validateKey 当作
 	// 绝对路径拒绝。
 	key := path.Join(tenantID, jobID, a.ArtifactID)
-	hash := sha256.New()
-	counted := &countingReader{r: io.TeeReader(artifact.Body, hash)}
+	// The file id is the artifact's own, so a retry of this artifact
+	// registers the same record again rather than a second one for the key.
+	// 文件 id 就是产物自己的 id，因此重试这个产物时再次登记的是同一条记录，而不是为同一个
+	// key 再登记一条。
 	start := jp.clock.Now()
-	if err := backend.Put(ctx, key, counted, artifact.Size); err != nil {
+	written, err := jp.storage.put(ctx, target, FileRecord{
+		ID: a.ArtifactID, TenantID: tenantID, ObjectKey: key, BizType: fileBizJob, BizID: jobID,
+		Kind: fileKind(a.Type), Filename: a.Filename, ContentType: artifact.ContentType,
+	}, artifact.Body, artifact.Size)
+	if err != nil {
 		jp.cfg.Metrics.ArtifactTransfer(ResultFailed, 0, jp.clock.Now().Sub(start))
-		return "", "", "", 0, err
+		return "", "", "", "", 0, err
 	}
-	jp.cfg.Metrics.ArtifactTransfer(ResultSucceeded, counted.n, jp.clock.Now().Sub(start))
-	return hex.EncodeToString(hash.Sum(nil)), artifact.ContentType, key, counted.n, nil
+	jp.cfg.Metrics.ArtifactTransfer(ResultSucceeded, written.size, jp.clock.Now().Sub(start))
+	if written.registered {
+		fileID = a.ArtifactID
+	}
+	return written.sha256Hex, artifact.ContentType, key, fileID, written.size, nil
 }
 
-// countingReader wraps a Reader to count the bytes actually read through
-// it, so a caller mid-stream (like persistArtifactBytes, hashing the same
-// bytes objectstore.Backend.Put is reading) learns the real byte count
-// without a second, separate read of whatever it wrapped.
-//
-// countingReader 包装一个 Reader 以统计实际经它读取的字节数，好让调用方
-// （比如 persistArtifactBytes，正在为 objectstore.Backend.Put 读的同一批
-// 字节计算哈希）不必对被包装的内容再单独读一遍就能得到真实字节数。
-type countingReader struct {
-	r io.Reader
-	n int64
-}
-
-func (c *countingReader) Read(p []byte) (int, error) {
-	n, err := c.r.Read(p)
-	c.n += int64(n)
-	return n, err
+// fileKind is the files kind of a job artifact of artifactType. The
+// backend may report none; such an artifact is filed as an output.
+// fileKind 是 artifactType 类型的 job 产物在 files 中的类别。后端可能没有报告类型，这样的
+// 产物按 output 登记。
+func fileKind(artifactType string) string {
+	if artifactType == "" {
+		return "output"
+	}
+	return truncateUTF8(artifactType, 32)
 }
 
 // backoff doubles the base interval per consecutive failure, capped at

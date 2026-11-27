@@ -618,6 +618,13 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 			Path:    "/internal/v1/tenant-storage/retained",
 			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/tenant-storage/retained", requireSharedSecret(ctx.Config.InternalToken, listRetainedTenantStorage(ctx))),
 		},
+		// Every object the platform writes to object storage, registered by
+		// the Gateway before and after the write and listed by its cleanup.
+		// 平台写进对象存储的每个对象：Gateway 在写入前后登记，清理时列举。
+		{Method: http.MethodPut, Path: "/internal/v1/files/:id", Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/files/:id", requireSharedSecret(ctx.Config.InternalToken, registerFile(ctx)))},
+		{Method: http.MethodPost, Path: "/internal/v1/files/:id/complete", Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/files/:id/complete", requireSharedSecret(ctx.Config.InternalToken, completeFile(ctx)))},
+		{Method: http.MethodDelete, Path: "/internal/v1/files/:id", Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/files/:id", requireSharedSecret(ctx.Config.InternalToken, deleteFile(ctx)))},
+		{Method: http.MethodGet, Path: "/internal/v1/files", Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/files", requireSharedSecret(ctx.Config.InternalToken, listFiles(ctx)))},
 		// Studio flows and their runs, written by the Gateway the same way.
 		// Studio 编排及其运行，同样由 Gateway 写入。
 		studioRoute(ctx, http.MethodPost, "/internal/v1/studio/flows", createStudioFlow),

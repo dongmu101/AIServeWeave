@@ -462,6 +462,66 @@ type TenantStorages interface {
 	ListRetainedTenantStorage(ctx context.Context, after string, limit int) ([]model.TenantStorage, error)
 }
 
+// MaxFilePage bounds one page of ListFiles.
+// MaxFilePage 限定 ListFiles 的单页大小。
+const MaxFilePage = 500
+
+// FileFilter selects files for ListFiles. Before is required; an empty
+// string field does not filter.
+//
+// FileFilter 为 ListFiles 选择文件。Before 必填；字符串字段为空表示不筛选。
+type FileFilter struct {
+	// Before keeps files registered strictly before it.
+	// Before 只保留登记时间严格早于它的文件。
+	Before   time.Time
+	Storage  string
+	TenantID string
+	BizType  string
+	Kind     string
+	Status   string
+	// Limit is clamped to (0, MaxFilePage]; zero means MaxFilePage.
+	// Limit 被限制在 (0, MaxFilePage]；零表示 MaxFilePage。
+	Limit int
+}
+
+// FileCompletion is what is known of a file once its bytes are written.
+// FileCompletion 是文件字节写完后得知的信息。
+type FileCompletion struct {
+	SizeBytes   int64
+	SHA256      string
+	ContentType string
+	UpdatedAt   time.Time
+}
+
+// Files persists the objects the platform wrote to object storage. The table
+// is partitioned by CreatedAt, so an id is not unique on its own in the
+// database: every method addresses all rows with the id.
+//
+// Files 持久化平台写进对象存储的对象。表按 CreatedAt 分区，id 在数据库中本身并不唯一：
+// 每个方法都作用于该 id 的所有行。
+type Files interface {
+	// RegisterFile inserts f, or, when rows with f.ID exist, replaces their
+	// fields except CreatedAt and sets f.CreatedAt to the one kept.
+	//
+	// RegisterFile 插入 f；该 id 已有行时替换除 CreatedAt 外的字段，并把 f.CreatedAt 设为
+	// 保留下来的值。
+	RegisterFile(ctx context.Context, f *model.File) error
+	// CompleteFile records done on the rows with id and marks them ready;
+	// ErrNotFound when there are none.
+	//
+	// CompleteFile 把 done 写进该 id 的行并标记为 ready；没有这样的行时返回 ErrNotFound。
+	CompleteFile(ctx context.Context, id string, done FileCompletion) error
+	// DeleteFile removes the rows with id. None is not an error.
+	//
+	// DeleteFile 删除该 id 的行。没有这样的行不算错误。
+	DeleteFile(ctx context.Context, id string) error
+	// ListFiles reads up to filter.Limit files matching filter, oldest first
+	// (by CreatedAt, then id).
+	//
+	// ListFiles 读取至多 filter.Limit 个符合 filter 的文件，最旧的在前（按 CreatedAt、再按 id）。
+	ListFiles(ctx context.Context, filter FileFilter) ([]model.File, error)
+}
+
 // AgentInstallCodes persists one-time Agent install codes by the hash of the
 // code. The code itself is never stored.
 //
@@ -776,13 +836,15 @@ type JobArtifacts interface {
 	// second read in this package with no tenant to scope by, for the same
 	// reason ListActiveJobsForRoute has none: a cleanup sweep (STATUS.md's
 	// P04) reaps artifacts by age and type, a retention policy Gateway
-	// decides, not something scoped by who produced them.
+	// decides, not something scoped by who produced them. Only rows without
+	// a FileID are returned: the others are deleted along with their file.
 	//
 	// ListJobArtifactsBefore 返回最多 MaxExpiredJobArtifacts 个、类型为
 	// artifactType 且创建于 cutoff 之前的产物，跨越所有租户——本包中第二次
 	// 不按租户限定范围的读取，理由与 ListActiveJobsForRoute 相同：一次清理
 	// 扫描（STATUS.md 的 P04）按年龄与类型回收产物，那是 Gateway 决定的保留
-	// 策略，不是按谁产出了它来限定范围的东西。
+	// 策略，不是按谁产出了它来限定范围的东西。只返回 FileID 为空的行：其余的行随文件
+	// 一起删除。
 	ListJobArtifactsBefore(ctx context.Context, artifactType string, cutoff time.Time) ([]model.JobArtifact, error)
 	// DeleteJobArtifact removes one artifact record. Deleting an id that
 	// does not exist is not an error: the cleanup sweep that calls this only
@@ -1164,6 +1226,7 @@ type Store interface {
 	TenantNodes
 	NodeProviders
 	TenantStorages
+	Files
 	AgentInstallCodes
 	Users
 	PlatformOperators

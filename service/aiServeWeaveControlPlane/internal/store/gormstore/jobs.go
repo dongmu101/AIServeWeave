@@ -179,7 +179,7 @@ func (s *Store) GetJobArtifact(ctx context.Context, id string) (model.JobArtifac
 func (s *Store) ListJobArtifactsBefore(ctx context.Context, artifactType string, cutoff time.Time) ([]model.JobArtifact, error) {
 	var out []model.JobArtifact
 	err := s.db.WithContext(ctx).
-		Where("type = ? AND created_at < ?", artifactType, cutoff).
+		Where("type = ? AND created_at < ? AND file_id = ''", artifactType, cutoff).
 		Order("created_at ASC, id ASC").
 		Limit(store.MaxExpiredJobArtifacts).
 		Find(&out).Error

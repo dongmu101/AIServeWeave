@@ -86,6 +86,9 @@ type fileStore struct {
 	logger     *slog.Logger
 	ttl        time.Duration
 	build      func(objectstore.Config, bool) (objectstore.Backend, error)
+	// registry records every file written; nil writes unrecorded.
+	// registry 记录写入的每个文件；为 nil 时写入不做记录。
+	registry FileRegistry
 
 	mu      sync.Mutex
 	entries map[string]*tenantStorageEntry
@@ -151,23 +154,23 @@ func (f *fileStore) tenant(ctx context.Context, tenantID string) (objectstore.Ba
 }
 
 // writer returns where tenantID's new files go: its own storage, else the
-// deployment's (nil when there is none). errTenantStorageUnavailable means
-// the tenant's settings could not be read.
+// deployment's (a nil backend when there is none). errTenantStorageUnavailable
+// means the tenant's settings could not be read.
 //
-// writer 返回 tenantID 新文件的去处：其自有存储，否则部署存储（没有时为 nil）。
+// writer 返回 tenantID 新文件的去处：其自有存储，否则部署存储（没有时 backend 为 nil）。
 // errTenantStorageUnavailable 表示读不到租户的设置。
-func (f *fileStore) writer(ctx context.Context, tenantID string) (objectstore.Backend, error) {
+func (f *fileStore) writer(ctx context.Context, tenantID string) (fileTarget, error) {
 	if f == nil {
-		return nil, nil
+		return fileTarget{}, nil
 	}
 	backend, err := f.tenant(ctx, tenantID)
 	if err != nil {
-		return nil, err
+		return fileTarget{}, err
 	}
 	if backend != nil {
-		return backend, nil
+		return fileTarget{backend: backend, storage: fileStorageTenant}, nil
 	}
-	return f.deployment, nil
+	return fileTarget{backend: f.deployment, storage: fileStorageDeployment}, nil
 }
 
 // hasAny reports whether any storage could hold tenantID's files, without

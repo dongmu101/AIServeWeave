@@ -166,6 +166,13 @@ func (j Job) Terminal() bool {
 // 这里的功能是在这一行本身已经存在之后才落地，而不是之前。StorageKey 是
 // 该后端自己的 key，只有连同 Gateway 副本配置使用的是哪个后端才有意义——
 // 它不是一个 URL，也从不进入面向租户的视图。
+//
+// FileID names the files row of the stored bytes, "" for a row with metadata
+// only or one written before files existed. The artifact retention sweep
+// handles only rows without one; the others go with their file.
+//
+// FileID 指向所存字节的 files 行；只有元数据或在 files 出现之前写入的行为空。产物保留期
+// 清理只处理没有它的行，其余的随文件一起清理。
 type JobArtifact struct {
 	ID          string    `gorm:"primaryKey;size:64"`
 	JobID       string    `gorm:"size:64;not null;index:idx_job_artifacts_job"`
@@ -177,6 +184,7 @@ type JobArtifact struct {
 	SizeBytes   int64     `gorm:"not null;default:0"`
 	ContentType string    `gorm:"size:255;not null;default:''"`
 	StorageKey  string    `gorm:"size:1024;not null;default:''"`
+	FileID      string    `gorm:"size:64;not null;default:''"`
 	CreatedAt   time.Time `gorm:"not null"`
 }
 

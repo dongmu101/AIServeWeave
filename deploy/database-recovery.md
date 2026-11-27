@@ -140,6 +140,13 @@ MySQL 使用 `ALGORITHM=INPLACE, LOCK=NONE` 更新注释，执行时仍需取得
 
 两个可选的维护命令（可重复执行、可中断后再执行）：`-migrate backfill-usage-cost` 把升级前的费用从 `usage_charges` 写回 `usage_records`；`-migrate compact-usage-ledger` 按 `Billing.LedgerTimezone` 合并升级前同一天的连续用量账目，会删除账目行，执行前须备份，设置了 `Database.MaintenanceDSN` 时用它执行。规则与行为变更见[按 token 计价](../docs/billing-token-pricing.md#升级)。
 
+## 文件登记表（base 0022 / jobs 0008）
+
+- `base/0022_files.sql`：新建 `files` 表（MySQL 与 PostgreSQL），按 `created_at` 按月 RANGE 分区，分区在迁移时按当前时间展开，之后由分区维护预建。只建新表，不碰已有数据。
+- `jobs/0008_add_job_artifacts_file_id.sql`（仅 MySQL）：`job_artifacts` 加列 `file_id VARCHAR(64) NOT NULL DEFAULT ''`。MySQL 8.0.29 及以上默认以 INSTANT 方式加列，不复制表；中断后 `-migrate resume` 会跳过已存在的列。尚未在生产规模的表上测过耗时。
+
+升级步骤与常规升级相同：先备份，执行 `-migrate up`，再用 `-migrate status` 确认全部 applied，然后先启动新的控制面，再升级 Gateway。旧二进制遇到新版本号会拒绝启动，回退要恢复迁移前的备份。
+
 ## 失败处理
 
 - **锁竞争**：另一个迁移进程持有同库会话锁时立即失败；等其退出后重试。分区维护与保留期清理也短暂使用这把锁，维护遇到时跳过本轮，清理最多等待 2 分钟。DDL 与锁使用同一个专用连接，整个迁移调用默认最多五分钟，可用 `Database.MigrationTimeout` 调整。连接终止会释放数据库会话锁。

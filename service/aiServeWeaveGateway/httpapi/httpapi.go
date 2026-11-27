@@ -62,14 +62,14 @@ type Config struct {
 	// StudioReplicaID 是本副本持有编排运行时使用的名称，与它向 Agent 宣告的身份相同；
 	// 会追加一个进程级后缀。
 	StudioReplicaID string
-	// StudioArtifactRetention is how long the objects Studio writes to
+	// StudioArtifactRetention is how long the files Studio writes to
 	// ArtifactStorage itself (inference images, uploaded run inputs) are
-	// kept. Zero uses DefaultStudioArtifactRetention. The sweep runs only
-	// when flows are mounted and ArtifactStorage is set.
+	// kept. Zero uses DefaultStudioArtifactRetention. The file cleanup
+	// applies it when FileRegistry and ArtifactStorage are set.
 	//
-	// StudioArtifactRetention 是 Studio 自己写入 ArtifactStorage 的对象（推理图片、
-	// 上传的运行输入）的保留时长。为零时采用 DefaultStudioArtifactRetention。只有挂载了
-	// 编排且设置了 ArtifactStorage 时才运行清理扫描。
+	// StudioArtifactRetention 是 Studio 自己写入 ArtifactStorage 的文件（推理图片、
+	// 上传的运行输入）的保留时长。为零时采用 DefaultStudioArtifactRetention。设置了
+	// FileRegistry 与 ArtifactStorage 时由文件清理执行。
 	StudioArtifactRetention time.Duration
 	// APIKeys is the static set of accepted Bearer tokens, used when no
 	// Verifier is configured. Empty means authentication is disabled — see
@@ -208,12 +208,20 @@ type Config struct {
 	// TenantStorage reads the S3 or WebDAV storage a tenant configured for
 	// its own files (job artifacts, Studio uploads and images), which then
 	// replaces ArtifactStorage for that tenant. Nil keeps every tenant on
-	// ArtifactStorage. A tenant storage retention sweep runs when it is set.
+	// ArtifactStorage. The file cleanup applies each tenant's retention.
 	//
 	// TenantStorage 读取租户为自己的文件（job 产物、Studio 上传与图片）配置的 S3 或 WebDAV
 	// 存储，该租户的文件随后改用它而不是 ArtifactStorage。为 nil 时所有租户都用
-	// ArtifactStorage。设置后运行租户存储的保留期清理。
+	// ArtifactStorage。文件清理按各租户的保留期执行。
 	TenantStorage TenantStorageSource
+	// FileRegistry records every file written to ArtifactStorage or a
+	// tenant's storage in the control plane's files table, and a cleanup
+	// driven by those records deletes expired files. Nil writes files
+	// unrecorded and runs no such cleanup.
+	//
+	// FileRegistry 把写进 ArtifactStorage 或租户存储的每个文件记录到控制面的 files 表，并由
+	// 按这些记录运行的清理删除过期文件。为 nil 时写入不做记录，也不运行这种清理。
+	FileRegistry FileRegistry
 	// ArtifactCopyTimeout bounds one artifact's node-to-storage byte copy.
 	// Zero uses DefaultArtifactCopyTimeout. It is deliberately separate from
 	// PersistCallTimeout, which bounds the lightweight metadata call to the
@@ -518,6 +526,7 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 	// API Key 已经遵循的同一种「为 nil 时退化」模式。未配置的部署如实得到
 	// 仅限 Gateway 本地的 job 跟踪，而不是一个启动起来却什么都做不了的后台
 	// 循环。
+	h.files.registry = cfg.FileRegistry
 	var persister *jobPersister
 	if cfg.JobPersistClient != nil {
 		persister = newJobPersister(h.jobs, cfg.JobPersistClient, sched, h.files, clock, logger, jobPersistConfig{
@@ -623,33 +632,43 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 	//
 	// 清理扫描器遵循同一种「为 nil 时退化」模式：未配置可供回收的控制面，
 	// 意味着从一开始就没有什么持久化的东西需要清理。
+	// Defaulted here, per field, rather than left to newArtifactCleaner's
+	// own zero-check on the whole map: that check only fires when
+	// RetentionByType is nil, and a map built with a zero
+	// cfg.ArtifactRetention would otherwise mean "expire the instant an
+	// artifact is created" instead of "use the default".
+	//
+	// 在这里逐字段补上默认值，而不是留给 newArtifactCleaner 自己对整个
+	// map 的零值检查——那个检查只在 RetentionByType 为 nil 时才触发，
+	// 一个用零值 cfg.ArtifactRetention 构造出的 map，若不这样处理，
+	// 含义就会变成「产物一创建就过期」，而不是「采用默认值」。
+	retention, previewRetention := cfg.ArtifactRetention, cfg.ArtifactPreviewRetention
+	if retention <= 0 {
+		retention = DefaultArtifactRetention
+	}
+	if previewRetention <= 0 {
+		previewRetention = DefaultArtifactPreviewRetention
+	}
+	retentionByType := map[string]time.Duration{"output": retention, "temp": previewRetention}
+	// The artifact cleaner keeps reaping the job artifact records that have
+	// no file: metadata only, or written before files were recorded.
+	// 产物清理继续回收没有文件的 job 产物记录：只有元数据的，或在登记文件之前写入的。
 	var cleaner *artifactCleaner
 	if cfg.ArtifactCleanupClient != nil {
-		// Defaulted here, per field, rather than left to
-		// newArtifactCleaner's own zero-check on the whole map: that check
-		// only fires when RetentionByType is nil, and a map built with a
-		// zero cfg.ArtifactRetention would otherwise mean "expire the
-		// instant an artifact is created" instead of "use the default".
-		//
-		// 在这里逐字段补上默认值，而不是留给 newArtifactCleaner 自己对整个
-		// map 的零值检查——那个检查只在 RetentionByType 为 nil 时才触发，
-		// 一个用零值 cfg.ArtifactRetention 构造出的 map，若不这样处理，
-		// 含义就会变成「产物一创建就过期」，而不是「采用默认值」。
-		retention, previewRetention := cfg.ArtifactRetention, cfg.ArtifactPreviewRetention
-		if retention <= 0 {
-			retention = DefaultArtifactRetention
-		}
-		if previewRetention <= 0 {
-			previewRetention = DefaultArtifactPreviewRetention
-		}
 		cleaner = newArtifactCleaner(cfg.ArtifactCleanupClient, cfg.ArtifactStorage, clock, logger, artifactCleanupConfig{
-			Interval: cfg.ArtifactCleanupInterval,
-			RetentionByType: map[string]time.Duration{
-				"output": retention,
-				"temp":   previewRetention,
-			},
+			Interval:        cfg.ArtifactCleanupInterval,
+			RetentionByType: retentionByType,
 		})
 		go cleaner.run()
+	}
+	var fileSweep *fileCleaner
+	if cfg.FileRegistry != nil {
+		fileSweep = newFileCleaner(cfg.FileRegistry, cfg.ArtifactCleanupClient, h.files, cfg.TenantStorage, clock, logger, fileCleanupConfig{
+			Interval:        cfg.ArtifactCleanupInterval,
+			JobRetention:    retentionByType,
+			StudioRetention: cfg.StudioArtifactRetention,
+		})
+		go fileSweep.run()
 	}
 
 	if h.queue != nil {
@@ -706,20 +725,9 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 	if cfg.StudioSessions != nil {
 		front = withStudio(front, h.studioHandler(cfg.StudioSessions, cfg.StudioStore, cfg.StudioFlows, cfg.StudioReplicaID, logger))
 	}
-	var studioSweep *studioCleaner
-	if cfg.StudioSessions != nil && cfg.StudioFlows != nil && cfg.ArtifactStorage != nil {
-		studioSweep = newStudioCleaner(cfg.ArtifactStorage, clock, logger, 0, cfg.StudioArtifactRetention)
-		go studioSweep.run()
-	}
-	var tenantSweep *tenantStorageCleaner
-	if cfg.TenantStorage != nil {
-		tenantSweep = newTenantStorageCleaner(cfg.TenantStorage, clock, logger, 0)
-		go tenantSweep.run()
-	}
 	return &Server{
 		Handler:           withWriteDeadline(writeStallTimeout, front),
-		studioCleaner:     studioSweep,
-		tenantCleaner:     tenantSweep,
+		fileCleaner:       fileSweep,
 		handlers:          h,
 		syncer:            syncer,
 		persister:         persister,
@@ -751,8 +759,7 @@ type Server struct {
 	persister         *jobPersister
 	recoverer         *jobRecoverer
 	cleaner           *artifactCleaner
-	studioCleaner     *studioCleaner
-	tenantCleaner     *tenantStorageCleaner
+	fileCleaner       *fileCleaner
 	requestLogPusher  *requestLogPusher
 	usageLedgerPusher *usageLedgerPusher
 	usageOutbox       *usageLedgerOutbox
@@ -812,11 +819,8 @@ func (s *Server) Close() {
 	if s.cleaner != nil {
 		s.cleaner.Stop()
 	}
-	if s.studioCleaner != nil {
-		s.studioCleaner.Stop()
-	}
-	if s.tenantCleaner != nil {
-		s.tenantCleaner.Stop()
+	if s.fileCleaner != nil {
+		s.fileCleaner.Stop()
 	}
 	if s.requestLogPusher != nil {
 		s.requestLogPusher.Stop()

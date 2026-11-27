@@ -328,6 +328,10 @@ func executeMigration(db *gorm.DB, namespace string, m migrationFile) error {
 			if db.Migrator().HasIndex("job_artifacts", "idx_job_artifacts_type_created") {
 				return nil
 			}
+		case "0008_add_job_artifacts_file_id.sql":
+			if db.Migrator().HasColumn("job_artifacts", "file_id") {
+				return nil
+			}
 		}
 	}
 	commentedPartitions := make(map[string]struct{})

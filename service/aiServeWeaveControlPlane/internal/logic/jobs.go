@@ -227,6 +227,9 @@ type CreateJobArtifactParams struct {
 	SizeBytes   int64
 	ContentType string
 	StorageKey  string
+	// FileID names the files row of the stored bytes; see model.JobArtifact.
+	// FileID 指向所存字节的 files 行，见 model.JobArtifact。
+	FileID string
 }
 
 // CreateJobArtifact records one artifact. Like CreateJob, a duplicate id is
@@ -241,7 +244,8 @@ type CreateJobArtifactParams struct {
 // 输出，因此没有什么需要协调——与 CreateJob 不同，这里不会重新读取已有的行，
 // 因为重试一次产物记录的调用方本就知道自己提交过什么。
 func (s *Service) CreateJobArtifact(ctx context.Context, p CreateJobArtifactParams) (model.JobArtifact, error) {
-	if p.ArtifactID == "" || p.JobID == "" || p.TenantID == "" || p.Filename == "" {
+	if p.ArtifactID == "" || p.JobID == "" || p.TenantID == "" || p.Filename == "" ||
+		(p.FileID != "" && !fileIDPattern.MatchString(p.FileID)) {
 		return model.JobArtifact{}, ErrInvalidInput
 	}
 	artifact := model.JobArtifact{
@@ -255,6 +259,7 @@ func (s *Service) CreateJobArtifact(ctx context.Context, p CreateJobArtifactPara
 		SizeBytes:   p.SizeBytes,
 		ContentType: p.ContentType,
 		StorageKey:  p.StorageKey,
+		FileID:      p.FileID,
 		CreatedAt:   s.clock.Now(),
 	}
 	err := s.store.CreateJobArtifact(ctx, &artifact)

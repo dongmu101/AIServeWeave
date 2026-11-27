@@ -1,3 +1,14 @@
+# 文件登记表 files（2026-11-27）
+
+Gateway 写进对象存储的每个文件（job 产物、Studio 运行输入、推理生图；部署存储与租户存储）都在控制面的新表 `files` 登记一行，记下所在存储、key、所属业务对象（`biz_type` + `biz_id`）、类别、大小与 sha256。保留期清理改为按这张表进行，不再按前缀列举对象存储；保留期规则不变。`files` 按月分区。代码与默认测试已通过，在临时 MySQL/PostgreSQL 容器与 Cloudflare R2 上做了进程内验证。**未在运行中的容器里验收。**设计见 `.scratch/file-registry/spec.md`。
+
+- **控制面**：表 `files`（base `0022`），`job_artifacts.file_id`（jobs `0008`），四个 `/internal/v1/files` 内部接口。见 [ControlPlane STATUS](service/aiServeWeaveControlPlane/STATUS.md#文件登记表-files2026-11-27)。
+- **Gateway**：写入顺序为登记 `pending` → 写入 → 登记 `ready`；登记不可达时不写入。新的 `fileCleaner` 替代 Studio 与租户存储的两个前缀扫描清理器。没有新 flag。见 [Gateway STATUS](service/aiServeWeaveGateway/STATUS.md#文件登记表-files2026-11-27)。
+
+升级须知：
+- 先迁移并升级控制面，再升级 Gateway。Gateway 先升级时，写入照常但不登记，清理暂停，直到控制面升级。
+- 升级前写入、没有记录的 Studio 文件与租户存储文件不再被自动清理（这两项功能在 v3.3.1 之后加入，尚未发布）。部署存储里的旧 job 产物仍按原规则清理。
+
 # 租户自有对象存储（2026-11-27）
 
 租户的 owner 或 admin 可以在 Console 为本租户配置自己的 S3 或 WebDAV，配置后该租户的 job 产物、Studio 运行输入文件与推理生图都写进租户的存储，保留期由租户自己设（0 表示平台从不删除）。部署默认关闭，填了主密钥才开启。代码与默认测试已通过。objectstore、Gateway 的写入/下载/清理与控制面的保存检查已在 Cloudflare R2 上用进程内用例验证，并修正了两个 S3 写入缺陷（大小未知时 411、body 过长时截断写入），见 [Gateway STATUS](service/aiServeWeaveGateway/STATUS.md#租户自有对象存储2026-11-27)。**尚未在运行中的容器里验收，Console 也未与真实控制面联调、未在浏览器里走通**。设计见 `.scratch/tenant-object-storage/spec.md`。

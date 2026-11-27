@@ -161,6 +161,45 @@ go run ./service/aiServeWeaveGateway -comfyui-managed-addr 127.0.0.1:8093 ...
 
 `InternalToken` 用 `AISW_CONTROL_PLANE_TOKEN` 环境变量传，不要用 `-control-plane-token` flag —— flag 在 `ps` 输出里可见。
 
+## 文件登记表 files（2026-11-27）
+
+Gateway 写进对象存储的每个文件（job 产物、Studio 运行输入的上传与复用副本、推理生图，部署存储与租户存储都算）都在控制面的 `files` 表登记一行，保留期清理改为按这张表进行，不再按前缀列举对象存储。设计见 `.scratch/file-registry/spec.md`，控制面一侧见 [ControlPlane STATUS](../aiServeWeaveControlPlane/STATUS.md#文件登记表-files2026-11-27)。没有新 flag：设置了 `-control-plane-addr` 即生效。
+
+- **写入**（`httpapi/files.go` 的 `fileStore.put`）：
+  - 顺序：先登记为 `pending`，再 Put，再登记为 `ready`，同时记下大小、sha256 与内容类型。
+  - 大小与摘要在写入时边读边算，不额外读一遍。S3 SDK 会把可寻址的 body 跳到末尾测长度再倒回开头，倒回开头时摘要重新计算；最后一遍不是从头连续读完时摘要留空，不给错值。
+  - 任一步失败都会删除对象，再删除记录。对象删不掉时保留 `pending` 记录，由清理在 24 小时后回收。
+  - 登记失败时写入失败，不写没有记录的对象：jobPersister 本轮记失败、下轮重试；Studio 上传回 503 `storage_unavailable`；推理生图节点失败。
+  - 文件 id 用文件自己的公开 id（产物 id、`sart_…`），重试同一产物时登记是幂等的。文件名超过 512 字节时按 UTF-8 截断，只影响记录。
+- **job 产物**：`CreateJobArtifact` 带上 `file_id`（与产物 id 相同），只有登记成功时才发送，值为空时字段省略。
+- **清理**（`httpapi/filecleanup.go` 的 `fileCleaner`，替代原来的 `studio_cleanup.go` 与 `tenantstorage_cleanup.go`）：
+  - 每 `-artifact-cleanup-interval`（默认 1 小时）运行一次，每轮以间隔为期限，Gateway 关闭时中止。按 `created_at` 分页（每页 500）读取记录，逐个先删对象、再删 job_artifacts 行（job 文件）、最后删 files 行。
+  - 部署存储：job `output` 按 `-artifact-retention`，job `temp` 按 `-artifact-preview-retention`，其他类型的 job 产物不删；`studio_run` 按 `-studio-artifact-retention`。部署存储的保留期规则与以前相同。
+  - 租户存储：按租户的 `retention_days`，0 表示不删。
+  - `pending` 超过 24 小时：不论存储与保留期，一律删除。
+  - 租户已不再有自有存储时，只删记录，文件按既有约定留在旧存储里。本副本没有部署存储时，部署存储的行不动。
+  - 对象或记录删除失败只记日志，下一轮重试。整页都删不动时本轮停止，避免反复读同一页。
+  - 原有的 artifactcleanup 只处理 `file_id` 为空的 job_artifacts 行，即只有元数据的行和升级前写入的行。
+- **升级前写入的文件**：没有 files 记录。
+  - 部署存储里的 job 产物（`file_id` 为空的 job_artifacts 行）仍由 artifactcleanup 按原规则清理。
+  - Studio 文件与租户存储里的文件不再被清理：按前缀扫描的两个清理器已删除。这两项功能都在 v3.3.1 之后才加入、尚未发布，只有跑过此后 main 分支的部署才会有这类文件，需要手工清理 `studio/` 前缀与租户存储。
+- **控制面客户端**（`controlplaneclient/files.go`）：`FilesClient` 调用四个 `/internal/v1/files` 接口。旧版控制面的 404：登记视为「不支持」，照常写入、不登记；列举视为空列表；删除视为已删除。
+- **objectstore**：`Backend.List` 不再被生产代码使用，本期保留。
+
+升级须知：先迁移并升级控制面，再升级 Gateway。Gateway 先升级时，写入照常进行但不登记，清理也列不出任何文件（等于暂停清理），直到控制面升级。
+
+验证：
+- Gateway 与控制面的默认测试、`go vet` 通过。临时用例（已删除）覆盖：
+  - `put` 的 10 种情形：登记失败与「不支持」、写入失败、完成登记失败、对象删不掉时保留记录、目标存储记录。
+  - 摘要包装：倒回、SDK 的「测长再倒回」、从中间读取时摘要为空、不可寻址的 body。
+  - 清理的各条规则、失败与分页、`Stop`。
+  - Studio 输入的写入与 `discard`；jobPersister 登记并发送 `file_id`、旧控制面时不发送、登记不可达时不写入。
+  - 客户端对旧控制面 404 的处理、空 `file_id` 不发送、查询参数编码。
+- 以上 httpapi 用例在 `-race` 下通过。
+- 在 Cloudflare R2 上（`deploy/.env` 的部署存储凭据，测试对象已清空）：1 MiB 可寻址、流式、9 MiB 大小未知（分片上传）、空文件的大小与摘要都与内容一致；过长的 body 被拒，不留对象和记录；清理按记录从 R2 删除全部文件。这一过程发现并修正了一个问题：S3 SDK 跳到 body 末尾测长度时，摘要包装原先拒绝这次跳转，S3 上的 Studio 文件因此写不进去。
+- 推理生图的写入路径（`inferenceImage`）没有专门用例，因为没有可用的生图模型测试替身。它走的是同一个 `put`。
+- 未在运行中的容器里验收。
+
 ## 租户自有对象存储（2026-11-27）
 
 租户在 Console 配置了自己的 S3 或 WebDAV 后，该租户的 job 产物、Studio 运行输入文件与推理生图都写进租户的存储，不再写进 `-artifact-storage`。设计见 `.scratch/tenant-object-storage/spec.md`，控制面一侧见 [ControlPlane STATUS](../aiServeWeaveControlPlane/STATUS.md#租户自有对象存储2026-11-27)。没有新 flag：设置了 `-control-plane-addr` 时自动向控制面读取设置（令牌同 `-control-plane-token` / `AISW_CONTROL_PLANE_TOKEN`）。
@@ -177,7 +216,7 @@ go run ./service/aiServeWeaveGateway -comfyui-managed-addr 127.0.0.1:8093 ...
   - 读：依次尝试租户存储与部署存储（覆盖配置自有存储之前写入的文件），job 产物之后照旧从节点实时拉取。读不到设置时仍会读部署存储。
   - 设置按租户缓存 30 秒；控制面暂时不可达时，已读到的设置最多再用 10 分钟。只有后端字段或 `allow_private_endpoints` 变化时才重建后端。
   - 涉及的调用点：jobPersister、`/v1/artifacts/{id}` 下载、Studio 运行输入的上传与复用、推理生图、运行产物下载、模板节点读取文件。
-- **保留期清理**（`httpapi/tenantstorage_cleanup.go`）：每小时向控制面分页取设了保留期的租户，在其存储的 `<租户>/` 与 `studio/<租户>/` 两个前缀下删除修改时间超过 `retention_days` 的对象；保留期为 0 的租户从不扫描。每轮以间隔为期限，构建失败或列举失败的租户跳过到下一轮，Gateway 关闭时中止进行中的扫描。`-studio-artifact-retention` 与 artifactcleanup 只作用于部署存储。
+- **保留期清理**（`httpapi/tenantstorage_cleanup.go`，已由按 files 表的清理替代，见[文件登记表 files](#文件登记表-files2026-11-27)）：每小时向控制面分页取设了保留期的租户，在其存储的 `<租户>/` 与 `studio/<租户>/` 两个前缀下删除修改时间超过 `retention_days` 的对象；保留期为 0 的租户从不扫描。每轮以间隔为期限，构建失败或列举失败的租户跳过到下一轮，Gateway 关闭时中止进行中的扫描。`-studio-artifact-retention` 与 artifactcleanup 只作用于部署存储。
 - **控制面客户端**（`controlplaneclient/tenantstorage.go`）：`TenantStorageClient` 读取 `GET /internal/v1/tenants/:id/storage` 与 `GET /internal/v1/tenant-storage/retained`。404 视为旧版控制面（未配置、空列表），不认识的 kind 视为读不到设置。
 
 - **部署存储改由 `.env` 开启**：`deploy/docker-compose.yaml` 把 `-artifact-storage` 及其 s3/webdav 参数接到 `AISW_ARTIFACT_STORAGE*`（留空即关闭）。没有给出对应的 `-…-file` flag 时，`main.go` 从 `AISW_ARTIFACT_STORAGE_S3_ACCESS_KEY_ID`、`AISW_ARTIFACT_STORAGE_S3_SECRET_ACCESS_KEY`、`AISW_ARTIFACT_STORAGE_WEBDAV_USERNAME`、`AISW_ARTIFACT_STORAGE_WEBDAV_PASSWORD` 读取凭据；给了文件时文件优先，读不到文件仍是启动错误。见 [deploy README「对象存储」](../../deploy/README.md#对象存储)。
@@ -215,7 +254,7 @@ go run ./service/aiServeWeaveGateway -comfyui-managed-addr 127.0.0.1:8093 ...
   - 运行输入中的文件可经 `GET /studio/v1/runs/{id}/artifacts/{artifact_id}` 下载，文件名取上传时的名字。类型由开头字节嗅探，只声明图片、音频与视频，其余（含 SVG 与文本）为 `application/octet-stream`。
 - **引用规则**（`flowdef` 的 `artifact_reference`）：文件类引用（image/file 输入、节点的 `image`、`artifacts`）可以作为输出 ref 的全部内容；comfyui_template 的模板输入也可以整个引用**单个**文件（image/file 输入或节点的 `image`，不含 `artifacts`）。其余位置一律报 `artifact_reference`。
 - **模板节点带文件**（`httpapi/studio_template_files.go`）：引擎把这类输入放进 `TemplateCall.Files`。Gateway 读出文件（`sart_` 从对象存储读，其余按 job 产物读），经 `io.Pipe` 流式构造 multipart，在进程内调用 `submitRun`，不在内存中整体缓冲。文件在节点运行前已被清理时，节点以 `not_found` 失败。步骤输入中记录的是产物 id。原先的 `unsupported_input` 已删除。
-- **保留期清理**（`httpapi/studio_cleanup.go`）：同时开启 `-studio` 与 `-artifact-storage` 时，每小时扫描一次 `studio/` 前缀，删除超过 `-studio-artifact-retention`（新 flag，默认 30 天）的对象，覆盖推理生图与上传的运行输入。每轮以扫描间隔为期限，单个对象删除失败只记日志，Gateway 关闭时中止进行中的扫描。运行记录本身不受影响，已删除的文件下载时回 404。
+- **保留期清理**（`httpapi/studio_cleanup.go`，已由按 files 表的清理替代，见[文件登记表 files](#文件登记表-files2026-11-27)）：同时开启 `-studio` 与 `-artifact-storage` 时，每小时扫描一次 `studio/` 前缀，删除超过 `-studio-artifact-retention`（新 flag，默认 30 天）的对象，覆盖推理生图与上传的运行输入。每轮以扫描间隔为期限，单个对象删除失败只记日志，Gateway 关闭时中止进行中的扫描。运行记录本身不受影响，已删除的文件下载时回 404。
 - **objectstore**：`Backend` 新增 `List(ctx, prefix, fn)`，按前缀列出对象（键、大小、修改时间），Local、S3（`ListObjectsV2` 分页）与 WebDAV（逐层 PROPFIND）都已实现。Local 的 `Delete` 会顺带删除变空的父目录，`List` 跳过 `.upload-` 临时文件；`Put` 在父目录被并发删除时重试。WebDAV 不删除变空的集合。
 - **`openapi.yaml`**：收录全部 `/studio/v1` 端点（`studio` tag、`studioSession` 安全方案），包括上面的 multipart 启动运行与下载说明。docsui 的 `SPEC_SHA256` 未更新，新增的 Studio 文本暂不进入 docsui 本地化。
 

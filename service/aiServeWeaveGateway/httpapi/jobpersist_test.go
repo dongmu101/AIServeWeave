@@ -94,7 +94,7 @@ func (f *fakePersistClient) UpdateJobState(_ context.Context, tenantID, jobID, s
 	return applied, nil
 }
 
-func (f *fakePersistClient) CreateJobArtifact(_ context.Context, jobID, artifactID, tenantID, filename, subfolder, artifactType, sha256, contentType, storageKey string, sizeBytes int64) error {
+func (f *fakePersistClient) CreateJobArtifact(_ context.Context, jobID, artifactID, tenantID, filename, subfolder, artifactType, sha256, contentType, storageKey string, sizeBytes int64, _ string) error {
 	f.mu.Lock()
 	f.artifactCalls = append(f.artifactCalls, artifactCall{jobID, artifactID, tenantID, filename, subfolder, artifactType, sha256, contentType, storageKey, sizeBytes})
 	errFn := f.artifactErr

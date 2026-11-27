@@ -1,3 +1,37 @@
+## 文件登记表 files（2026-11-27）
+
+Gateway 写进对象存储的每个文件在这里登记一行，供按表清理和按业务对象查找文件。设计见 `.scratch/file-registry/spec.md`，Gateway 一侧见 [Gateway STATUS](../aiServeWeaveGateway/STATUS.md#文件登记表-files2026-11-27)。实现在 `internal/logic/files.go`、`internal/store/*/files.go`、`internal/handler/files.go`。
+
+- **数据**：
+  - 新表 `files`（base 命名空间 `0022`，MySQL 与 PostgreSQL，`CREATE TABLE IF NOT EXISTS`，表与列带中文注释）。列为 id、tenant_id、storage（`deployment`/`tenant`）、object_key、biz_type（`job`/`studio_run`）、biz_id、kind、filename、content_type、size_bytes、sha256、status（`pending`/`ready`）、created_at、updated_at。
+  - 按 `created_at` 按月分区，预建 2 个月，由 `partitionmaint` 维护。主键 `(id, created_at)`。这张表不配保留期，从不整段删除分区：行只由 Gateway 的清理逐个删除。
+  - 四个索引：`(storage, biz_type, kind, created_at)`、`(tenant_id, storage, created_at)`、`(status, created_at)`、`(biz_type, biz_id)`。
+  - `job_artifacts` 新增 `file_id`（jobs 命名空间 `0008`，仅 MySQL，默认空串）。`ListJobArtifactsBefore`（artifactcleanup 的数据源）只返回 `file_id` 为空的行，其余产物随文件一起清理。
+  - `sql/init.sql` 已同步。
+- **内部接口**（`InternalToken`）：
+  - `PUT /internal/v1/files/:id`：登记或重新登记为 `pending`，返回该行。重新登记沿用首次的 `created_at`。
+  - `POST /internal/v1/files/:id/complete`：`{size_bytes, sha256, content_type}`，标记为 `ready`，204；行不存在时 404。
+  - `DELETE /internal/v1/files/:id`：幂等，204。
+  - `GET /internal/v1/files?before=&storage=&tenant_id=&biz_type=&kind=&status=&limit=`：`before`（RFC3339）必填，`limit` 必须为正，至多 500。按 `created_at, id` 升序返回 `{items}`。
+  - 字段校验：id 为 1–64 位字母、数字、`_`、`-`；各字段不超过列宽；租户存储必须带 tenant_id；sha256 为空或 64 位十六进制。未知字段 400。
+- `POST /internal/v1/jobs/:id/artifacts` 新增可选字段 `file_id`。
+- **并发**：登记不用事务与锁定读（按 id 更新 → 读回 `created_at` → 不存在时插入，冲突时再更新），避免 MySQL 间隙锁引起的死锁。
+
+升级须知：先迁移并升级控制面，再升级 Gateway。Gateway 对旧控制面的 404 有兜底（写入不登记，清理暂停），所以顺序反过来不会出错。只新增表和列；旧版控制面会以「unknown database migration」拒绝启动，回退须恢复迁移前的备份。见[数据库升级与恢复](../../deploy/database-recovery.md#文件登记表base-0022--jobs-0008)。
+
+验证：
+- 控制面默认测试通过。临时用例（已删除）覆盖：logic 的字段校验表（长度临界、非法 id、枚举、sha256 格式、`before` 必填、负 limit）。
+- e2e 契约：经真实路由与 Gateway 的 `FilesClient` 覆盖登记、重新登记、完成与 404、按条件列举、重复删除、401、各种 400，以及带 `file_id` 的产物不出现在过期列表里。
+- 在临时 MySQL 9.7 与 PostgreSQL 18 容器上：
+  - 分区布局正确，维护能续建分区。
+  - 重新登记保留 `created_at`，包括落在历史分区的行。
+  - 完成登记幂等，列举的条件、跨分区排序、严格的 `before` 与 500 上限都正确。
+  - 40 路并发登记无错，删除幂等。
+  - MySQL 上 `file_id` 往返正确，过期列表排除带文件的产物。
+- MySQL 上全部既有 gormstore 与 e2e live 用例通过。
+- 这一过程发现并修正了 MySQL 并发登记死锁（1213）。
+- PostgreSQL 上 `MigrateAll` 仍被下文既有的 `tenant_nodes` 索引误报挡住，files 的 schema 检查是单独调用验证的。
+
 ## 租户自有对象存储（2026-11-27）
 
 租户的 owner 或 admin 可以为本租户保存一套 S3 或 WebDAV 存储，Gateway 随后把该租户的 job 产物与 Studio 文件写进去。设计见 `.scratch/tenant-object-storage/spec.md`。实现在 `internal/logic/tenantstorage.go`、`internal/store/*/tenantstorage.go`、`internal/handler/tenantstorage.go`。

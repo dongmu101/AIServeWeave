@@ -16,7 +16,7 @@ import (
 // checkSchemaObjects validates the mapped columns and declared indexes without DDL.
 // checkSchemaObjects 校验映射列与声明索引，不执行 DDL。
 func checkSchemaObjects(db *gorm.DB, all bool) error {
-	models := []any{&model.Tenant{}, &model.User{}, &model.PlatformOperator{}, &model.APIKey{}, &model.AuditLog{}, &revocationOutbox{}, &model.ModelAccess{}, &model.NodeAccess{}, &model.NodeBilling{}, &model.TenantNode{}, &model.AgentInstallCode{}, &model.NodeProvider{}, &model.NodeProviderVersion{}, &model.TenantStorage{}}
+	models := []any{&model.Tenant{}, &model.User{}, &model.PlatformOperator{}, &model.APIKey{}, &model.AuditLog{}, &revocationOutbox{}, &model.ModelAccess{}, &model.NodeAccess{}, &model.NodeBilling{}, &model.TenantNode{}, &model.AgentInstallCode{}, &model.NodeProvider{}, &model.NodeProviderVersion{}, &model.TenantStorage{}, &model.File{}}
 	if all {
 		models = append(models, &model.AccountSale{}, &accountSalesLock{}, &model.AccountPresale{}, &model.AlipayPurchase{}, &model.AlipayRedemption{})
 		models = append(models, &model.CatalogModel{}, &model.CatalogPrice{}, &model.CatalogPending{}, &model.CatalogSyncState{}, &model.BillingSettings{})
@@ -196,13 +196,13 @@ func compatibleIntegerColumn(table, column, kind string) bool {
 
 // checkPartitionLayouts verifies each time-partitioned table is RANGE
 // partitioned on its column and still has its catch-all partition. A base-only
-// check covers audit_logs, the one partitioned table in that namespace.
+// check covers the partitioned tables of that namespace (audit_logs, files).
 //
 // checkPartitionLayouts 校验每张按时间分区的表都以规定的列做 RANGE 分区，且兜底分区
-// 仍在。只检查 base 时只覆盖 audit_logs，它是该分组中唯一的分区表。
+// 仍在。只检查 base 时只覆盖该分组中的分区表（audit_logs、files）。
 func checkPartitionLayouts(db *gorm.DB, all bool) error {
 	for _, table := range partitionedTables {
-		if !all && table.name != "audit_logs" {
+		if !all && !table.base {
 			continue
 		}
 		layout, err := readPartitionLayout(db, table.name)

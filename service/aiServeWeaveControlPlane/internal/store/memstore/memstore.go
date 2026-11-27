@@ -52,6 +52,7 @@ type Store struct {
 	nodeProviderVersions map[string]model.NodeProviderVersion
 	installCodes         map[string]model.AgentInstallCode
 	tenantStorage        map[string]model.TenantStorage
+	files                map[string]model.File
 	users                map[string]model.User
 	platformOperators    map[string]model.PlatformOperator
 	keys                 map[string]model.APIKey
@@ -1036,7 +1037,7 @@ func (s *Store) ListJobArtifactsBefore(_ context.Context, artifactType string, c
 	defer s.mu.Unlock()
 	var out []model.JobArtifact
 	for _, artifact := range s.artifacts {
-		if artifact.Type == artifactType && artifact.CreatedAt.Before(cutoff) {
+		if artifact.Type == artifactType && artifact.CreatedAt.Before(cutoff) && artifact.FileID == "" {
 			out = append(out, artifact)
 		}
 	}

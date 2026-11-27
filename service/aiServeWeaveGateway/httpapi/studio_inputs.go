@@ -123,19 +123,22 @@ func (s *studioFlows) parseRunStart(w http.ResponseWriter, r *http.Request) (stu
 // stagedInputs 是 stageInputFiles 为一次运行写下的内容：要绑定的输入值、按产物 id 索引的
 // 运行输入文件、写入的存储，以及运行最终未能启动时要删除的 key。
 type stagedInputs struct {
-	values  map[string]json.RawMessage
-	files   map[string]flowdef.FileValue
-	backend objectstore.Backend
-	keys    []string
+	values map[string]json.RawMessage
+	files  map[string]flowdef.FileValue
+	target fileTarget
+	// written lists the files staged so far, by id and key.
+	// written 按 id 与 key 列出至今暂存的文件。
+	written []stagedFile
 }
 
-// discard deletes the objects staged for a run that did not start.
-// discard 删除为未能启动的运行暂存的对象。
+type stagedFile struct{ id, key string }
+
+// discard deletes the files staged for a run that did not start, with their
+// records; one that cannot be deleted is left to the cleanup.
+// discard 删除为未能启动的运行暂存的文件及其记录；删不掉的留给清理。
 func (s *studioFlows) discard(ctx context.Context, staged stagedInputs) {
-	for _, key := range staged.keys {
-		if err := staged.backend.Delete(context.WithoutCancel(ctx), key); err != nil {
-			s.logger.Warn("deleting a staged studio input failed; the retention sweep removes it later", slog.String("key", key), slog.Any("error", err))
-		}
+	for _, f := range staged.written {
+		s.h.files.remove(ctx, staged.target, f.id, f.key)
 	}
 }
 
@@ -170,23 +173,23 @@ func (s *studioFlows) stageInputFiles(w http.ResponseWriter, r *http.Request, ow
 			issue(in.Name, string(flowdef.CodeInvalidValue), "give either an uploaded file or an earlier run's file, not both")
 			continue
 		}
-		if staged.backend == nil {
+		if staged.target.backend == nil {
 			// The tenant's own storage when it has one, else the
 			// deployment's; settings that cannot be read refuse the run
 			// rather than store its files where the tenant did not choose.
 			// 租户有自有存储时用它，否则用部署存储；读不到设置时拒绝运行，而不是把文件存到
 			// 租户没有选择的地方。
-			backend, err := s.h.files.writer(r.Context(), owner.TenantID)
+			target, err := s.h.files.writer(r.Context(), owner.TenantID)
 			if err != nil {
 				s.discard(r.Context(), staged)
 				writeStudioError(w, http.StatusServiceUnavailable, "storage_unavailable", "uploaded files cannot be stored right now")
 				return stagedInputs{}, false
 			}
-			if backend == nil {
+			if target.backend == nil {
 				issue(in.Name, codeArtifactStorage, "this deployment has no artifact storage for uploaded files")
 				continue
 			}
-			staged.backend = backend
+			staged.target = target
 		}
 		var (
 			value flowdef.FileValue
@@ -276,7 +279,7 @@ func (s *studioFlows) stageUpload(ctx context.Context, owner StudioOwner, runID 
 		}
 		return flowdef.FileValue{}, "storage", ""
 	}
-	return s.storeInputFile(ctx, owner, runID, filename, body, part.Size, staged)
+	return s.storeInputFile(ctx, owner, runID, fileKindUpload, filename, body, part.Size, staged)
 }
 
 // stageReuse copies a file an earlier run of owner was given under runID.
@@ -320,23 +323,27 @@ func (s *studioFlows) stageReuse(ctx context.Context, owner StudioOwner, runID s
 		return flowdef.FileValue{}, "storage", ""
 	}
 	defer body.Close()
-	return s.storeInputFile(ctx, owner, runID, prior.Filename, body, info.Size, staged)
+	return s.storeInputFile(ctx, owner, runID, fileKindCopy, prior.Filename, body, info.Size, staged)
 }
 
-// storeInputFile writes one input file under runID as a new artifact of that run.
-// storeInputFile 把一个输入文件作为该运行的新产物写到 runID 之下。
-func (s *studioFlows) storeInputFile(ctx context.Context, owner StudioOwner, runID, filename string, body io.Reader, size int64, staged *stagedInputs) (flowdef.FileValue, string, string) {
+// storeInputFile writes one input file under runID as a new artifact of that
+// run, registered as kind (an upload or a copy of an earlier run's file).
+// storeInputFile 把一个输入文件作为该运行的新产物写到 runID 之下，按 kind（上传，或更早
+// 运行文件的副本）登记。
+func (s *studioFlows) storeInputFile(ctx context.Context, owner StudioOwner, runID, kind, filename string, body io.Reader, size int64, staged *stagedInputs) (flowdef.FileValue, string, string) {
 	id := studioArtifactPrefix + idgen.New()
 	key, ok := studioArtifactKey(owner.TenantID, runID, id)
 	if !ok {
 		return flowdef.FileValue{}, "storage", ""
 	}
-	if err := staged.backend.Put(ctx, key, body, size); err != nil {
-		_ = staged.backend.Delete(context.WithoutCancel(ctx), key)
+	if _, err := s.h.files.put(ctx, staged.target, FileRecord{
+		ID: id, TenantID: owner.TenantID, ObjectKey: key, BizType: fileBizStudioRun, BizID: runID,
+		Kind: kind, Filename: filename, ContentType: mime.TypeByExtension(path.Ext(filename)),
+	}, body, size); err != nil {
 		s.logger.Warn("storing a studio input file failed", slog.String("run_id", runID), slog.Any("error", err))
 		return flowdef.FileValue{}, "storage", ""
 	}
-	staged.keys = append(staged.keys, key)
+	staged.written = append(staged.written, stagedFile{id: id, key: key})
 	return flowdef.FileValue{ArtifactID: id, Filename: filename}, "", ""
 }
 

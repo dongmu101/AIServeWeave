@@ -35,6 +35,7 @@ func TestPartitionedTablesMatchTheSpecLayout(t *testing.T) {
 		"metrics_history_points": {"bucket_at", unitDay, 7},
 		"response_turns":         {"created_at", unitDay, 7},
 		"audit_logs":             {"created_at", unitMonth, 2},
+		"files":                  {"created_at", unitMonth, 2},
 	}
 	if len(partitionedTables) != len(want) {
 		t.Fatalf("partitionedTables has %d entries, want %d", len(partitionedTables), len(want))
