@@ -433,6 +433,26 @@ function Editor({ flow, models, modelsError, imageModels: initialImageModels, te
           ))}
         </nav>
 
+        <aside aria-label="配置" className="shrink-0 overflow-y-auto border-t max-md:order-last max-md:max-h-[45%] md:w-80 md:border-t-0 md:border-r">
+          {selected ? (
+            <NodeInspector
+              def={def}
+              nodeId={selected}
+              models={models}
+              catalog={catalog}
+              issues={selectedIssues}
+              warnings={selectedWarnings}
+              onChange={setDef}
+              onDelete={(id) => {
+                setDef(removeNodes(def, [id]));
+                setSelected(null);
+              }}
+            />
+          ) : (
+            <Overview def={def} issues={shownIssues} flowIssues={flowIssues} warnings={warnings} modelsError={modelsError} catalogError={catalogError} onSelect={setSelected} />
+          )}
+        </aside>
+
         <div ref={canvas} onDragOver={onDragOver} onDrop={onDrop} className="relative min-h-[320px] min-w-0 flex-1">
           {hydrated ? (
             <ReactFlow<FlowCanvasNode>
@@ -458,26 +478,6 @@ function Editor({ flow, models, modelsError, imageModels: initialImageModels, te
             </ReactFlow>
           ) : null}
         </div>
-
-        <aside aria-label="配置" className="shrink-0 overflow-y-auto border-t max-md:max-h-[45%] md:w-80 md:border-t-0 md:border-l">
-          {selected ? (
-            <NodeInspector
-              def={def}
-              nodeId={selected}
-              models={models}
-              catalog={catalog}
-              issues={selectedIssues}
-              warnings={selectedWarnings}
-              onChange={setDef}
-              onDelete={(id) => {
-                setDef(removeNodes(def, [id]));
-                setSelected(null);
-              }}
-            />
-          ) : (
-            <Overview def={def} issues={shownIssues} flowIssues={flowIssues} warnings={warnings} modelsError={modelsError} catalogError={catalogError} onSelect={setSelected} />
-          )}
-        </aside>
       </div>
 
       {runOpen ? (
