@@ -147,7 +147,7 @@ Agent 现在检查最终设置文件的实际字节数。超过 2 MiB 时，设�
 
 ### 启动请求缓存
 
-2026-11-27 起，运行时的连接池同时缓存 CLI 发模型请求前必须等待的两个启动请求的答复，省掉每个回合的两次串行上游往返（本机回环加 300 ms 延迟实测：到模型请求发出从约 890 ms 降到约 200 ms）。离线探测（CLI 2.1.330，API key 登录）显示，只有这两个请求阻塞模型请求；`settings`、`bootstrap` 与 `penguin_mode` 不阻塞，不缓存。
+2026-11-27 起，运行时的连接池同时缓存 CLI 发模型请求前必须等待的两个启动请求的答复，省掉每个回合的两次串行上游往返（本机回环加 300 ms 延迟实测：到模型请求发出从约 890 ms 降到约 200 ms）。离线探测（CLI 2.1.330，API key 登录）显示，只有这两个请求阻塞模型请求；`settings`、`bootstrap` 与 `penguin_mode` 不阻塞，不缓存。生产节点的 OAuth 账户（CLI 2.1.332）不发 `policy_limits`，每回合只有功能开关求值一个命中，带安全检查回合的 `request_sent_ms` p50 从 1402 ms 降到 1080 ms。
 
 - **缓存哪些请求**：`GET /api/claude_code/policy_limits`（无请求体）与 `POST /api/eval/<client key>`（未压缩的 JSON 请求体，不超过 1 MiB）。OAuth 登录且服务端打开功能开关 `tengu_gb_eval_authed_enable` 时，CLI 改发 `POST /api/eval-authed/<client key>`，按同样规则缓存，与 `/api/eval/` 不共用条目。答复状态为 200、304 或 404（policy_limits 用 404 表示没有策略），且响应体不超过 1 MiB 时才缓存。其他请求、其他状态码、读不懂的请求体一律照常转发。
 - **缓存键**：方法、路径、查询串、全部端到端请求头（去掉逐跳头、`Content-Length` 与 `Accept-Encoding`，包括 `Authorization`，因此不同账户与 token 不共用条目）和请求体。功能开关请求体里每个进程都不同的 `attributes.sessionId` 去掉后再按键排序编码；其他属性不同则不共用。缓存属于单个运行时（一个 `account_dir`），运行时关闭或热重载替换时清空。
