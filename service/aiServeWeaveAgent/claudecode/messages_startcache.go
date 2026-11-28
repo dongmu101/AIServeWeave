@@ -277,7 +277,18 @@ func (c *startupCache) store(key [sha256.Size]byte, status int, header http.Head
 	stripHop(kept)
 	kept.Del("Content-Length")
 	kept.Del("Set-Cookie")
-	c.items[key] = &startupEntry{status: status, header: kept, body: bytes.Clone(body), fetched: c.now()}
+	now := c.now()
+	// An entry past startupCacheMaxAge is never served again; one whose key
+	// will not recur (a rotated token, a new CLI version) would otherwise
+	// stay until the runtime closes.
+	// 超过 startupCacheMaxAge 的条目不会再被使用；键不会再出现的条目（token 已轮换、CLI
+	// 已升级）否则会一直保留到运行时关闭。
+	for k, entry := range c.items {
+		if now.Sub(entry.fetched) > startupCacheMaxAge {
+			delete(c.items, k)
+		}
+	}
+	c.items[key] = &startupEntry{status: status, header: kept, body: bytes.Clone(body), fetched: now}
 }
 
 // serve writes a cached answer.
