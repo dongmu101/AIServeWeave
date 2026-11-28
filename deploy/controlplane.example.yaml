@@ -201,6 +201,26 @@ TenantStorage:
   MasterKey: "${AISW_TENANT_STORAGE_MASTER_KEY}"
   AllowPrivateEndpoints: false
 
+# 火山方舟视频生成（Studio 编排的「视频生成」节点）：运维在运维平台填写平台 Key，租户
+# owner/admin 也可以在 Console 填写本租户自己的 Key；租户有自己的 Key 时优先使用，否则使用
+# 平台 Key（只能用运维列出的模型，按定价扣费）。在 deploy/.env 填上 AISW_ARK_MASTER_KEY
+# （openssl rand -base64 32）即开启，留空则关闭。主密钥静态加密这些 Key，丢失或更换后需要
+# 重新填写，请备份 deploy/.env。Key 本身在界面里填写，不写进配置。Gateway 经
+# -control-plane-addr 自动读取。
+#
+# Volcengine Ark video generation (the Studio flow "video generation" node):
+# the operator enters a platform key in the operator console, and a tenant
+# owner or admin may enter the tenant's own key in the Console. A tenant's
+# own key is used when it has one; otherwise the platform key, limited to the
+# models the operator lists and billed at their prices. Set
+# AISW_ARK_MASTER_KEY in deploy/.env (openssl rand -base64 32) to turn it on;
+# leave it empty to keep it off. The master key encrypts those keys at rest;
+# losing or changing it means entering them again, so back up deploy/.env.
+# The keys themselves are entered in the UI, never here. Gateways read them
+# through -control-plane-addr.
+Ark:
+  MasterKey: "${AISW_ARK_MASTER_KEY}"
+
 # 工作流可视化编辑器（P03 后续）：指向一份由 scripts/fetch-comfyui-frontend.sh 解压的
 # ComfyUI_frontend 发布包。默认关闭——启用后目录缺失或不完整会让控制面启动失败，
 # 因此先把目录挂进容器（例如 ./comfy-editor:/opt/aiserveweave/comfy-editor:ro）再取消注释。

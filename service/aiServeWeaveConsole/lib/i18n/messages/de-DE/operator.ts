@@ -759,6 +759,16 @@ const operator = {
   "operator.billingSettingsUpdated": "Zuletzt gespeichert {time}",
   "operator.billingSettingsSaved": "Abrechnungseinstellungen gespeichert",
   "operator.billingProblemSignupGrant": "Geben Sie 0 oder mehr Guthaben ein, mit höchstens sechs Nachkommastellen",
-  "operator.billingAdjustTypeHint": "Ein Abzug von geschenktem Guthaben darf das aktuelle geschenkte Guthaben des Mandanten nicht übersteigen."
+  "operator.billingAdjustTypeHint": "Ein Abzug von geschenktem Guthaben darf das aktuelle geschenkte Guthaben des Mandanten nicht übersteigen.",
+  "operator.arkNav": "Volcengine Ark",
+  "operator.arkIntro": "Der Plattformschlüssel dient den Studio-Videoknoten aller Mandanten ohne eigenen Schlüssel. Mandanten können nur die unten aufgeführten Modelle verwenden, abgerechnet zum jeweiligen Modellpreis; ein Modell ohne Preis wird mit 0 berechnet und erscheint im Hinweis zu fehlenden Preisen auf der Abrechnungsseite.",
+  "operator.arkBaseUrl": "Base-URL (optional)",
+  "operator.arkBaseUrlHint": "Leer lassen für den Pekinger Ark-Endpunkt {url}. Nach einer Adressänderung muss der Schlüssel erneut eingegeben werden.",
+  "operator.arkModels": "Freigegebene Modelle",
+  "operator.arkModelsHint": "Eine Modell-ID oder Endpunkt-ID pro Zeile. Videoknoten der Mandanten können nur die hier aufgeführten Modelle wählen; bei leerer Liste dient der Plattformschlüssel keinem Modell.",
+  "operator.arkDeleteBody": "Nach dem Löschen können Mandanten ohne eigenen Schlüssel keine Videoknoten mehr ausführen; Mandanten mit eigenem Schlüssel sind nicht betroffen.",
+  "operator.arkTasksTitle": "Aufgaben unter dem Plattformschlüssel",
+  "operator.arkTasksIntro": "Videoaufgaben aller Mandanten unter dem Plattformschlüssel; Ark unterscheidet keine Mandanten. Wartende Aufgaben lassen sich abbrechen, beendete löschen; laufende können nicht abgebrochen werden.",
+  "operator.arkNoKeyForTasks": "Speichern Sie den Plattformschlüssel, um seine Aufgaben zu sehen."
 } as const;
 export default operator;

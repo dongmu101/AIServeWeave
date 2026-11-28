@@ -43,6 +43,11 @@ const (
 	UsageEndpointOllamaChat        = "ollama_chat"
 	UsageEndpointOllamaGenerate    = "ollama_generate"
 	UsageEndpointOllamaEmbeddings  = "ollama_embeddings"
+	// UsageEndpointVideoGeneration is a Studio video node's task on
+	// Volcengine Ark, billed by its completion tokens.
+	// UsageEndpointVideoGeneration 是 Studio 视频节点在火山方舟上的任务，按其 completion
+	// token 计费。
+	UsageEndpointVideoGeneration = "video_generation"
 )
 
 // UsageRecord is one billable request's token usage, ready to be pushed to

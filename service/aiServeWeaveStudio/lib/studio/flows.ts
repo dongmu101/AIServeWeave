@@ -15,7 +15,7 @@ export type ValueType = "text" | "number" | "boolean";
  * InputType 是运行时输入的类型：取值类型，加上 image 与 file——其取值是上传的文件，且没有
  * 默认值。 */
 export type InputType = ValueType | "image" | "file";
-export type NodeType = "input" | "llm" | "template" | "condition" | "image_generation" | "comfyui_template" | "output";
+export type NodeType = "input" | "llm" | "template" | "condition" | "image_generation" | "comfyui_template" | "video_generation" | "output";
 export type Branch = "true" | "false";
 export type Operator =
   | "equals"
@@ -121,6 +121,31 @@ export interface ComfyUIConfig {
   inputs: Record<string, string>;
 }
 
+/** VideoConfig is a video_generation node's config. firstFrame, lastFrame and
+ * each reference image are a single reference to one image; the remaining
+ * fields are left to the model's default when unset.
+ * VideoConfig 是 video_generation 节点的配置。首帧、尾帧与每张参考图都是对单张图片的
+ * 单个引用；其余字段未设置时取模型默认值。 */
+export interface VideoConfig {
+  model: string;
+  prompt: string;
+  first_frame?: string;
+  last_frame?: string;
+  reference_images?: string[];
+  resolution?: string;
+  ratio?: string;
+  duration?: number;
+  generate_audio?: boolean;
+  watermark?: boolean;
+}
+
+/** VIDEO_RESOLUTIONS and VIDEO_RATIOS mirror flowdef's closed lists.
+ * VIDEO_RESOLUTIONS 与 VIDEO_RATIOS 与 flowdef 的封闭列表一致。 */
+export const VIDEO_RESOLUTIONS = ["480p", "720p", "1080p", "4k"] as const;
+export const VIDEO_RATIOS = ["16:9", "4:3", "1:1", "3:4", "9:16", "21:9", "adaptive"] as const;
+export const MAX_REFERENCE_IMAGES = 10;
+export const MAX_VIDEO_DURATION = 3600;
+
 export interface FlowSummary {
   id: string;
   name: string;
@@ -188,7 +213,7 @@ export interface FlowIssue {
   code: string;
 }
 
-const NODE_TYPES: NodeType[] = ["input", "llm", "template", "condition", "image_generation", "comfyui_template", "output"];
+const NODE_TYPES: NodeType[] = ["input", "llm", "template", "condition", "image_generation", "comfyui_template", "video_generation", "output"];
 const INPUT_TYPES: InputType[] = ["text", "number", "boolean", "image", "file"];
 const STEP_STATUSES: StepStatus[] = ["succeeded", "failed", "canceled", "skipped"];
 const RUN_STATUSES: RunStatus[] = ["running", "succeeded", "failed", "canceled", "interrupted"];
@@ -413,6 +438,8 @@ const ISSUE_TEXT: Record<string, string> = {
   template_unavailable: "所选工作流模板当前不可用（未发布或对你不可见），请换一个。",
   image_generation_unavailable: "部署没有默认的图像生成，请选择一个图像模型。",
   invalid_input: "这个输入的值不符合模板的要求：文本输入不能绑定文件、文件输入只能选文件来源，或模板没有这个输入。",
+  image_reference_required: "这里只能选一张图片：图片输入，或上游节点生成的图片、尾帧。",
+  video_generation_unavailable: "还没有可用的火山方舟 Key：请租户管理员在控制台配置，或联系运维配置平台 Key。",
 };
 
 const FIELD_TEXT: Record<string, string> = {
@@ -428,6 +455,12 @@ const FIELD_TEXT: Record<string, string> = {
   "config.right": "右侧",
   "config.size": "尺寸",
   "config.inputs": "模板输入",
+  "config.first_frame": "首帧",
+  "config.last_frame": "尾帧",
+  "config.reference_images": "参考图",
+  "config.resolution": "分辨率",
+  "config.ratio": "画面比例",
+  "config.duration": "时长",
   config: "配置",
   edges: "连线",
   label: "显示名称",
@@ -451,6 +484,8 @@ function fieldPath(field: string): string {
   if (output) return `输出「${output[1]}」`;
   const templateInput = /^config\.inputs\.(.+)$/.exec(field);
   if (templateInput) return `模板输入「${templateInput[1]}」`;
+  const reference = /^config\.reference_images\[(\d+)\]$/.exec(field);
+  if (reference) return `参考图 ${Number(reference[1]) + 1}`;
   if (field.startsWith("inputs")) return "输入";
   if (field.startsWith("outputs")) return "输出";
   if (field.startsWith("config.json_fields")) return "结构化字段";
@@ -499,6 +534,12 @@ const RUN_ERROR_TEXT: Record<string, string> = {
   out_of_memory: "生成时显存不足，请换更小的尺寸或参数。",
   job_cancelled: "生成任务被取消了。",
   artifact_storage_unavailable: "产物存储暂不可用，请稍后重试。",
+  no_video_produced: "没有生成视频。",
+  video_generation_unavailable: "没有可用的火山方舟 Key，或 Key 不能使用这个模型。",
+  video_generation_failed: "视频生成失败。",
+  content_rejected: "提示词、图片或生成的视频没有通过内容审核。",
+  video_task_expired: "视频任务过期了，或生成的视频已无法下载。",
+  image_missing: "首帧、尾帧或参考图引用的图片不存在（上游节点没有产出，或已过保留期）。",
 };
 
 /** runErrorText explains why a run or a node failed.

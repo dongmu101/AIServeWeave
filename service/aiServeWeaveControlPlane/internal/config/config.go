@@ -129,6 +129,12 @@ type Config struct {
 	// TenantStorage 允许租户为自己的文件配置自有的 S3 或 WebDAV 存储。设置主密钥后开启。
 	TenantStorage TenantStorageConf `json:",optional"`
 
+	// Ark lets the platform operator and tenants save Volcengine Ark API
+	// keys for the Studio video node. It is on once a master key is set.
+	//
+	// Ark 允许平台运维与租户为 Studio 视频节点保存火山方舟 API Key。设置主密钥后开启。
+	Ark ArkConf `json:",optional"`
+
 	// Registry configures this service's client to the Registry's TokenAdmin
 	// service (STATUS.md's P01): node approval, disable/enable and
 	// maintenance. Like Fleet, it is optional — a deployment with no
@@ -1005,6 +1011,29 @@ type TenantStorageConf struct {
 // Enabled 报告租户能否配置自有存储。
 func (t TenantStorageConf) Enabled() bool { return t.MasterKey != "" || t.MasterKeyFile != "" }
 
+// ArkConf configures saved Volcengine Ark API keys.
+//
+// ArkConf 配置已保存的火山方舟 API Key。
+type ArkConf struct {
+	// MasterKeyFile holds the 32-byte key, as hex or base64, that encrypts
+	// the saved Ark keys at rest. Losing it makes every saved key
+	// unreadable; they then have to be entered again.
+	//
+	// MasterKeyFile 保存静态加密已保存方舟 Key 的 32 字节密钥（十六进制或 base64）。丢失后
+	// 所有已保存的 Key 都无法读取，需要重新填写。
+	MasterKeyFile string `json:",optional"`
+	// MasterKey is the same key given inline, usually as
+	// "${AISW_ARK_MASTER_KEY}". Set at most one of the two.
+	//
+	// MasterKey 是直接给出的同一把密钥，通常写成 "${AISW_ARK_MASTER_KEY}"。两者至多设置一个。
+	MasterKey string `json:",optional"`
+}
+
+// Enabled reports whether Ark keys may be saved.
+//
+// Enabled 报告能否保存方舟 Key。
+func (a ArkConf) Enabled() bool { return a.MasterKey != "" || a.MasterKeyFile != "" }
+
 // ComfyUIManagedConf configures forwarding STATUS.md's P2 ComfyUI Managed
 // Docker deployment subtask two's per-node lifecycle action trigger and
 // status calls.
@@ -1317,6 +1346,9 @@ func (c Config) Validate() error {
 	}
 	if c.TenantStorage.MasterKey != "" && c.TenantStorage.MasterKeyFile != "" {
 		return errors.New("config: set at most one of TenantStorage.MasterKey and TenantStorage.MasterKeyFile; generate a key with `openssl rand -base64 32`")
+	}
+	if c.Ark.MasterKey != "" && c.Ark.MasterKeyFile != "" {
+		return errors.New("config: set at most one of Ark.MasterKey and Ark.MasterKeyFile; generate a key with `openssl rand -base64 32`")
 	}
 	if c.TenantStorage.AllowPrivateEndpoints && !c.TenantStorage.Enabled() {
 		return errors.New("config: TenantStorage.AllowPrivateEndpoints needs TenantStorage.MasterKey or TenantStorage.MasterKeyFile")

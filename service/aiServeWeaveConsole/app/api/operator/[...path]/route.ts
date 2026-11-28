@@ -1,4 +1,5 @@
 import { apiDocBodyLimit } from "@/lib/console/api-docs";
+import { isArkPath, sanitizeArkError } from "@/lib/console/ark";
 import { MAX_ROUTE_DOCUMENT_BYTES, routeBodyLimit } from "@/lib/console/model-routes";
 import { modelAccessBodyLimit } from "@/lib/console/model-access";
 import { isTrustedWrite } from "@/lib/console/request-origin";
@@ -22,6 +23,12 @@ import { clearOperatorSession, readOperatorSession } from "@/lib/server/operator
 interface RouteContext {
   params: Promise<{ path: string[] }>;
 }
+
+/** ARK_CALL_TIMEOUT_MS bounds an Ark call (key check, task list or cancel,
+ * 20 seconds each upstream).
+ *
+ * ARK_CALL_TIMEOUT_MS 限定一次方舟调用（检查 Key、任务列表或取消，上游各 20 秒）。 */
+const ARK_CALL_TIMEOUT_MS = 30_000;
 
 /** GET forwards a read.
  *
@@ -111,12 +118,18 @@ async function forward(
     body = raw.trim() === "" ? "{}" : raw;
   }
 
+  // The Ark endpoints go to Ark: a key save checks the key first, a task list
+  // or cancel asks Ark. Their 400 and 503 carry a code the page needs.
+  // 方舟端点要访问方舟：保存 Key 先检查，任务列表或取消要询问方舟。它们的 400 与 503 带有页面
+  // 需要的 code。
+  const isArk = isArkPath("operator", upstream.path);
   const result = await callControlPlane({
     method: request.method,
     path: upstream.path,
     search: upstream.search,
     token: session.token,
     body,
+    timeoutMs: isArk ? ARK_CALL_TIMEOUT_MS : undefined,
     maxResponseBytes:
       upstream.path === "/operator/v1/agent-enrollment"
         ? 128 * 1024
@@ -142,6 +155,9 @@ async function forward(
   }
   if (result.status === 204) {
     return jsonResponse(204, null);
+  }
+  if ((result.status === 400 || result.status === 503) && isArk) {
+    return jsonResponse(result.status, { error: "upstream_error", ...sanitizeArkError(result.text) });
   }
   if (result.status >= 400) {
     return errorResponse(result.status, "upstream_error");

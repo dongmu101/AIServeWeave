@@ -26,11 +26,17 @@ export interface ArtifactItem {
 }
 
 /** ArtifactShape is how an artifact output is shown: "image" is one artifact
- * id of a picture, "file" one artifact id of a file of any kind (its name is
- * looked up in the run's input files), "list" a JSON array of artifacts.
- * ArtifactShape 是产物输出的展示形式："image" 是一张图片的一个产物 id，"file" 是任意文件的
- * 一个产物 id（其文件名到运行的输入文件里查），"list" 是产物组成的 JSON 数组。 */
-export type ArtifactShape = "image" | "file" | "list";
+ * id of a picture, "video" one of a video, "file" one artifact id of a file
+ * of any kind (its name is looked up in the run's input files), "list" a
+ * JSON array of artifacts.
+ * ArtifactShape 是产物输出的展示形式："image" 是一张图片的一个产物 id，"video" 是一段视频的
+ * 一个产物 id，"file" 是任意文件的一个产物 id（其文件名到运行的输入文件里查），"list" 是产物
+ * 组成的 JSON 数组。 */
+export type ArtifactShape = "image" | "video" | "file" | "list";
+
+/** FileShape is an ArtifactShape that names exactly one file.
+ * FileShape 是恰好指向一个文件的 ArtifactShape。 */
+export type FileShape = Exclude<ArtifactShape, "list">;
 
 export const RUN_ID_PATTERN = /^frn_[A-Za-z0-9_-]{1,36}$/;
 export const ARTIFACT_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
@@ -43,6 +49,7 @@ const KINDS: ArtifactKind[] = ["image", "video", "file"];
 export function artifactFieldShape(type: NodeType | string, field: string): ArtifactShape | null {
   if (type === "image_generation") return field === "image" ? "image" : null;
   if (type === "comfyui_template") return field === "image" ? "image" : field === "artifacts" ? "list" : null;
+  if (type === "video_generation") return field === "video" ? "video" : field === "last_frame" ? "image" : null;
   return null;
 }
 
@@ -63,15 +70,26 @@ export function refArtifactShape(def: FlowDefinition, ref: TemplateRef): Artifac
 }
 
 /** refFileShape is the same for a reference that names exactly one file: an
- * image or file input, or the image of a node that makes one. Only such a
- * reference may be the whole of a ComfyUI template's file input; a node's
- * `artifacts` list may not.
+ * image or file input, or a node field that names one file (an image, a
+ * video, a last frame). Only such a reference may be the whole of a ComfyUI
+ * template's file input; a node's `artifacts` list may not.
  *
- * refFileShape 对恰好指向一个文件的引用给出同样的结果：image 或 file 输入，或产出图片的节点的
- * image。只有这样的引用才能作为 ComfyUI 模板文件型输入的全部内容；节点的 artifacts 列表不行。 */
-export function refFileShape(def: FlowDefinition, ref: TemplateRef): "image" | "file" | null {
+ * refFileShape 对恰好指向一个文件的引用给出同样的结果：image 或 file 输入，或指向单个文件的
+ * 节点字段（图片、视频、尾帧）。只有这样的引用才能作为 ComfyUI 模板文件型输入的全部内容；节点
+ * 的 artifacts 列表不行。 */
+export function refFileShape(def: FlowDefinition, ref: TemplateRef): FileShape | null {
   const shape = refArtifactShape(def, ref);
   return shape === "list" ? null : shape;
+}
+
+/** refIsImage reports whether ref names exactly one image: an image input,
+ * or a node's image or last_frame. Only such a reference may fill a video
+ * node's image slot.
+ *
+ * refIsImage 报告 ref 是否恰好指向一张图片：image 输入，或节点的 image 或 last_frame。只有
+ * 这样的引用才能填入视频节点的图片槽位。 */
+export function refIsImage(def: FlowDefinition, ref: TemplateRef): boolean {
+  return refArtifactShape(def, ref) === "image";
 }
 
 /** artifactOutputs maps each result field whose ref is the sole reference to
@@ -96,10 +114,18 @@ export function artifactOutputs(def: FlowDefinition): Record<string, ArtifactSha
  *
  * stepFileInputs 把 comfyui_template 节点中绑定到恰好一个文件的每个输入映射到该文件的展示
  * 形式，节点详情因此能在输入原本只是产物 id 的地方展示文件。 */
-export function stepFileInputs(def: FlowDefinition, nodeId: string): Record<string, "image" | "file"> {
+export function stepFileInputs(def: FlowDefinition, nodeId: string): Record<string, FileShape> {
   const node = def.nodes.find((n) => n.id === nodeId);
+  if (node?.type === "video_generation") {
+    // A video node's image slots are recorded under these step input keys.
+    // 视频节点的图片槽位以这些步骤输入键记录。
+    const out: Record<string, FileShape> = { first_frame: "image", last_frame: "image" };
+    const refs = Array.isArray(node.config?.reference_images) ? node.config.reference_images : [];
+    refs.forEach((_, i) => (out[`reference_images.${i}`] = "image"));
+    return out;
+  }
   const inputs = node?.type === "comfyui_template" && typeof node.config?.inputs === "object" && node.config.inputs !== null ? node.config.inputs : {};
-  const out: Record<string, "image" | "file"> = {};
+  const out: Record<string, FileShape> = {};
   for (const [name, value] of Object.entries(inputs)) {
     if (typeof value !== "string") continue;
     const { refs, sole } = templateRefs(value);

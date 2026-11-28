@@ -1,3 +1,13 @@
+## 火山方舟 Key 与视频任务（2026-11-28）
+
+代码、lint、typecheck、486 项单元测试与生产构建已通过，**未与真实控制面和火山方舟联调，也未在浏览器里走通**。
+
+- 设置页「火山方舟」卡片（`components/console/ark-credential-panel.tsx`，owner/admin）：Key 只写、只显示末四位；改 base_url 必须重填 Key；租户不能设置 base_url；模型列表每行一个；没有自己的 Key 时提示「当前使用平台 Key」或「没有可用 Key」。
+- `/console/video-tasks`（owner/admin 可见入口）：只在租户有自己的 Key 时列出任务，可按状态筛选、分页；排队中的可以取消，已结束的可以删除记录，执行中的不能操作。
+- 运维 `/operator/ark`：平台 Key、base_url 与开放模型，以及平台 Key 下的任务列表（方舟不区分租户）。
+- 契约在 `lib/console/ark.ts`（含 `ark.test.ts`）。方舟端点是继租户存储之后第二条把清洗过的 `code`/`reason` 转交浏览器的路径，400 与 503 都转交；`api-client` 读取错误细节的条件因此扩到 503。保存时控制面先检查 Key，服务端超时 30 秒、浏览器 35 秒，写操作不重试。
+- 8 种语言的文案已补齐。
+
 ## 租户自有对象存储（2026-11-27）
 
 配合控制面的 `/admin/v1/storage`（设计见 `.scratch/tenant-object-storage/spec.md`）：`/console/settings` 新增「对象存储」卡片，owner/admin 可为本租户配置 S3 或 WebDAV，配置后工作流产物与 Studio 文件写入其中；其他角色只看到说明，不发请求。

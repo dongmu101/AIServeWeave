@@ -21,7 +21,7 @@ import {
   type Run,
   type RunPage,
 } from "@/lib/studio/flows";
-import { parseImageModels, parseWorkflowTemplates, type ImageModelCatalog, type WorkflowTemplate } from "@/lib/studio/flow-catalog";
+import { parseImageModels, parseVideoModels, parseWorkflowTemplates, type ImageModelCatalog, type VideoModelCatalog, type WorkflowTemplate } from "@/lib/studio/flow-catalog";
 import type { SessionPayload } from "@/lib/studio/session-payload";
 import { readSession } from "@/lib/server/session";
 import { callGateway } from "@/lib/server/upstream";
@@ -165,6 +165,13 @@ export function loadRuns(session: SessionPayload, flowId: string, returnTo: stri
  * loadImageModels 读取编排的图像生成节点可用的图像模型。 */
 export function loadImageModels(session: SessionPayload, returnTo: string): Promise<Load<ImageModelCatalog>> {
   return loadStudio(session, "/studio/v1/image-models", returnTo, parseImageModels);
+}
+
+/** loadVideoModels reads the Ark key's source and the models a flow's video
+ * node may use.
+ * loadVideoModels 读取编排视频节点可用的火山方舟 Key 来源与模型。 */
+export function loadVideoModels(session: SessionPayload, returnTo: string): Promise<Load<VideoModelCatalog>> {
+  return loadStudio(session, "/studio/v1/video-models", returnTo, parseVideoModels);
 }
 
 /** loadWorkflowTemplates reads the published workflow templates the tenant

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 
@@ -64,7 +65,7 @@ func (r *run) execute(parent context.Context) Result {
 	r.ctx, r.cancel = context.WithCancelCause(parent)
 	defer r.cancel(nil)
 	defer close(r.done)
-	after(r.clock, r.ctx, r.p.cfg.RunTimeout, func() { r.cancel(errRunTimeout) })
+	after(r.clock, r.ctx, r.p.runTimeout, func() { r.cancel(errRunTimeout) })
 
 	r.send(Event{Type: EventRunStarted})
 	for i, n := range r.p.nodes {
@@ -122,7 +123,8 @@ func after(clock runtime.Clock, ctx context.Context, d time.Duration, fire func(
 }
 
 // start runs a node that was decided to run. Every node but those that make a
-// call — llm, image_generation and comfyui_template — finishes on the spot.
+// call — llm, image_generation, comfyui_template and video_generation —
+// finishes on the spot.
 func (r *run) start(n *planNode) {
 	r.send(Event{Type: EventNodeStarted, Node: n.ID})
 	step := Step{Node: n.ID, Type: n.Type, StartedAt: r.clock.Now()}
@@ -174,6 +176,8 @@ func (r *run) start(n *planNode) {
 		r.startImage(n, step)
 	case flowdef.NodeComfyUI:
 		r.startTemplate(n, step)
+	case flowdef.NodeVideo:
+		r.startVideo(n, step)
 	}
 }
 
@@ -255,12 +259,78 @@ func (r *run) startTemplate(n *planNode, step Step) {
 	})
 }
 
+func (r *run) startVideo(n *planNode, step Step) {
+	prompt, ok := r.render(n.tmpl["prompt"])
+	if !ok {
+		r.finish(n, step, NodeFailed, CodeValueTooLarge)
+		return
+	}
+	// The image slots are single references to images of the run (flowdef
+	// checked that), so what they render to is an artifact id or "".
+	// 图片槽位是对本次运行中图片的单个引用（flowdef 已检查），因此渲染结果是产物 id 或空。
+	image := func(key string) (string, bool) {
+		v, ok := r.render(n.tmpl[key])
+		return strings.TrimSpace(v), ok
+	}
+	call := VideoCall{
+		Model:         n.video.Model,
+		Prompt:        prompt,
+		Resolution:    n.video.Resolution,
+		Ratio:         n.video.Ratio,
+		Duration:      n.video.Duration,
+		GenerateAudio: n.video.GenerateAudio,
+		Watermark:     n.video.Watermark,
+	}
+	step.Model = call.Model
+	step.Inputs = map[string]string{"prompt": prompt}
+	var okF, okL bool
+	if call.FirstFrame, okF = image("first_frame"); call.FirstFrame != "" {
+		step.Inputs["first_frame"] = call.FirstFrame
+	}
+	if call.LastFrame, okL = image("last_frame"); call.LastFrame != "" {
+		step.Inputs["last_frame"] = call.LastFrame
+	}
+	if !okF || !okL {
+		r.finish(n, step, NodeFailed, CodeValueTooLarge)
+		return
+	}
+	for i := range n.video.ReferenceImages {
+		key := videoReferenceField(i)
+		v, ok := image(key)
+		if !ok {
+			r.finish(n, step, NodeFailed, CodeValueTooLarge)
+			return
+		}
+		if v != "" {
+			call.ReferenceImages = append(call.ReferenceImages, v)
+			step.Inputs[key] = v
+		}
+	}
+	for k, v := range map[string]string{"resolution": call.Resolution, "ratio": call.Ratio} {
+		if v != "" {
+			step.Inputs[k] = v
+		}
+	}
+	if call.Duration != 0 {
+		step.Inputs["duration"] = strconv.Itoa(call.Duration)
+	}
+	r.call(n, step, func(ctx context.Context, m *message) error {
+		var err error
+		m.media, err = r.p.cfg.Dispatcher.GenerateVideo(ctx, call)
+		return err
+	})
+}
+
 // call runs do on its own goroutine under the node timeout, as one of the
 // run's calls in flight, and hands its outcome to the coordinator. do fills
 // in the reply on the message it is given.
 func (r *run) call(n *planNode, step Step, do func(ctx context.Context, m *message) error) {
 	ctx, cancel := context.WithCancelCause(r.ctx)
-	after(r.clock, ctx, r.p.cfg.NodeTimeout, func() { cancel(errNodeTimeout) })
+	timeout := r.p.cfg.NodeTimeout
+	if n.Type == flowdef.NodeVideo {
+		timeout = r.p.cfg.VideoNodeTimeout
+	}
+	after(r.clock, ctx, timeout, func() { cancel(errNodeTimeout) })
 	r.running++
 	go func() {
 		defer cancel(nil)
@@ -276,7 +346,8 @@ func (r *run) call(n *planNode, step Step, do func(ctx context.Context, m *messa
 func (r *run) finishCall(m message) {
 	n, step := m.node, m.step
 	step.Usage = m.reply.Usage
-	r.usage.add(m.reply.Usage)
+	step.Usage.add(m.media.Usage)
+	r.usage.add(step.Usage)
 	switch {
 	case m.err == nil:
 		outputs, code := r.callOutputs(n, m)
@@ -323,6 +394,21 @@ func (r *run) callOutputs(n *planNode, m message) (map[string]string, string) {
 			return nil, CodeNoImage
 		}
 		return map[string]string{flowdef.FieldImage: image}, ""
+	case flowdef.NodeVideo:
+		var video, lastFrame string
+		for _, a := range m.media.Artifacts {
+			switch {
+			case a.ID == "":
+			case a.Kind == ArtifactVideo && video == "":
+				video = a.ID
+			case a.Kind == ArtifactImage && lastFrame == "":
+				lastFrame = a.ID
+			}
+		}
+		if video == "" {
+			return nil, CodeNoVideo
+		}
+		return map[string]string{flowdef.FieldVideo: video, flowdef.FieldLastFrame: lastFrame}, ""
 	default: // flowdef.NodeComfyUI
 		list := m.media.Artifacts
 		if list == nil {

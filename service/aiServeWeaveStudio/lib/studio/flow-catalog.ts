@@ -19,6 +19,19 @@ export interface ImageModelCatalog {
   defaultAvailable: boolean;
 }
 
+/** VideoModelCatalog is GET /studio/v1/video-models: whether the tenant has
+ * a Volcengine Ark key (its own or the platform's), and the models to pick
+ * from. freeForm means the tenant's own key, with which any model id may be
+ * typed.
+ * VideoModelCatalog 是 GET /studio/v1/video-models：租户是否有火山方舟 Key（自己的或平台的），
+ * 以及可选的模型。freeForm 表示使用租户自己的 Key，此时可以填写任意模型 id。 */
+export interface VideoModelCatalog {
+  models: StudioModel[];
+  available: boolean;
+  source: "tenant" | "platform" | "";
+  freeForm: boolean;
+}
+
 export type TemplateInputType = "string" | "integer" | "number" | "boolean" | "file";
 
 export interface TemplateInput {
@@ -52,6 +65,7 @@ export interface WorkflowTemplate {
 export interface FlowCatalog {
   imageModels: ImageModelCatalog | null;
   templates: WorkflowTemplate[] | null;
+  videoModels: VideoModelCatalog | null;
 }
 
 const INPUT_TYPES: TemplateInputType[] = ["string", "integer", "number", "boolean", "file"];
@@ -92,6 +106,19 @@ export function parseImageModels(value: unknown): ImageModelCatalog {
   const flag = source.default_available;
   if (flag !== undefined && flag !== null && typeof flag !== "boolean") fail();
   return { models: parseModels(source), defaultAvailable: flag === true };
+}
+
+/** parseVideoModels reads GET /studio/v1/video-models.
+ * parseVideoModels 读取 GET /studio/v1/video-models。 */
+export function parseVideoModels(value: unknown): VideoModelCatalog {
+  const source = record(value);
+  for (const key of ["available", "free_form"]) {
+    const flag = source[key];
+    if (flag !== undefined && flag !== null && typeof flag !== "boolean") fail();
+  }
+  const kind = text(source, "source");
+  if (kind !== "" && kind !== "tenant" && kind !== "platform") fail();
+  return { models: parseModels(source), available: source.available === true, source: kind, freeForm: source.free_form === true };
 }
 
 function parseInput(value: unknown): TemplateInput {

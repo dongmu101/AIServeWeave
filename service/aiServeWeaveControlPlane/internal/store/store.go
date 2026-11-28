@@ -428,6 +428,28 @@ type NodeProviders interface {
 	ListNodeProviderVersions(ctx context.Context) ([]model.NodeProviderVersion, error)
 }
 
+// ArkCredentials persists Volcengine Ark keys, at most one row per scope (a
+// tenant id, or model.PlatformScope).
+//
+// ArkCredentials 持久化火山方舟 Key，每个 scope（租户 id 或 model.PlatformScope）至多一行。
+type ArkCredentials interface {
+	// GetArkCredential reads scope's row; ErrNotFound when it has none.
+	//
+	// GetArkCredential 读取 scope 的行；没有时返回 ErrNotFound。
+	GetArkCredential(ctx context.Context, scope string) (model.ArkCredential, error)
+	// PutArkCredential inserts or replaces row, keeping an existing row's
+	// CreatedAt and setting row.Version to one more than the previous
+	// version (1 for a new row).
+	//
+	// PutArkCredential 插入或替换 row：已有行的 CreatedAt 保持不变，row.Version 设为旧版本
+	// 加一（新行为 1）。
+	PutArkCredential(ctx context.Context, row *model.ArkCredential) error
+	// DeleteArkCredential removes scope's row; ErrNotFound when it has none.
+	//
+	// DeleteArkCredential 删除 scope 的行；没有时返回 ErrNotFound。
+	DeleteArkCredential(ctx context.Context, scope string) error
+}
+
 // MaxRetainedTenantStorage bounds one page of ListRetainedTenantStorage.
 // MaxRetainedTenantStorage 限定 ListRetainedTenantStorage 的单页大小。
 const MaxRetainedTenantStorage = 500
@@ -1226,6 +1248,7 @@ type Store interface {
 	TenantNodes
 	NodeProviders
 	TenantStorages
+	ArkCredentials
 	Files
 	AgentInstallCodes
 	Users

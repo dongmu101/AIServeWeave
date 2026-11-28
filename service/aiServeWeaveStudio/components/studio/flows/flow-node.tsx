@@ -6,6 +6,7 @@ import {
   CheckIcon,
   CircleDashedIcon,
   CircleSlashIcon,
+  ClapperboardIcon,
   FlagIcon,
   GitBranchIcon,
   ImageIcon,
@@ -19,7 +20,7 @@ import {
 } from "lucide-react";
 import { cn } from "cn";
 
-import { comfyConfig, conditionConfig, imageConfig, llmConfig, OPERATORS, templateConfig } from "@/lib/studio/flow-graph";
+import { comfyConfig, conditionConfig, imageConfig, llmConfig, OPERATORS, templateConfig, videoConfig } from "@/lib/studio/flow-graph";
 import type { NodeState } from "@/lib/studio/flow-run";
 import type { FlowDefinition, FlowNode as Definition, NodeType } from "@/lib/studio/flows";
 
@@ -50,6 +51,7 @@ export const NODE_KIND: Record<NodeType, { label: string; icon: React.ReactEleme
   condition: { label: "条件", icon: <GitBranchIcon />, tint: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" },
   image_generation: { label: "图像生成", icon: <ImageIcon />, tint: "bg-pink-500/10 text-pink-700 dark:text-pink-300" },
   comfyui_template: { label: "ComfyUI 模板", icon: <WorkflowIcon />, tint: "bg-cyan-500/10 text-cyan-700 dark:text-cyan-300" },
+  video_generation: { label: "视频生成", icon: <ClapperboardIcon />, tint: "bg-orange-500/10 text-orange-700 dark:text-orange-300" },
   output: { label: "输出", icon: <FlagIcon />, tint: "bg-rose-500/10 text-rose-700 dark:text-rose-300" },
 };
 
@@ -81,6 +83,11 @@ export function nodeSummary(node: Definition, definition: FlowDefinition): strin
     }
     case "comfyui_template":
       return comfyConfig(node).template || "未选择模板";
+    case "video_generation": {
+      const c = videoConfig(node);
+      const extras = [c.first_frame || (c.reference_images?.length ?? 0) > 0 ? "图生视频" : "", c.resolution ?? "", c.duration && c.duration > 0 ? `${c.duration}s` : ""].filter(Boolean);
+      return [c.model || "未选择模型", ...extras].join(" · ");
+    }
     case "condition": {
       const c = conditionConfig(node);
       const op = OPERATORS.find((o) => o.value === c.op);

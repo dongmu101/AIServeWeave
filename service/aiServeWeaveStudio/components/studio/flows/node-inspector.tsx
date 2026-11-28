@@ -8,7 +8,7 @@ import { NODE_KIND } from "@/components/studio/flows/flow-node";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import type { StudioModel } from "@/lib/studio/contract";
-import type { FlowCatalog, ImageModelCatalog, TemplateInput, TemplateInputType, WorkflowTemplate } from "@/lib/studio/flow-catalog";
+import type { FlowCatalog, ImageModelCatalog, TemplateInput, TemplateInputType, VideoModelCatalog, WorkflowTemplate } from "@/lib/studio/flow-catalog";
 import { artifactOutputs } from "@/lib/studio/artifacts";
 import {
   comfyConfig,
@@ -22,10 +22,25 @@ import {
   setConfig,
   templateConfig,
   updateNode,
+  videoConfig,
   type Reference,
 } from "@/lib/studio/flow-graph";
 import { templateRefs } from "@/lib/studio/flow-template";
-import { isFileInput, issueText, type FlowDefinition, type FlowInput, type FlowIssue, type FlowOutput, type InputType, type JSONField, type ValueType } from "@/lib/studio/flows";
+import {
+  isFileInput,
+  issueText,
+  MAX_REFERENCE_IMAGES,
+  MAX_VIDEO_DURATION,
+  VIDEO_RATIOS,
+  VIDEO_RESOLUTIONS,
+  type FlowDefinition,
+  type FlowInput,
+  type FlowIssue,
+  type FlowOutput,
+  type InputType,
+  type JSONField,
+  type ValueType,
+} from "@/lib/studio/flows";
 
 /**
  * NodeInspector edits the selected node: its display name and its config,
@@ -74,6 +89,7 @@ export function NodeInspector({
   // 文件型输入的全部内容；其他变量菜单都不列出它们。
   const references = referencesFor(def, node.id, node.type === "output" ? "output" : "text");
   const fileReferences = node.type === "comfyui_template" ? referencesFor(def, node.id, "file") : [];
+  const imageReferences = node.type === "video_generation" ? referencesFor(def, node.id, "image") : [];
   const config = (next: Record<string, unknown>) => onChange(setConfig(def, node.id, next));
   const invalid = (field: string) => issues.some((issue) => issue.field === field || issue.field.startsWith(`${field}.`));
 
@@ -125,6 +141,10 @@ export function NodeInspector({
 
       {node.type === "image_generation" ? (
         <ImageForm config={imageConfig(node)} catalog={catalog.imageModels} references={references} invalid={invalid} onChange={config} />
+      ) : null}
+
+      {node.type === "video_generation" ? (
+        <VideoForm config={videoConfig(node)} catalog={catalog.videoModels} references={references} imageReferences={imageReferences} invalid={invalid} onChange={config} />
       ) : null}
 
       {node.type === "comfyui_template" ? (
@@ -391,6 +411,200 @@ function ImageForm({
         产出的图片是 {"{{节点ID.image}}"}：可以在输出节点的结果字段里整个引用，或整个作为后续 ComfyUI 模板节点的文件型输入；不能放进提示词、模板或条件。
       </p>
     </>
+  );
+}
+
+const RATIO_LABEL: Record<string, string> = { adaptive: "自适应" };
+
+function VideoForm({
+  config,
+  catalog,
+  references,
+  imageReferences,
+  invalid,
+  onChange,
+}: {
+  config: ReturnType<typeof videoConfig>;
+  catalog: VideoModelCatalog | null;
+  references: Reference[];
+  /** the images a frame or reference image may be: image inputs of the flow
+   * and the images upstream nodes make
+   * 首帧、尾帧与参考图可选的图片：编排的图片输入，以及上游节点产出的图片 */
+  imageReferences: Reference[];
+  invalid: (field: string) => boolean;
+  onChange: (config: Record<string, unknown>) => void;
+}) {
+  const set = (patch: Record<string, unknown>) => {
+    const next: Record<string, unknown> = { ...config, ...patch };
+    for (const key of Object.keys(next)) if (next[key] === undefined) delete next[key];
+    onChange(next);
+  };
+  const freeForm = catalog?.freeForm ?? false;
+  const known = catalog === null || freeForm || catalog.models.some((m) => m.id === config.model);
+  const gone = config.model !== "" && !known;
+  const unavailable = catalog !== null && !catalog.available;
+  const refs = config.reference_images ?? [];
+  const setRefs = (next: string[]) => set({ reference_images: next.length > 0 ? next : undefined });
+  const durationBad = config.duration !== undefined && config.duration !== -1 && (config.duration < 1 || config.duration > MAX_VIDEO_DURATION);
+  return (
+    <>
+      {unavailable ? (
+        <p className="flex items-start gap-1.5 rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+          <TriangleAlertIcon className="mt-px size-3.5 shrink-0" />
+          还没有可用的火山方舟 Key：请租户管理员在 Console 设置里填写自己的 Key，或联系平台运维配置平台 Key。
+        </p>
+      ) : null}
+      <Field label="视频模型" hint={freeForm ? "使用你们自己的火山方舟 Key，可以填写任意模型或接入点 ID" : undefined}>
+        {freeForm || catalog === null ? (
+          <>
+            <input className={cn(fieldClass, "font-mono")} value={config.model} list={freeForm ? "video-model-options" : undefined} placeholder="例如：doubao-seedance-1-0-pro-250528"
+              aria-invalid={invalid("config.model") || undefined} onChange={(event) => set({ model: event.target.value.trim() })} />
+            {freeForm ? (
+              <datalist id="video-model-options">
+                {catalog?.models.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+              </datalist>
+            ) : null}
+          </>
+        ) : (
+          <select className={fieldClass} value={config.model} aria-invalid={invalid("config.model") || gone || config.model === "" || undefined}
+            onChange={(event) => set({ model: event.target.value })}>
+            {config.model === "" ? <option value="">请选择模型</option> : null}
+            {gone ? <option value={config.model}>{config.model}（当前不可用）</option> : null}
+            {catalog.models.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.name}
+              </option>
+            ))}
+          </select>
+        )}
+      </Field>
+      {gone ? (
+        <p className="flex items-center gap-1.5 text-xs text-amber-600">
+          <TriangleAlertIcon className="size-3.5" />
+          平台没有开放这个视频模型，运行前请换一个。
+        </p>
+      ) : null}
+      <TemplateField label="提示词" rows={6} value={config.prompt} references={references} invalid={invalid("config.prompt")}
+        placeholder="例如：镜头缓缓推近，{{inputs.subject}} 在海边奔跑" onChange={(prompt) => set({ prompt })} />
+
+      <div className="grid gap-3 rounded-lg border p-3">
+        <div>
+          <p className="text-xs font-medium text-muted-foreground">图片（可选）</p>
+          <p className="mt-0.5 text-xs text-muted-foreground/80">设置首帧即图生视频；首帧与尾帧一起使用可以控制起止画面。参考图与首尾帧是否能同时使用取决于模型。</p>
+        </div>
+        <ImageSource label="首帧" value={config.first_frame ?? ""} sources={imageReferences} invalid={invalid("config.first_frame")}
+          onChange={(value) => set({ first_frame: value === "" ? undefined : value })} />
+        <ImageSource label="尾帧" value={config.last_frame ?? ""} sources={imageReferences} invalid={invalid("config.last_frame")}
+          onChange={(value) => set({ last_frame: value === "" ? undefined : value })} />
+        {refs.map((value, i) => (
+          <div key={i} className="grid grid-cols-[1fr_auto] items-end gap-2">
+            <ImageSource label={`参考图 ${i + 1}`} value={value} sources={imageReferences} invalid={invalid(`config.reference_images[${i}]`)} required
+              onChange={(next) => setRefs(refs.map((r, j) => (j === i ? next : r)))} />
+            <Button variant="ghost" size="icon-sm" aria-label={`删除参考图 ${i + 1}`} onClick={() => setRefs(refs.filter((_, j) => j !== i))}>
+              <Trash2Icon />
+            </Button>
+          </div>
+        ))}
+        <Button variant="outline" size="sm" className="justify-self-start" disabled={refs.length >= MAX_REFERENCE_IMAGES} onClick={() => setRefs([...refs, ""])}>
+          <PlusIcon />
+          添加参考图
+        </Button>
+        {imageReferences.length === 0 ? (
+          <p className="text-xs text-muted-foreground">还没有可选的图片：在输入节点添加一个图片输入，或让图像生成、ComfyUI 模板、视频生成节点连到这个节点之前。</p>
+        ) : null}
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="分辨率（可选）">
+          <select className={fieldClass} value={config.resolution ?? ""} aria-invalid={invalid("config.resolution") || undefined}
+            onChange={(event) => set({ resolution: event.target.value === "" ? undefined : event.target.value })}>
+            <option value="">模型默认</option>
+            {VIDEO_RESOLUTIONS.map((r) => <option key={r} value={r}>{r}</option>)}
+          </select>
+        </Field>
+        <Field label="宽高比（可选）">
+          <select className={fieldClass} value={config.ratio ?? ""} aria-invalid={invalid("config.ratio") || undefined}
+            onChange={(event) => set({ ratio: event.target.value === "" ? undefined : event.target.value })}>
+            <option value="">模型默认</option>
+            {VIDEO_RATIOS.map((r) => <option key={r} value={r}>{RATIO_LABEL[r] ?? r}</option>)}
+          </select>
+        </Field>
+      </div>
+      <Field label="时长（可选）" hint="单位为秒；-1 表示由模型决定；留空使用模型默认">
+        <input className={fieldClass} type="number" min={-1} max={MAX_VIDEO_DURATION} step={1} value={config.duration ?? ""} aria-invalid={invalid("config.duration") || durationBad || undefined}
+          onChange={(event) => {
+            const value = numberOrUndefined(event.target.value);
+            set({ duration: value === undefined || value === 0 || !Number.isInteger(value) ? undefined : value });
+          }} />
+      </Field>
+      <div className="grid gap-2">
+        <TriState label="生成音频" value={config.generate_audio} onChange={(generate_audio) => set({ generate_audio })} />
+        <TriState label="添加水印" value={config.watermark} onChange={(watermark) => set({ watermark })} />
+      </div>
+      <p className="text-xs text-muted-foreground">
+        产出的视频是 {"{{节点ID.video}}"}，最后一帧是 {"{{节点ID.last_frame}}"}（模型返回时才有）。视频可以在输出节点的结果字段里整个引用；最后一帧还可以作为后续视频节点的首帧或 ComfyUI
+        模板节点的文件型输入。生成通常需要几分钟，节点最长等待 60 分钟。
+      </p>
+    </>
+  );
+}
+
+/** TriState sets an optional boolean: unset leaves the model's default.
+ * TriState 设置一个可选的布尔值：不设置则使用模型默认。 */
+function TriState({ label, value, onChange }: { label: string; value: boolean | undefined; onChange: (value: boolean | undefined) => void }) {
+  return (
+    <label className="flex items-center justify-between gap-2 text-sm">
+      <span>{label}</span>
+      <select className={cn(fieldClass, "w-32")} value={value === undefined ? "" : value ? "on" : "off"} aria-label={label}
+        onChange={(event) => onChange(event.target.value === "" ? undefined : event.target.value === "on")}>
+        <option value="">模型默认</option>
+        <option value="on">开启</option>
+        <option value="off">关闭</option>
+      </select>
+    </label>
+  );
+}
+
+/** ImageSource picks the one image a video node's frame or reference image
+ * is, the way FileSource does for a template's file input.
+ *
+ * ImageSource 选择视频节点的首帧、尾帧或参考图所用的那一张图片，做法同模板文件型输入的
+ * FileSource。 */
+function ImageSource({ label, value, sources, invalid, required, onChange }: {
+  label: string;
+  value: string;
+  sources: Reference[];
+  invalid: boolean;
+  required?: boolean;
+  onChange: (value: string) => void;
+}) {
+  const { refs, sole } = templateRefs(value);
+  const canonical = sole ? `{{${refs[0].scope}.${refs[0].field}}}` : "";
+  const known = sources.some((source) => source.ref === canonical);
+  const chosen = known ? canonical : value;
+  const stale = value.trim() !== "" && !known;
+  const bad = invalid || stale || (required === true && value.trim() === "");
+  return (
+    <div className="grid gap-1.5">
+      <label className="grid gap-1.5">
+        <span className="text-xs font-medium text-muted-foreground">{label}</span>
+        <select className={fieldClass} value={chosen} aria-invalid={bad || undefined} aria-label={`${label}的图片来源`} onChange={(event) => onChange(event.target.value)}>
+          <option value="">{required ? "请选择图片来源" : "不设置"}</option>
+          {stale ? <option value={value}>{value}（不是可用的图片来源）</option> : null}
+          {sources.map((source) => (
+            <option key={source.ref} value={source.ref}>
+              {source.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      {stale ? (
+        <p className="flex items-center gap-1.5 text-xs text-amber-600">
+          <TriangleAlertIcon className="size-3.5 shrink-0" />
+          这里只能选一张图片，请重新选择。
+        </p>
+      ) : null}
+    </div>
   );
 }
 

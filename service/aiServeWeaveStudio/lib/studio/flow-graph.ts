@@ -1,4 +1,4 @@
-import { refArtifactShape, refFileShape } from "./artifacts.ts";
+import { refArtifactShape, refFileShape, refIsImage } from "./artifacts.ts";
 import type { FlowCatalog } from "./flow-catalog.ts";
 import { templateRefs } from "./flow-template.ts";
 import type {
@@ -15,8 +15,9 @@ import type {
   NodeType,
   Operator,
   TemplateConfig,
+  VideoConfig,
 } from "./flows.ts";
-import { isFileInput } from "./flows.ts";
+import { isFileInput, VIDEO_RATIOS, VIDEO_RESOLUTIONS } from "./flows.ts";
 
 /**
  * The editor's model of a flow: pure functions over a FlowDefinition that the
@@ -44,7 +45,7 @@ export interface CanvasEdge {
  * nodes come with every flow and cannot be added or removed.
  *
  * EditableTypes 是用户可以添加的节点类型；输入与输出节点随每个编排自带，不能添加或删除。 */
-export const EDITABLE_TYPES: NodeType[] = ["llm", "template", "condition", "image_generation", "comfyui_template"];
+export const EDITABLE_TYPES: NodeType[] = ["llm", "template", "condition", "image_generation", "comfyui_template", "video_generation"];
 
 /** MAX_IMAGE_SIDE bounds each side of an image node's size, as in flowdef.
  * MAX_IMAGE_SIDE 是图像节点尺寸每一边的上限，与 flowdef 一致。 */
@@ -136,15 +137,33 @@ export function comfyConfig(node: FlowNode): ComfyUIConfig {
   return { template: typeof c.template === "string" ? c.template : "", inputs };
 }
 
-/** defaultConfig is a new node's config; model and imageModel are the
- * defaults for llm and image nodes.
- * defaultConfig 是新节点的配置；model 与 imageModel 分别是 llm 与图像节点的默认模型。 */
-export function defaultConfig(type: NodeType, model: string, imageModel = ""): Record<string, unknown> | undefined {
+export function videoConfig(node: FlowNode): VideoConfig {
+  const c = node.config ?? {};
+  const text = (value: unknown) => (typeof value === "string" ? value : "");
+  const out: VideoConfig = { model: text(c.model), prompt: text(c.prompt) };
+  if (text(c.first_frame) !== "") out.first_frame = text(c.first_frame);
+  if (text(c.last_frame) !== "") out.last_frame = text(c.last_frame);
+  if (Array.isArray(c.reference_images)) out.reference_images = c.reference_images.map(text);
+  if ((VIDEO_RESOLUTIONS as readonly string[]).includes(text(c.resolution))) out.resolution = text(c.resolution);
+  if ((VIDEO_RATIOS as readonly string[]).includes(text(c.ratio))) out.ratio = text(c.ratio);
+  if (typeof c.duration === "number" && Number.isInteger(c.duration) && c.duration !== 0) out.duration = c.duration;
+  if (typeof c.generate_audio === "boolean") out.generate_audio = c.generate_audio;
+  if (typeof c.watermark === "boolean") out.watermark = c.watermark;
+  return out;
+}
+
+/** defaultConfig is a new node's config; model, imageModel and videoModel
+ * are the defaults for llm, image and video nodes.
+ * defaultConfig 是新节点的配置；model、imageModel 与 videoModel 分别是 llm、图像与视频
+ * 节点的默认模型。 */
+export function defaultConfig(type: NodeType, model: string, imageModel = "", videoModel = ""): Record<string, unknown> | undefined {
   switch (type) {
     case "llm":
       return { model, prompt: "" };
     case "image_generation":
       return { model: imageModel, prompt: "" };
+    case "video_generation":
+      return { model: videoModel, prompt: "" };
     case "comfyui_template":
       return { template: "", inputs: {} };
     case "template":
@@ -167,10 +186,10 @@ export function nextNodeId(def: FlowDefinition, type: NodeType): string {
 
 /** addNode adds a node of type at position and returns its id.
  * addNode 在 position 处添加一个 type 类型的节点并返回其 id。 */
-export function addNode(def: FlowDefinition, type: NodeType, position: { x: number; y: number }, model = "", imageModel = ""): { def: FlowDefinition; id: string } {
+export function addNode(def: FlowDefinition, type: NodeType, position: { x: number; y: number }, model = "", imageModel = "", videoModel = ""): { def: FlowDefinition; id: string } {
   const id = nextNodeId(def, type);
   const node: FlowNode = { id, type, position: { x: Math.round(position.x), y: Math.round(position.y) } };
-  const config = defaultConfig(type, model, imageModel);
+  const config = defaultConfig(type, model, imageModel, videoModel);
   if (config) node.config = config;
   return { def: { ...def, nodes: [...def.nodes, node] }, id };
 }
@@ -289,6 +308,8 @@ export function nodeFields(node: FlowNode): string[] {
       return ["image"];
     case "comfyui_template":
       return ["image", "artifacts"];
+    case "video_generation":
+      return ["video", "last_frame"];
     default:
       return [];
   }
@@ -301,10 +322,12 @@ export interface Reference {
 
 /** RefSlot is where a reference is going: "text" is anything fed to a model,
  * compared or shown as text; "output" is the whole of an output's result
- * field; "file" is the whole of a ComfyUI template's file input.
+ * field; "file" is the whole of a ComfyUI template's file input; "image" is
+ * the whole of a video node's image slot.
  * RefSlot 是引用的去处："text" 是喂给模型、用于比较或作为文本展示的任何位置；"output" 是输出
- * 结果字段的全部内容；"file" 是 ComfyUI 模板文件型输入的全部内容。 */
-export type RefSlot = "text" | "output" | "file";
+ * 结果字段的全部内容；"file" 是 ComfyUI 模板文件型输入的全部内容；"image" 是视频节点图片槽位
+ * 的全部内容。 */
+export type RefSlot = "text" | "output" | "file" | "image";
 
 /** referencesFor lists the variables a template on node id may use in slot:
  * the flow's inputs and the fields of every upstream node. What names an
@@ -312,17 +335,31 @@ export type RefSlot = "text" | "output" | "file";
  * it (not the file inputs, not the image and files a node makes); an output
  * lists all; a file slot lists exactly the references that name one file —
  * the image and file inputs and the `image` of an upstream node — and
- * nothing else, not even text.
+ * nothing else, not even text; an image slot lists the image inputs and the
+ * images upstream nodes make.
  *
  * referencesFor 列出节点 id 上的模板在 slot 中可以使用的变量：编排的输入，以及每个上游节点
  * 的字段。凡指向产物的，限制与 flowdef 一致：文本位置一个也不列（文件输入、节点产出的图片与
  * 文件都不列）；输出全部列出；文件位置恰好列出指向单个文件的引用——image 与 file 输入，以及
- * 上游节点的 image——此外一概不列，文本也不列。 */
+ * 上游节点的 image——此外一概不列，文本也不列；图片位置列出 image 输入与上游节点产出的图片。 */
 export function referencesFor(def: FlowDefinition, id: string, slot: RefSlot = "text"): Reference[] {
   const out: Reference[] = [];
   const offer = (ref: string, label: string, scope: string, field: string) => {
-    const shape = refArtifactShape(def, { scope, field });
-    const ok = slot === "output" || (slot === "text" ? shape === null : refFileShape(def, { scope, field }) !== null);
+    const target = { scope, field };
+    let ok: boolean;
+    switch (slot) {
+      case "output":
+        ok = true;
+        break;
+      case "text":
+        ok = refArtifactShape(def, target) === null;
+        break;
+      case "image":
+        ok = refIsImage(def, target);
+        break;
+      default:
+        ok = refFileShape(def, target) !== null;
+    }
     if (ok) out.push({ ref, label });
   };
   for (const input of def.inputs) {
@@ -363,6 +400,12 @@ export function unavailableModels(def: FlowDefinition, models: string[]): FlowIs
 export function catalogWarnings(def: FlowDefinition, catalog: FlowCatalog): FlowIssue[] {
   const out: FlowIssue[] = [];
   for (const node of def.nodes) {
+    if (node.type === "video_generation" && catalog.videoModels) {
+      const { model } = videoConfig(node);
+      const videos = catalog.videoModels;
+      if (!videos.available) out.push({ node: node.id, field: "config.model", code: "video_generation_unavailable" });
+      else if (model !== "" && !videos.freeForm && !videos.models.some((m) => m.id === model)) out.push({ node: node.id, field: "config.model", code: "model_unavailable" });
+    }
     if (node.type === "image_generation" && catalog.imageModels) {
       const { model } = imageConfig(node);
       if (model === "" && !catalog.imageModels.defaultAvailable) out.push({ node: node.id, field: "config.model", code: "image_generation_unavailable" });
@@ -435,6 +478,19 @@ export function artifactReferenceIssues(def: FlowDefinition): FlowIssue[] {
       case "image_generation":
         check(node.id, "config.prompt", text(c.prompt));
         break;
+      case "video_generation": {
+        check(node.id, "config.prompt", text(c.prompt));
+        const config = videoConfig(node);
+        const slot = (field: string, value: string | undefined) => {
+          if (!value || value.trim() === "") return;
+          const { refs, sole } = templateRefs(value);
+          if (!sole || !refIsImage(def, refs[0])) out.push({ node: node.id, field, code: "image_reference_required" });
+        };
+        slot("config.first_frame", config.first_frame);
+        slot("config.last_frame", config.last_frame);
+        (config.reference_images ?? []).forEach((value, i) => slot(`config.reference_images[${i}]`, value));
+        break;
+      }
       case "comfyui_template":
         for (const [name, value] of Object.entries(comfyConfig(node).inputs)) {
           const { refs, sole } = templateRefs(value);
@@ -487,6 +543,21 @@ export function serialize(def: FlowDefinition): FlowDefinition {
       else if (node.type === "image_generation") {
         const c = imageConfig(node);
         out.config = { ...(c.model ? { model: c.model } : {}), prompt: c.prompt, ...(c.size ? { size: c.size } : {}) };
+      } else if (node.type === "video_generation") {
+        const c = videoConfig(node);
+        const references = (c.reference_images ?? []).filter((value) => value.trim() !== "");
+        out.config = {
+          model: c.model,
+          prompt: c.prompt,
+          ...(c.first_frame ? { first_frame: c.first_frame } : {}),
+          ...(c.last_frame ? { last_frame: c.last_frame } : {}),
+          ...(references.length > 0 ? { reference_images: references } : {}),
+          ...(c.resolution ? { resolution: c.resolution } : {}),
+          ...(c.ratio ? { ratio: c.ratio } : {}),
+          ...(c.duration ? { duration: c.duration } : {}),
+          ...(c.generate_audio !== undefined ? { generate_audio: c.generate_audio } : {}),
+          ...(c.watermark !== undefined ? { watermark: c.watermark } : {}),
+        };
       } else if (node.type === "comfyui_template") {
         const c = comfyConfig(node);
         const inputs = Object.fromEntries(Object.entries(c.inputs).filter(([, value]) => value !== ""));

@@ -22,16 +22,17 @@
 //     referenced anywhere as {{inputs.<name>}};
 //   - exactly one output node: it has no outgoing edges. The result fields it
 //     collects are declared in Definition.Outputs;
-//   - llm, template, condition, image_generation and comfyui_template nodes
-//     in between, each reachable from the input node. Edges out of a condition node carry branch "true" or
+//   - llm, template, condition, image_generation, comfyui_template and
+//     video_generation nodes in between, each reachable from the input node. Edges out of a condition node carry branch "true" or
 //     "false"; no other edge carries a branch;
 //   - no cycles. A node may reference {{<node>.<field>}} only for a node
 //     upstream of it, so the value always exists by the time it runs.
-//   - the fields image_generation and comfyui_template nodes produce, and
-//     image and file inputs, name artifacts, not text. They may only be
-//     referenced as the whole of an output's ref or, when they name one
-//     file, of a comfyui_template input, so an artifact id is never fed to a
-//     model or compared.
+//   - the fields image_generation, comfyui_template and video_generation
+//     nodes produce, and image and file inputs, name artifacts, not text.
+//     They may only be referenced as the whole of an output's ref or, when
+//     they name one file, of a comfyui_template input, or, when they name one
+//     image, of a video_generation node's image slot, so an artifact id is
+//     never fed to a model or compared.
 //
 // Flow contents — prompts, input values and outputs — are the same class of
 // secret as a chat message. Errors from this package name identifiers (node
@@ -56,15 +57,16 @@
 //   - 恰好一个输入节点：编排的起点，没有入边。它提供的运行时变量声明在
 //     Definition.Inputs 中，任何地方都以 {{inputs.<名称>}} 引用；
 //   - 恰好一个输出节点：没有出边。它收集的结果字段声明在 Definition.Outputs 中；
-//   - 中间是 llm、template、condition、image_generation 与 comfyui_template
-//     节点，每个都能从输入节点到达。条件节点的
+//   - 中间是 llm、template、condition、image_generation、comfyui_template 与
+//     video_generation 节点，每个都能从输入节点到达。条件节点的
 //     出边带 branch「true」或「false」，其他边都不带 branch；
 //   - 不能有环。节点只能以 {{<节点>.<字段>}} 引用它上游的节点，这样它运行时该值
 //     一定已经存在。
-//   - image_generation 与 comfyui_template 节点产出的字段，以及 image 与 file 输入，
-//     指向产物而不是文本。它们只能作为输出 ref 的全部内容被引用；指向单个文件时，也
-//     可以作为 comfyui_template 某个输入的全部内容。因此产物 id 永远不会被送进模型或
-//     参与比较。
+//   - image_generation、comfyui_template 与 video_generation 节点产出的字段，以及
+//     image 与 file 输入，指向产物而不是文本。它们只能作为输出 ref 的全部内容被引用；
+//     指向单个文件时，也可以作为 comfyui_template 某个输入的全部内容；指向单张图片时，
+//     也可以作为 video_generation 节点某个图片槽位的全部内容。因此产物 id 永远不会被
+//     送进模型或参与比较。
 //
 // 编排内容——提示词、输入值与输出——与对话消息属于同一类机密。本包的错误只写
 // 标识符（节点 id、输入名与字段名），从不引用模板、标签或取值。
@@ -113,6 +115,13 @@ const (
 	// MaxImageSide bounds each side of an image_generation node's size.
 	// MaxImageSide 限制 image_generation 节点尺寸的每一边。
 	MaxImageSide = 16384
+	// MaxReferenceImages bounds a video_generation node's reference images
+	// and MaxVideoDuration its duration in seconds. Both only keep a
+	// definition bounded; what a model accepts is checked by the provider.
+	// MaxReferenceImages 限制 video_generation 节点的参考图数量，MaxVideoDuration
+	// 限制其时长（秒）。两者只为让定义有界；模型实际接受什么由供应商检查。
+	MaxReferenceImages = 10
+	MaxVideoDuration   = 3600
 )
 
 // NodeType is the closed set of node kinds.
@@ -130,6 +139,7 @@ const (
 	NodeCondition NodeType = "condition"
 	NodeImage     NodeType = "image_generation"
 	NodeComfyUI   NodeType = "comfyui_template"
+	NodeVideo     NodeType = "video_generation"
 	NodeOutput    NodeType = "output"
 )
 
@@ -259,6 +269,14 @@ const (
 	// FieldArtifacts 列出 comfyui_template 节点产出的全部产物，形式为
 	// {"artifact_id", "filename", "kind"} 对象组成的 JSON 数组。
 	FieldArtifacts = "artifacts"
+	// FieldVideo is the artifact id of the video a video_generation node
+	// produced.
+	// FieldVideo 是 video_generation 节点产出的视频的产物 id。
+	FieldVideo = "video"
+	// FieldLastFrame is the artifact id of the last frame of that video, an
+	// image, or "" when the provider returned none.
+	// FieldLastFrame 是该视频最后一帧（一张图片）的产物 id，供应商没有返回时为空字符串。
+	FieldLastFrame = "last_frame"
 )
 
 // IsArtifactField reports whether field of a node of type t names artifacts
@@ -271,16 +289,34 @@ func IsArtifactField(t NodeType, field string) bool {
 		return field == FieldImage
 	case NodeComfyUI:
 		return field == FieldImage || field == FieldArtifacts
+	case NodeVideo:
+		return field == FieldVideo || field == FieldLastFrame
 	}
 	return false
 }
 
+// IsFileField reports whether field of a node of type t names exactly one
+// file (not a list of them).
+//
+// IsFileField 报告 t 类型节点的 field 字段是否恰好指向一个文件（而不是文件列表）。
+func IsFileField(t NodeType, field string) bool {
+	return IsArtifactField(t, field) && field != FieldArtifacts
+}
+
+// IsImageField reports whether field of a node of type t names exactly one
+// image.
+//
+// IsImageField 报告 t 类型节点的 field 字段是否恰好指向一张图片。
+func IsImageField(t NodeType, field string) bool {
+	return IsFileField(t, field) && field != FieldVideo
+}
+
 // RefersToFile reports whether r names exactly one file in d: an image or
-// file input, or the image field of a node that produces one. Only such a
+// file input, or a node field that names one file (IsFileField). Only such a
 // reference may be the whole of a comfyui_template input.
 //
-// RefersToFile 报告 r 在 d 中是否恰好指向一个文件：image 或 file 输入，或产出图片的
-// 节点的 image 字段。只有这样的引用才能作为 comfyui_template 输入的全部内容。
+// RefersToFile 报告 r 在 d 中是否恰好指向一个文件：image 或 file 输入，或指向单个文件的
+// 节点字段（IsFileField）。只有这样的引用才能作为 comfyui_template 输入的全部内容。
 func (d Definition) RefersToFile(r Ref) bool {
 	if r.Scope == InputsScope {
 		for _, in := range d.Inputs {
@@ -290,12 +326,32 @@ func (d Definition) RefersToFile(r Ref) bool {
 		}
 		return false
 	}
-	if r.Field != FieldImage {
+	for _, n := range d.Nodes {
+		if n.ID == r.Scope {
+			return IsFileField(n.Type, r.Field)
+		}
+	}
+	return false
+}
+
+// RefersToImage reports whether r names exactly one image in d: an image
+// input, or a node field that names one image (IsImageField). Only such a
+// reference may be the whole of a video_generation image slot.
+//
+// RefersToImage 报告 r 在 d 中是否恰好指向一张图片：image 输入，或指向单张图片的节点
+// 字段（IsImageField）。只有这样的引用才能作为 video_generation 图片槽位的全部内容。
+func (d Definition) RefersToImage(r Ref) bool {
+	if r.Scope == InputsScope {
+		for _, in := range d.Inputs {
+			if in.Name == r.Field {
+				return in.Type == TypeImage
+			}
+		}
 		return false
 	}
 	for _, n := range d.Nodes {
 		if n.ID == r.Scope {
-			return IsArtifactField(n.Type, FieldImage)
+			return IsImageField(n.Type, r.Field)
 		}
 	}
 	return false
@@ -424,6 +480,39 @@ type ImageConfig struct {
 	Size   string `json:"size,omitempty"`
 }
 
+// VideoConfig is a video_generation node's config. Model is the provider's
+// video model id and Prompt a template. FirstFrame, LastFrame and each of
+// ReferenceImages, when set, are a single reference to one image (an image
+// input, or a node's image or last_frame). The remaining fields are left to
+// the provider's default when unset: Resolution such as "720p", Ratio such as
+// "16:9" or "adaptive", Duration in seconds or -1 for the model to choose.
+//
+// VideoConfig 是 video_generation 节点的配置。Model 是供应商的视频模型 id，Prompt 是
+// 模板。FirstFrame、LastFrame 与 ReferenceImages 的每一项设置时，都是对单张图片的单个
+// 引用（image 输入，或某节点的 image 或 last_frame）。其余字段未设置时取供应商的默认值：
+// Resolution 如「720p」，Ratio 如「16:9」或「adaptive」，Duration 以秒计，-1 表示由模型
+// 决定。
+type VideoConfig struct {
+	Model           string   `json:"model"`
+	Prompt          string   `json:"prompt"`
+	FirstFrame      string   `json:"first_frame,omitempty"`
+	LastFrame       string   `json:"last_frame,omitempty"`
+	ReferenceImages []string `json:"reference_images,omitempty"`
+	Resolution      string   `json:"resolution,omitempty"`
+	Ratio           string   `json:"ratio,omitempty"`
+	Duration        int      `json:"duration,omitempty"`
+	GenerateAudio   *bool    `json:"generate_audio,omitempty"`
+	Watermark       *bool    `json:"watermark,omitempty"`
+}
+
+// Video resolutions and aspect ratios a video_generation node may name.
+//
+// video_generation 节点可以指定的分辨率与画面比例。
+var (
+	VideoResolutions = []string{"480p", "720p", "1080p", "4k"}
+	VideoRatios      = []string{"16:9", "4:3", "1:1", "3:4", "9:16", "21:9", "adaptive"}
+)
+
 // ComfyUIConfig is a comfyui_template node's config: the published workflow
 // template to run, and a template for each of its inputs the node sets. An
 // input left out takes the workflow template's own default.
@@ -468,6 +557,13 @@ func (n Node) Image() (ImageConfig, error) {
 func (n Node) ComfyUI() (ComfyUIConfig, error) {
 	var c ComfyUIConfig
 	return c, n.decodeConfig(NodeComfyUI, &c)
+}
+
+// Video decodes a video_generation node's config strictly.
+// / Video 严格解码 video_generation 节点的配置。
+func (n Node) Video() (VideoConfig, error) {
+	var c VideoConfig
+	return c, n.decodeConfig(NodeVideo, &c)
 }
 
 func (n Node) decodeConfig(want NodeType, v any) error {
@@ -546,6 +642,10 @@ const (
 	// as the whole of an output's ref.
 	// CodeArtifactReference 表示在输出 ref 的全部内容之外的地方引用了产物字段。
 	CodeArtifactReference IssueCode = "artifact_reference"
+	// CodeImageReference is a video_generation image slot that is not a
+	// single reference to one image.
+	// CodeImageReference 表示 video_generation 的图片槽位不是对单张图片的单个引用。
+	CodeImageReference IssueCode = "image_reference_required"
 
 	// Run-input codes, from BindInputs. / 运行输入的问题码，来自 BindInputs。
 	CodeUnknownInput IssueCode = "unknown_input"
@@ -643,6 +743,9 @@ const (
 	// slotTemplateInput is a comfyui_template input that is a single
 	// reference and nothing else: one file.
 	slotTemplateInput
+	// slotImage is a video_generation image slot, which must be a single
+	// reference to one image and nothing else.
+	slotImage
 )
 
 type validator struct {
@@ -778,6 +881,8 @@ func (v *validator) checkNodes() {
 			v.checkImage(id, n)
 		case NodeComfyUI:
 			v.checkComfyUI(id, n)
+		case NodeVideo:
+			v.checkVideo(id, n)
 		default:
 			v.add(id, "type", CodeInvalidType, "unknown node type")
 		}
@@ -998,6 +1103,63 @@ func (v *validator) checkComfyUI(id string, n Node) {
 			}
 		}
 	}
+}
+
+func (v *validator) checkVideo(id string, n Node) {
+	c, err := n.Video()
+	if err != nil {
+		v.add(id, "config", CodeInvalidConfig, "video_generation config is invalid: %s", err)
+		return
+	}
+	v.setFields(id, FieldVideo, FieldLastFrame)
+	switch {
+	case strings.TrimSpace(c.Model) == "":
+		v.add(id, "config.model", CodeRequired, "model is required")
+	case strings.TrimSpace(c.Model) != c.Model || len(c.Model) > MaxModelLength || !utf8.ValidString(c.Model) || strings.Contains(c.Model, "{{"):
+		v.add(id, "config.model", CodeInvalidConfig, "model must be a model name of at most %d bytes, not a template", MaxModelLength)
+	}
+	v.template(id, "config.prompt", c.Prompt, true)
+	v.imageSlot(id, "config.first_frame", c.FirstFrame)
+	v.imageSlot(id, "config.last_frame", c.LastFrame)
+	if len(c.ReferenceImages) > MaxReferenceImages {
+		v.add(id, "config.reference_images", CodeTooMany, "at most %d reference images are allowed", MaxReferenceImages)
+	} else {
+		for i, src := range c.ReferenceImages {
+			field := fmt.Sprintf("config.reference_images[%d]", i)
+			if strings.TrimSpace(src) == "" {
+				v.add(id, field, CodeRequired, "reference image is required")
+				continue
+			}
+			v.imageSlot(id, field, src)
+		}
+	}
+	if c.Resolution != "" && !slices.Contains(VideoResolutions, c.Resolution) {
+		v.add(id, "config.resolution", CodeInvalidConfig, "resolution must be one of %s", strings.Join(VideoResolutions, ", "))
+	}
+	if c.Ratio != "" && !slices.Contains(VideoRatios, c.Ratio) {
+		v.add(id, "config.ratio", CodeInvalidConfig, "ratio must be one of %s", strings.Join(VideoRatios, ", "))
+	}
+	if c.Duration != 0 && c.Duration != -1 && (c.Duration < 1 || c.Duration > MaxVideoDuration) {
+		v.add(id, "config.duration", CodeOutOfRange, "duration must be -1 or between 1 and %d seconds", MaxVideoDuration)
+	}
+}
+
+// imageSlot checks one video_generation image slot: empty, or a single
+// reference and nothing else. What the reference names is checked with the
+// other references, once every node's fields are known.
+func (v *validator) imageSlot(id, field, src string) {
+	if strings.TrimSpace(src) == "" {
+		return
+	}
+	t, ok := v.template(id, field, src, false)
+	if !ok {
+		return
+	}
+	if _, sole := t.SoleRef(); !sole {
+		v.add(id, field, CodeImageReference, "must be a single reference to one image, such as {{inputs.photo}} or {{<node>.image}}")
+		return
+	}
+	v.uses[len(v.uses)-1].slot = slotImage
 }
 
 func validTemplateInputName(s string) bool {
@@ -1231,6 +1393,8 @@ func (v *validator) checkRef(owner string, r Ref, slot useSlot, upstream map[str
 		switch {
 		case t == "":
 			return CodeUnknownReference, "names an input that is not declared"
+		case slot == slotImage && t != TypeImage:
+			return CodeImageReference, imageRefMessage
 		case IsFileType(t) && slot == slotText:
 			return CodeArtifactReference, artifactRefMessage
 		}
@@ -1242,7 +1406,11 @@ func (v *validator) checkRef(owner string, r Ref, slot useSlot, upstream map[str
 	if !v.fields[r.Scope][r.Field] {
 		return CodeUnknownReference, "names a field that node does not produce"
 	}
-	if IsArtifactField(v.nodeTypes[r.Scope], r.Field) && (slot == slotText || slot == slotTemplateInput && r.Field != FieldImage) {
+	nodeType := v.nodeTypes[r.Scope]
+	if slot == slotImage && !IsImageField(nodeType, r.Field) {
+		return CodeImageReference, imageRefMessage
+	}
+	if IsArtifactField(nodeType, r.Field) && (slot == slotText || slot == slotTemplateInput && !IsFileField(nodeType, r.Field)) {
 		return CodeArtifactReference, artifactRefMessage
 	}
 	if upstream != nil && owner != "" && !upstream[owner][r.Scope] {
@@ -1253,6 +1421,9 @@ func (v *validator) checkRef(owner string, r Ref, slot useSlot, upstream map[str
 
 // artifactRefMessage explains CodeArtifactReference.
 const artifactRefMessage = "names an artifact, which only an output's ref, or a workflow template input when it is one file, may hold as its whole value"
+
+// imageRefMessage explains CodeImageReference from checkRef.
+const imageRefMessage = "does not name one image; a video image slot takes an image input, or a node's image or last_frame"
 
 func validValueType(t ValueType) bool {
 	return t == TypeText || t == TypeNumber || t == TypeBoolean

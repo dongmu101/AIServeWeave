@@ -30,6 +30,7 @@ const (
 	fileKindUpload = "upload"
 	fileKindCopy   = "copy"
 	fileKindImage  = "image"
+	fileKindVideo  = "video"
 
 	filePending = "pending"
 

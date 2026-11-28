@@ -64,6 +64,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"fmt"
 	"time"
 
@@ -78,6 +79,13 @@ import (
 const (
 	DefaultRunTimeout    = 30 * time.Minute
 	DefaultNodeTimeout   = 5 * time.Minute
+	// A video generation task routinely queues and renders for longer than
+	// any other call, so a video_generation node has its own timeout, and a
+	// run that contains one its own deadline.
+	// 视频生成任务的排队与渲染通常比其他调用都久，因此 video_generation 节点有自己的
+	// 超时，含该节点的运行也有自己的整体期限。
+	DefaultVideoNodeTimeout = time.Hour
+	DefaultVideoRunTimeout  = 2 * time.Hour
 	DefaultMaxParallel   = 4
 	DefaultMaxValueBytes = 1 << 20
 )
@@ -97,6 +105,9 @@ const (
 	// CodeNoImage fails an image_generation node whose call produced no image.
 	// CodeNoImage 表示 image_generation 节点的调用没有产出图片。
 	CodeNoImage = "no_image_produced"
+	// CodeNoVideo fails a video_generation node whose call produced no video.
+	// CodeNoVideo 表示 video_generation 节点的调用没有产出视频。
+	CodeNoVideo = "no_video_produced"
 )
 
 // Error is a failure with a stable code and no content. A Dispatcher returns
@@ -172,6 +183,30 @@ type TemplateCall struct {
 	Files    map[string]string
 }
 
+// VideoCall is one video_generation node's call, its prompt rendered. Each
+// of FirstFrame, LastFrame and ReferenceImages is the artifact id of one
+// image of the run, never text a member typed; an image that is absent (an
+// optional input not given, a node that produced none) is left out.
+// Resolution, Ratio and Duration are empty or zero for the provider's
+// default.
+//
+// VideoCall 是一个 video_generation 节点的调用，提示词已渲染。FirstFrame、LastFrame
+// 与 ReferenceImages 的每一项都是本次运行中某张图片的产物 id，从不来自成员输入的文本；
+// 图片不存在时（可选输入未提供、节点没有产出）不传该项。Resolution、Ratio 与 Duration
+// 为空或零时取供应商的默认值。
+type VideoCall struct {
+	Model           string
+	Prompt          string
+	FirstFrame      string
+	LastFrame       string
+	ReferenceImages []string
+	Resolution      string
+	Ratio           string
+	Duration        int
+	GenerateAudio   *bool
+	Watermark       *bool
+}
+
 // Artifact kinds. / 产物种类。
 const (
 	ArtifactImage = "image"
@@ -190,10 +225,15 @@ type Artifact struct {
 	Kind     string `json:"kind"`
 }
 
-// MediaReply is a finished image generation or workflow template run.
-// / MediaReply 是一次已完成的生图或工作流模板运行。
+// MediaReply is a finished image generation, workflow template run or video
+// generation. Usage is the tokens a provider billed for it, when it reports
+// them (video generation does).
+//
+// MediaReply 是一次已完成的生图、工作流模板运行或视频生成。Usage 是供应商为此计费的
+// token 数（供应商报告时才有，视频生成会报告）。
 type MediaReply struct {
 	Artifacts []Artifact
+	Usage     Usage
 }
 
 // Dispatcher makes model calls on the engine's behalf.
@@ -206,7 +246,8 @@ type MediaReply struct {
 // GenerateImage and RunTemplate run an image_generation and a
 // comfyui_template node's call to the end and return the artifacts produced.
 // Like Chat they must return promptly once ctx ends, and fail with a *Error.
-// A RunTemplate whose run is still going when ctx ends should cancel it.
+// A RunTemplate whose run is still going when ctx ends should cancel it, and
+// so should a GenerateVideo whose task is.
 //
 // Dispatcher 代表引擎进行模型调用。
 //
@@ -216,11 +257,13 @@ type MediaReply struct {
 //
 // GenerateImage 与 RunTemplate 把 image_generation 与 comfyui_template 节点的调用执行到
 // 结束，并返回产出的产物。与 Chat 一样，ctx 结束后它们必须尽快返回，失败时返回 *Error。
-// ctx 结束时运行仍在进行的 RunTemplate 应当取消该运行。
+// ctx 结束时运行仍在进行的 RunTemplate 应当取消该运行，任务仍在进行的 GenerateVideo
+// 也应当取消该任务。
 type Dispatcher interface {
 	Chat(ctx context.Context, call ChatCall, delta func(text string)) (ChatReply, error)
 	GenerateImage(ctx context.Context, call ImageCall) (MediaReply, error)
 	RunTemplate(ctx context.Context, call TemplateCall) (MediaReply, error)
+	GenerateVideo(ctx context.Context, call VideoCall) (MediaReply, error)
 }
 
 // Config configures an Engine. Only Dispatcher is required.
@@ -234,6 +277,13 @@ type Config struct {
 	RunTimeout time.Duration
 	// NodeTimeout bounds one call. / NodeTimeout 限制一次调用。
 	NodeTimeout time.Duration
+	// VideoNodeTimeout bounds one video_generation call instead of
+	// NodeTimeout, and VideoRunTimeout a run that contains such a node
+	// instead of RunTimeout when it is longer.
+	// VideoNodeTimeout 代替 NodeTimeout 限制一次 video_generation 调用；含该节点的运行
+	// 改用 VideoRunTimeout 作为整体期限（当它比 RunTimeout 长时）。
+	VideoNodeTimeout time.Duration
+	VideoRunTimeout  time.Duration
 	// MaxParallel bounds a run's concurrent calls.
 	// MaxParallel 限制一次运行中并发的调用数。
 	MaxParallel int
@@ -256,7 +306,7 @@ func New(cfg Config) (*Engine, error) {
 	if cfg.Dispatcher == nil {
 		return nil, errors.New("flow: a Dispatcher is required")
 	}
-	if cfg.RunTimeout < 0 || cfg.NodeTimeout < 0 || cfg.MaxParallel < 0 || cfg.MaxValueBytes < 0 {
+	if cfg.RunTimeout < 0 || cfg.NodeTimeout < 0 || cfg.VideoNodeTimeout < 0 || cfg.VideoRunTimeout < 0 || cfg.MaxParallel < 0 || cfg.MaxValueBytes < 0 {
 		return nil, errors.New("flow: timeouts and limits must not be negative")
 	}
 	if cfg.Clock == nil {
@@ -267,6 +317,12 @@ func New(cfg Config) (*Engine, error) {
 	}
 	if cfg.NodeTimeout == 0 {
 		cfg.NodeTimeout = DefaultNodeTimeout
+	}
+	if cfg.VideoNodeTimeout == 0 {
+		cfg.VideoNodeTimeout = DefaultVideoNodeTimeout
+	}
+	if cfg.VideoRunTimeout == 0 {
+		cfg.VideoRunTimeout = DefaultVideoRunTimeout
 	}
 	if cfg.MaxParallel == 0 {
 		cfg.MaxParallel = DefaultMaxParallel
@@ -378,7 +434,12 @@ type Result struct {
 // Plan 是一份经过检查、并与一组输入值一起准备好运行的定义。它不可变，可以多次调用
 // Run。
 type Plan struct {
-	cfg     Config
+	cfg Config
+	// runTimeout is cfg.RunTimeout, or cfg.VideoRunTimeout when the plan has
+	// a video_generation node and that is longer.
+	// runTimeout 为 cfg.RunTimeout；计划含 video_generation 节点且 cfg.VideoRunTimeout
+	// 更长时为后者。
+	runTimeout time.Duration
 	inputs  map[string]string
 	nodes   []*planNode
 	byID    map[string]*planNode
@@ -396,6 +457,7 @@ type planNode struct {
 	cond  flowdef.ConditionConfig
 	image flowdef.ImageConfig
 	comfy flowdef.ComfyUIConfig
+	video flowdef.VideoConfig
 	// files names the comfyui_template inputs set to exactly one file.
 	// files 是恰好设为一个文件的 comfyui_template 输入。
 	files map[string]bool
@@ -420,7 +482,7 @@ func (e *Engine) Plan(def flowdef.Definition, inputs map[string]json.RawMessage)
 	if err != nil {
 		return nil, err
 	}
-	p := &Plan{cfg: e.cfg, inputs: values, byID: make(map[string]*planNode, len(def.Nodes))}
+	p := &Plan{cfg: e.cfg, runTimeout: e.cfg.RunTimeout, inputs: values, byID: make(map[string]*planNode, len(def.Nodes))}
 	for i, n := range def.Nodes {
 		pn := &planNode{Node: n, index: i, tmpl: map[string]flowdef.Template{}}
 		if err := pn.compile(); err != nil {
@@ -430,6 +492,9 @@ func (e *Engine) Plan(def flowdef.Definition, inputs map[string]json.RawMessage)
 		}
 		if n.Type == flowdef.NodeInput {
 			p.start = pn
+		}
+		if n.Type == flowdef.NodeVideo && e.cfg.VideoRunTimeout > p.runTimeout {
+			p.runTimeout = e.cfg.VideoRunTimeout
 		}
 		if n.Type == flowdef.NodeComfyUI {
 			for name := range pn.comfy.Inputs {
@@ -503,8 +568,25 @@ func (n *planNode) compile() error {
 			errs = append(errs, parse("inputs."+name, src))
 		}
 		return errors.Join(errs...)
+	case flowdef.NodeVideo:
+		c, err := n.Video()
+		if err != nil {
+			return err
+		}
+		n.video = c
+		errs := []error{parse("prompt", c.Prompt), parse("first_frame", c.FirstFrame), parse("last_frame", c.LastFrame)}
+		for i, src := range c.ReferenceImages {
+			errs = append(errs, parse(videoReferenceField(i), src))
+		}
+		return errors.Join(errs...)
 	}
 	return nil
+}
+
+// videoReferenceField is the template key of a video_generation node's i-th
+// reference image, and the key it is recorded under in Step.Inputs.
+func videoReferenceField(i int) string {
+	return "reference_images." + strconv.Itoa(i)
 }
 
 // Run executes the plan and returns how it ended. emit receives every event in

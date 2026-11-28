@@ -759,6 +759,16 @@ const operator = {
   "operator.billingSettingsUpdated": "Dernier enregistrement {time}",
   "operator.billingSettingsSaved": "Paramètres de facturation enregistrés",
   "operator.billingProblemSignupGrant": "Saisissez au moins 0 crédit, avec six décimales au plus",
-  "operator.billingAdjustTypeHint": "Une déduction de crédits offerts ne peut dépasser les crédits offerts actuels du locataire."
+  "operator.billingAdjustTypeHint": "Une déduction de crédits offerts ne peut dépasser les crédits offerts actuels du locataire.",
+  "operator.arkNav": "Volcengine Ark",
+  "operator.arkIntro": "La clé de la plateforme sert aux nœuds vidéo Studio de tous les locataires sans clé propre. Les locataires ne peuvent utiliser que les modèles ci-dessous, facturés au prix de chaque modèle ; un modèle sans prix est facturé 0 et apparaît dans l'avis des prix manquants de la page de facturation.",
+  "operator.arkBaseUrl": "URL de base (facultatif)",
+  "operator.arkBaseUrlHint": "Laissez vide pour le point de terminaison Ark de Pékin {url}. Changer l'adresse impose de saisir à nouveau la clé.",
+  "operator.arkModels": "Modèles ouverts",
+  "operator.arkModelsHint": "Un identifiant de modèle ou de point de terminaison par ligne. Les nœuds vidéo des locataires ne peuvent choisir que les modèles listés ici ; avec une liste vide, la clé de la plateforme ne sert aucun modèle.",
+  "operator.arkDeleteBody": "Après suppression, les locataires sans clé propre ne peuvent plus exécuter de nœuds vidéo ; ceux qui ont leur propre clé ne sont pas concernés.",
+  "operator.arkTasksTitle": "Tâches de la clé de la plateforme",
+  "operator.arkTasksIntro": "Tâches vidéo de tous les locataires sous la clé de la plateforme ; Ark ne distingue pas les locataires. Les tâches en file d'attente peuvent être annulées et les tâches terminées supprimées ; une tâche en cours ne peut pas être annulée.",
+  "operator.arkNoKeyForTasks": "Enregistrez la clé de la plateforme pour voir ses tâches."
 } as const;
 export default operator;

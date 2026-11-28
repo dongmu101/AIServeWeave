@@ -128,6 +128,16 @@ const ROUTES: readonly UpstreamRoute[] = [
   { method: "GET", segments: [literal("admin"), literal("v1"), literal("storage")], query: [] },
   { method: "PUT", segments: [literal("admin"), literal("v1"), literal("storage")], query: [] },
   { method: "DELETE", segments: [literal("admin"), literal("v1"), literal("storage")], query: [] },
+  // The tenant's own Volcengine Ark key for Studio video nodes, and the video
+  // tasks under it (owner/admin; the control plane decides). PUT checks the
+  // key with Ark first and is never retried.
+  // 租户自有的火山方舟 Key（Studio 视频节点用）及其下的视频任务（owner/admin，由控制面裁决）。
+  // PUT 会先向方舟检查 Key，从不重试。
+  { method: "GET", segments: [literal("admin"), literal("v1"), literal("ark")], query: [] },
+  { method: "PUT", segments: [literal("admin"), literal("v1"), literal("ark")], query: [] },
+  { method: "DELETE", segments: [literal("admin"), literal("v1"), literal("ark")], query: [] },
+  { method: "GET", segments: [literal("admin"), literal("v1"), literal("ark"), literal("tasks")], query: ["page_num", "page_size", "status", "model"] },
+  { method: "DELETE", segments: [literal("admin"), literal("v1"), literal("ark"), literal("tasks"), param()], query: [] },
   {
     method: "GET",
     segments: [
@@ -379,6 +389,14 @@ const OPERATOR_ROUTES: readonly UpstreamRoute[] = [
   { method: "GET", segments: [literal("operator"), literal("v1"), literal("nodes"), { node: true }, literal("providers")], query: [] },
   { method: "PUT", segments: [literal("operator"), literal("v1"), literal("nodes"), { node: true }, literal("providers"), param()], query: [] },
   { method: "DELETE", segments: [literal("operator"), literal("v1"), literal("nodes"), { node: true }, literal("providers"), param()], query: [] },
+  // The platform's Volcengine Ark key, offered to every tenant without its
+  // own, and the video tasks under it. PUT checks the key first, never retried.
+  // 平台的火山方舟 Key（给没有自己 Key 的租户使用）及其下的视频任务。PUT 先检查 Key，从不重试。
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("ark")], query: [] },
+  { method: "PUT", segments: [literal("operator"), literal("v1"), literal("ark")], query: [] },
+  { method: "DELETE", segments: [literal("operator"), literal("v1"), literal("ark")], query: [] },
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("ark"), literal("tasks")], query: ["page_num", "page_size", "status", "model"] },
+  { method: "DELETE", segments: [literal("operator"), literal("v1"), literal("ark"), literal("tasks"), param()], query: [] },
 
   {
     method: "GET",

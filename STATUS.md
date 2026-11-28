@@ -1,3 +1,32 @@
+# Studio 编排「视频生成」节点（火山方舟，2026-11-28）
+
+Studio 编排新增节点类型 `video_generation`，经 `github.com/volcengine/ark-runtime-go` v0.24.0 调用火山方舟的视频生成任务接口：文生视频，可选首帧、尾帧与最多 10 张参考图。火山方舟 API Key 分两级：运维在运维平台保存平台 Key 并列出开放的模型；租户 owner/admin 可以在 Console 保存本租户自己的 Key。租户有自己的 Key 时优先使用，否则用平台 Key。代码与默认测试已通过。**未与真实火山方舟联调，Console 与 Studio 的新界面也未在浏览器里走通。**设计见 `.scratch/ark-video-node/spec.md`。
+
+- **`common/arkvideo`**（新包）：封装 SDK 的创建、查询、列表、取消/删除与 Key 检查，只暴露本仓库自己的类型。创建任务关闭 SDK 的自动重试，避免重复建单；错误按类别归类，不转述方舟的原文；`Fetch` 只接受 https 结果地址，经拒绝内网地址的客户端流式下载，不限大小。
+- **`common/flowdef`**：节点 `video_generation`：`{model, prompt, first_frame?, last_frame?, reference_images?, resolution?, ratio?, duration?, generate_audio?, watermark?}`。输出 `video` 与 `last_frame`（产物 id）。图片槽位必须整个引用一张图片（image 输入、上游的 `image` 或 `last_frame`），否则报新问题码 `image_reference_required`；`video` 只能作为输出字段或 ComfyUI 模板文件型输入的全部内容。
+- **控制面**：新表 `ark_credentials`（base `0023`），Key 以 AES-256-GCM 加密保存，接口从不返回明文；`/admin/v1/ark`、`/operator/v1/ark` 的读写删与任务列表、取消/删除，以及供 Gateway 使用的 `GET /internal/v1/tenants/{tenant_id}/ark`。保存前先向方舟检查 Key。新配置 `Ark.MasterKey`/`MasterKeyFile`。计费：用量记录带 `credential=tenant` 时费用为 0 并标记 `own_key`。见 [ControlPlane STATUS](service/aiServeWeaveControlPlane/STATUS.md)。
+- **Gateway**：引擎为视频节点单独设 60 分钟的节点超时，含视频节点的运行期限延长到 2 小时。派发器读取 Key（30 秒缓存，读不到时最多沿用 10 分钟内的旧值），把图片槽位转成 data URL，在租户限流内创建任务，每 5 秒查询一次，成功后把视频与尾帧流式转存到对象存储并记账（端点 `video_generation`）。节点被停止或超时会取消方舟任务。新端点 `GET /studio/v1/video-models`；启动运行前检查 Key 与模型。见 [Gateway STATUS](service/aiServeWeaveGateway/STATUS.md)。
+- **Studio**：节点面板、配置表单（模型、提示词、首帧/尾帧/参考图来源、分辨率、比例、时长、音频、水印）、运行中提示，以及视频的内联播放与下载。见 [Studio STATUS](service/aiServeWeaveStudio/STATUS.md)。
+- **Console**：设置页的「火山方舟」卡片、`/console/video-tasks` 视频任务页（仅租户有自己的 Key 时列出任务），以及运维 `/operator/ark` 页。见 [Console STATUS](service/aiServeWeaveConsole/STATUS.md)。
+- **部署**：`deploy/controlplane.example.yaml` 新增 `Ark` 块；`.env.example` 与 `docker-compose.yaml` 新增 `AISW_ARK_MASTER_KEY`（留空即关闭，安装脚本不自动生成）。见 [deploy README「火山方舟视频生成」](deploy/README.md#火山方舟视频生成)。
+
+升级须知：
+- 先迁移并升级控制面，再升级 Gateway，最后升级 Studio 与 Console。控制面要用新的 `flowdef` 才能保存含视频节点的编排；Gateway 把旧控制面的 404 当作「未配置」。
+- 要开启：在 `deploy/.env` 填 `AISW_ARK_MASTER_KEY`（`openssl rand -base64 32`），并把示例中的 `Ark` 块加进本机 `controlplane.yaml`。主密钥丢失或更换后 Key 需要重新填写；主密钥变了导致租户自己的 Key 解不开时，Gateway 不会改用平台 Key（返回 503），避免租户被平台计费。
+- 视频结果要转存，需要部署存储或租户自有存储；都没有时节点以 `artifact_storage_unavailable` 失败，且不会创建方舟任务。
+- 平台 Key 列出的模型会出现在计费页的「未定价别名」提示里，运维需要为它们定价（按 `output` 单价乘方舟返回的 `completion_tokens`），否则按 0 计价。
+
+已知限制：
+- Gateway 在轮询中途重启时，方舟任务会继续执行，但不会记账，结果也会丢失（方舟最多保留 1 小时后过期）。
+- 方舟不支持取消执行中（running）的任务：节点停止时只能取消排队中的任务，执行中的会跑完并在方舟侧计费，平台侧不记账。
+- 用平台 Key 列任务时，方舟不区分租户，因此只向运维列出；租户只能看到自己 Key 下的任务。
+- 结果下载经 BFF 流式转发、不支持 Range，Safari 可能无法内联播放，可以下载后观看。
+
+已通过的检查：
+- 全仓 `go build`、`go vet` 与 `go test ./...`。临时用例（已删除）覆盖：假方舟服务下的请求体、创建不重试、查询重试、错误归类与不泄露原文、列表两种返回形态、结果下载；flowdef 视频节点 31 个校验场景与产物字段规则；引擎的输出、失败码、视频节点超时与运行期限、取消与并发；Gateway 端到端的成功转存与下载、租户 Key 记账为 0、启动前拒绝、16 种节点失败、取消与超时时撤销方舟任务、模型目录端点、Key 缓存的 TTL/旧值/上限；控制面的增删改查、权限、Key 保留规则、检查失败、主密钥更换、任务列表的 scope 隔离、计费与 handler 状态码。并发相关包在 `-race` 下稳定。
+- 在临时 MySQL 9.7 容器上跑了迁移、列注释与 `ark_credentials` 的 live 用例（含并发首次保存）；PostgreSQL 18 上 0023 迁移单独执行正常，整体 `Migrate` 仍受下文既有的 `tenant_nodes` 索引误报影响。
+- Studio 的 lint、typecheck、147 项单元测试与生产构建通过；Console 的 lint、typecheck、486 项单元测试与生产构建通过。
+
 # 文件登记表 files（2026-11-27）
 
 Gateway 写进对象存储的每个文件（job 产物、Studio 运行输入、推理生图；部署存储与租户存储）都在控制面的新表 `files` 登记一行，记下所在存储、key、所属业务对象（`biz_type` + `biz_id`）、类别、大小与 sha256。保留期清理改为按这张表进行，不再按前缀列举对象存储；保留期规则不变。`files` 按月分区。代码与默认测试已通过，在临时 MySQL/PostgreSQL 容器与 Cloudflare R2 上做了进程内验证。**未在运行中的容器里验收。**设计见 `.scratch/file-registry/spec.md`。

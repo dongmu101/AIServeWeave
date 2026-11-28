@@ -43,6 +43,7 @@ func (h *handlers) mountStudioFlows(mux *http.ServeMux, st StudioFlowStore, runn
 	mux.HandleFunc("POST /studio/v1/runs/{id}/cancel", s.cancelRun)
 	mux.HandleFunc("GET /studio/v1/runs/{id}/artifacts/{artifact_id}", s.artifact)
 	mux.HandleFunc("GET /studio/v1/image-models", s.imageModels)
+	mux.HandleFunc("GET /studio/v1/video-models", s.videoModels)
 	mux.HandleFunc("GET /studio/v1/workflow-templates", s.workflowTemplates)
 }
 
@@ -422,6 +423,9 @@ func (s *studioFlows) unavailableModels(ctx context.Context, def flowdef.Definit
 	}
 	identity, _ := IdentityFrom(ctx)
 	var issues []flowdef.Issue
+	var ark ArkCredential
+	var arkErr error
+	arkRead := false
 	for _, n := range def.Nodes {
 		switch n.Type {
 		case flowdef.NodeLLM:
@@ -440,6 +444,25 @@ func (s *studioFlows) unavailableModels(ctx context.Context, def flowdef.Definit
 		case flowdef.NodeComfyUI:
 			if c, err := n.ComfyUI(); err == nil && !s.h.templateVisible(c.Template, identity.TenantID) {
 				issues = append(issues, flowdef.Issue{Node: n.ID, Field: "config.template", Code: codeTemplateUnavailable, Message: "the workflow template is not available"})
+			}
+		case flowdef.NodeVideo:
+			c, err := n.Video()
+			if err != nil {
+				continue
+			}
+			if !arkRead {
+				ark, arkErr = s.h.ark.credential(ctx, identity.TenantID)
+				arkRead = true
+			}
+			switch {
+			case arkErr != nil:
+				// The key could not be read now; the node reports it when
+				// it runs, rather than refusing a run that may well work.
+				// 现在读不到 Key；由节点运行时报告，而不是拒绝一个很可能能运行的运行。
+			case !ark.Configured:
+				issues = append(issues, flowdef.Issue{Node: n.ID, Field: "config.model", Code: codeVideoUnavailable, Message: "no video generation key is configured"})
+			case !ark.allows(c.Model):
+				issues = append(issues, flowdef.Issue{Node: n.ID, Field: "config.model", Code: codeModelUnavailable, Message: "the video model is not available"})
 			}
 		}
 	}

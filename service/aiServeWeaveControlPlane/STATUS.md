@@ -1,3 +1,17 @@
+## 火山方舟凭据（2026-11-28）
+
+Studio 视频节点所用的火山方舟 API Key 的保存、读取与任务管理。设计见 `.scratch/ark-video-node/spec.md`。代码与默认测试已通过，**未与真实火山方舟联调**。
+
+- **表**：`ark_credentials`（base `0023`，MySQL 与 PostgreSQL 各一份，列带中文注释）。主键 `scope` 取租户 id 或 `platform`；`key_ciphertext` 为 AES-256-GCM 密文（复用 `ProviderSecrets`，AAD 为 `aisw-ark-credential/v1\x00`+scope），另存 `key_last4`、`base_url`（只有平台行能设）、`models`（JSON 数组）与每次保存加一的 `version`。
+- **配置**：`Ark.MasterKey` 或 `Ark.MasterKeyFile`（二选一，32 字节，十六进制或 base64），留空即关闭；关闭时读取接口报告 `enabled:false`，写入返回 404。
+- **接口**（`logic/arkcredentials.go`、`handler/ark.go`）：
+  - 租户 owner/admin：`GET/PUT/DELETE /admin/v1/ark`、`GET /admin/v1/ark/tasks`（`page_num`、`page_size` ≤100、`status`、`model`）、`DELETE /admin/v1/ark/tasks/{task_id}`。
+  - 运维：`/operator/v1/ark` 下同样一套，作用于平台 Key。
+  - 内部：`GET /internal/v1/tenants/{tenant_id}/ark`（共享密钥），返回该租户实际使用的 Key：有自己的用自己的（`source:tenant`），否则用平台的（`source:platform`，附模型白名单）；都没有时 `configured:false`。Key 解不开时返回 503，不回退到另一把。
+- **保存规则**：`api_key` 只写不读，省略表示保留已保存的 Key，前提是 `base_url` 不变（否则 `key_required`，防止把已保存的 Key 发往新主机）；租户不能设置 `base_url`（`invalid_ark`）；模型最多 100 个，每个 ≤256 字节、不含空白与 `{{`。保存前用 `List(page_size=1)` 检查 Key（20 秒），失败时返回 503 `ark_unreachable` 与 `reason`（`network`/`auth`/`rate_limited`/`other`）。审计 `ark.credential.update`/`ark.credential.delete`/`ark.task.delete`，详情只记 host、末四位与模型数。
+- **任务**：列表与取消/删除只用 actor 所在 scope 自己的 Key；租户没有自己的 Key 时返回 404，因为平台 Key 下的任务属于所有租户。方舟拒绝取消执行中的任务时返回 400 `task_not_cancelable`。
+- **计费**（`logic/usagepricing.go`）：用量记录 `Attributes.credential=tenant` 时照常计价但费用为 0，明细 `own_key:true`。平台 Key 的模型加入「未定价别名」报告。
+
 ## 文件登记表 files（2026-11-27）
 
 Gateway 写进对象存储的每个文件在这里登记一行，供按表清理和按业务对象查找文件。设计见 `.scratch/file-registry/spec.md`，Gateway 一侧见 [Gateway STATUS](../aiServeWeaveGateway/STATUS.md#文件登记表-files2026-11-27)。实现在 `internal/logic/files.go`、`internal/store/*/files.go`、`internal/handler/files.go`。

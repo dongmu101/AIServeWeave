@@ -238,6 +238,7 @@ type Service struct {
 	tenantNodes          *TenantNodeConfig
 	nodeProviders        *NodeProviderConfig
 	tenantStorage        *TenantStorageConfig
+	ark                  *ArkConfig
 	agentInstall         *AgentInstallConfig
 	priceCatalog         *PriceCatalogConfig
 	pricingCache         *usagePricingCache

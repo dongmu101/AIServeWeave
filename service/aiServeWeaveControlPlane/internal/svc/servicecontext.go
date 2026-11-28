@@ -544,6 +544,20 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 		}))
 	}
 
+	if cfg.Ark.Enabled() {
+		var secrets *logic.ProviderSecrets
+		var err error
+		if cfg.Ark.MasterKey != "" {
+			secrets, err = logic.ParseProviderSecrets(cfg.Ark.MasterKey)
+		} else {
+			secrets, err = logic.LoadProviderSecrets(cfg.Ark.MasterKeyFile)
+		}
+		if err != nil {
+			return nil, errors.Join(errors.New("Ark master key"), err)
+		}
+		logicOpts = append(logicOpts, logic.WithArk(logic.ArkConfig{Secrets: secrets, Logger: slog.Default()}))
+	}
+
 	svcLogic := logic.New(st, clock, logicOpts...)
 	// Compiled-in API reference pages are inserted or refreshed on every
 	// start, never overwriting a page an operator has edited. A failure here

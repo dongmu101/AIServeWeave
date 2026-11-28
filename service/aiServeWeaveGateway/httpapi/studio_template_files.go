@@ -91,12 +91,16 @@ func (d studioFlowDispatcher) openFile(ctx context.Context, tenantID, id string)
 		if f, ok := d.files[id]; ok {
 			return body, f.Filename, nil
 		}
-		// An inference image of this run: named by its type.
-		// 本次运行的推理图片：按其类型命名。
+		// An image or video this run produced: named by its type.
+		// 本次运行产出的图片或视频：按其类型命名。
 		head := make([]byte, uploadSniffPeekBytes)
 		n, _ := io.ReadFull(body, head)
 		head = head[:n]
-		return readCloser{io.MultiReader(bytes.NewReader(head), body), body}, "image" + imageExtension(sniffedMediaType(head)), nil
+		name := "image" + imageExtension(sniffedMediaType(head))
+		if t := sniffedMediaType(head); strings.HasPrefix(t, "video/") {
+			name = "video" + videoExtension(t)
+		}
+		return readCloser{io.MultiReader(bytes.NewReader(head), body), body}, name, nil
 	}
 
 	rec, ok := d.h.jobs.artifact(id, tenantID)

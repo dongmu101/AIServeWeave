@@ -148,6 +148,7 @@ const needsFile: WorkflowTemplate = { ...portrait, inputs: [...portrait.inputs.s
 const catalog = (over: Partial<FlowCatalog> = {}): FlowCatalog => ({
   imageModels: { models: [{ id: "flux", name: "Flux" }], defaultAvailable: true },
   templates: [portrait],
+  videoModels: null,
   ...over,
 });
 
@@ -165,7 +166,7 @@ function media(): FlowDefinition {
 }
 
 test("the palette offers the image and ComfyUI nodes", () => {
-  assert.deepEqual(EDITABLE_TYPES, ["llm", "template", "condition", "image_generation", "comfyui_template"]);
+  assert.deepEqual(EDITABLE_TYPES, ["llm", "template", "condition", "image_generation", "comfyui_template", "video_generation"]);
 });
 
 test("new image and ComfyUI nodes get their own defaults", () => {
@@ -237,7 +238,7 @@ test("an unavailable image model, or no model without a deployment default, is f
 
 test("a catalog that failed to load flags nothing", () => {
   const def = setConfig(media(), "comfyui_template_1", { template: "ghost", inputs: {} });
-  assert.deepEqual(catalogWarnings(def, { imageModels: null, templates: null }), []);
+  assert.deepEqual(catalogWarnings(def, { imageModels: null, templates: null, videoModels: null }), []);
 });
 
 test("a template that is not offered is flagged, and says nothing more about its inputs", () => {

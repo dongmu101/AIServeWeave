@@ -753,6 +753,16 @@ const operator = {
   "operator.billingSettingsUpdated": "最終保存 {time}",
   "operator.billingSettingsSaved": "課金設定を保存しました",
   "operator.billingProblemSignupGrant": "0 以上のクレジットを小数点以下 6 桁までで入力してください",
-  "operator.billingAdjustTypeHint": "付与クレジットの減算は、テナントの現在の付与クレジットを超えられません。"
+  "operator.billingAdjustTypeHint": "付与クレジットの減算は、テナントの現在の付与クレジットを超えられません。",
+  "operator.arkNav": "Volcengine Ark",
+  "operator.arkIntro": "プラットフォームのキーは、自社キーを持たないすべてのテナントの Studio 動画ノードに使われます。テナントは下記のモデルのみ利用でき、モデル価格でクレジットを差し引きます。未設定価格のモデルは 0 で課金され、課金ページの未設定価格の通知に表示されます。",
+  "operator.arkBaseUrl": "Base URL（任意）",
+  "operator.arkBaseUrlHint": "空欄の場合は Ark の北京エンドポイント {url} を使います。アドレスを変更した場合はキーの再入力が必要です。",
+  "operator.arkModels": "公開するモデル",
+  "operator.arkModelsHint": "1 行に 1 つのモデル ID またはエンドポイント ID。テナントの動画ノードはここに挙げたモデルのみ選べます。一覧が空の場合、プラットフォームのキーはどのモデルにも使えません。",
+  "operator.arkDeleteBody": "削除後、自社キーを持たないテナントは動画ノードを実行できなくなります。自社キーを持つテナントには影響しません。",
+  "operator.arkTasksTitle": "プラットフォームのキーによるタスク",
+  "operator.arkTasksIntro": "プラットフォームのキーによる全テナントの動画タスクです。Ark はテナントを区別しません。キュー中のタスクはキャンセル、終了したタスクは記録を削除できます。実行中のタスクはキャンセルできません。",
+  "operator.arkNoKeyForTasks": "プラットフォームのキーを保存するとタスク一覧を表示できます。"
 } as const;
 export default operator;

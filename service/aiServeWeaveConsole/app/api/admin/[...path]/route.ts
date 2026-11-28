@@ -1,3 +1,4 @@
+import { isArkPath, sanitizeArkError } from "@/lib/console/ark";
 import { isPublicDocsRead } from "@/lib/console/public-docs";
 import { isTrustedWrite } from "@/lib/console/request-origin";
 import { sanitizeStorageError } from "@/lib/console/tenant-storage";
@@ -39,6 +40,13 @@ interface RouteContext {
  *
  * STORAGE_WRITE_TIMEOUT_MS 限定一次租户存储保存的时长，含探测在内。 */
 const STORAGE_WRITE_TIMEOUT_MS = 30_000;
+
+/** ARK_CALL_TIMEOUT_MS bounds an Ark call: a key save checks the key with Ark
+ * first, and a task list or cancel goes to Ark (20 seconds each upstream).
+ *
+ * ARK_CALL_TIMEOUT_MS 限定一次方舟调用：保存 Key 时先向方舟检查，任务列表或取消也要访问方舟
+ * （上游各 20 秒）。 */
+const ARK_CALL_TIMEOUT_MS = 30_000;
 
 /** GET forwards a read.
  *
@@ -127,13 +135,18 @@ async function forward(
   // 保存租户存储会先探测存储再回答，可能超过默认的上游超时；它的 400 带有表单需要的 code 与
   // reason，只转交这两个字段。
   const isStorageWrite = request.method === "PUT" && upstream.path === "/admin/v1/storage";
+  // The Ark endpoints go to Ark as well; their 400 and 503 carry a code (and
+  // for ark_unreachable a reason) the page needs, passed on the same way.
+  // 方舟端点同样要访问方舟；它们的 400 与 503 带有页面需要的 code（ark_unreachable 时还有
+  // reason），以同样的方式转交。
+  const isArk = isArkPath("admin", upstream.path);
   const result = await callControlPlane({
     method: request.method,
     path: upstream.path,
     search: upstream.search,
     token: session?.token,
     body,
-    timeoutMs: isStorageWrite ? STORAGE_WRITE_TIMEOUT_MS : undefined,
+    timeoutMs: isStorageWrite ? STORAGE_WRITE_TIMEOUT_MS : isArk ? ARK_CALL_TIMEOUT_MS : undefined,
   });
   if (result.kind !== "response") {
     return errorResponse(result.kind === "timeout" ? 504 : 502, "upstream");
@@ -154,6 +167,9 @@ async function forward(
   }
   if (result.status === 400 && isStorageWrite) {
     return jsonResponse(400, { error: "upstream_error", ...sanitizeStorageError(result.text) });
+  }
+  if ((result.status === 400 || result.status === 503) && isArk) {
+    return jsonResponse(result.status, { error: "upstream_error", ...sanitizeArkError(result.text) });
   }
   if (result.status >= 400) {
     return errorResponse(result.status, "upstream_error");

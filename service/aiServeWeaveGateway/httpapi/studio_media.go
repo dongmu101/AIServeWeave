@@ -755,13 +755,13 @@ func (s *studioFlows) storedRun(w http.ResponseWriter, r *http.Request, owner St
 }
 
 // serveStoredObject streams an object Studio stored for a run: an inference
-// image, or a file the run was started with, named filename (empty for an
-// image, which is then named by its type). Its type is sniffed from its
+// image, a generated video, or a file the run was started with, named
+// filename (empty for an image or video, which is then named by its type). Its type is sniffed from its
 // first bytes rather than trusted from storage or the uploader, and only an
 // image, audio or video type is ever declared.
 //
-// serveStoredObject 流式发送 Studio 为某次运行存放的对象：推理图片，或运行启动时收到的
-// 名为 filename 的文件（图片为空，此时按类型命名）。其类型从开头的字节嗅探，而不是信任
+// serveStoredObject 流式发送 Studio 为某次运行存放的对象：推理图片、生成的视频，或运行
+// 启动时收到的名为 filename 的文件（图片与视频为空，此时按类型命名）。其类型从开头的字节嗅探，而不是信任
 // 存储或上传者给出的类型，并且只会声明图片、音频或视频类型。
 func (s *studioFlows) serveStoredObject(w http.ResponseWriter, r *http.Request, tenantID, runID, artifactID, filename string) {
 	key, ok := studioArtifactKey(tenantID, runID, artifactID)
@@ -785,7 +785,11 @@ func (s *studioFlows) serveStoredObject(w http.ResponseWriter, r *http.Request, 
 	head = head[:n]
 	contentType := sniffedMediaType(head)
 	name := safeFilename(filename)
-	if name == "" {
+	switch {
+	case name != "":
+	case strings.HasPrefix(contentType, "video/"):
+		name = "video" + videoExtension(contentType)
+	default:
 		name = "image" + imageExtension(contentType)
 	}
 	w.Header().Set("Content-Type", contentType)
@@ -828,8 +832,10 @@ func runArtifact(run StudioRun, artifactID string) (string, bool) {
 	}
 	for _, step := range run.Steps {
 		t := flowdef.NodeType(step.NodeType)
-		if flowdef.IsArtifactField(t, flowdef.FieldImage) && step.Outputs[flowdef.FieldImage] == artifactID {
-			return "", true
+		for _, field := range []string{flowdef.FieldImage, flowdef.FieldVideo, flowdef.FieldLastFrame} {
+			if flowdef.IsFileField(t, field) && step.Outputs[field] == artifactID {
+				return "", true
+			}
 		}
 		if !flowdef.IsArtifactField(t, flowdef.FieldArtifacts) {
 			continue

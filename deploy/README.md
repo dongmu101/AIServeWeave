@@ -112,6 +112,15 @@ AISW_ARTIFACT_STORAGE_S3_SECRET_ACCESS_KEY=<R2 机密访问密钥>
 - 保留期用 Gateway 的 `-artifact-retention`、`-artifact-preview-retention` 与 `-studio-artifact-retention` 调整，默认值见 `gateway -h`。
 - 部署存储与租户存储可以用同一个 bucket 下的不同 prefix，但建议分开 bucket 与 token。
 
+## 火山方舟视频生成
+
+Studio 编排的「视频生成」节点调用火山方舟的视频生成接口。由 `AISW_ARK_MASTER_KEY` 开启，还需要把 `controlplane.example.yaml` 的 `Ark` 块加进 `controlplane.yaml`。开启后：
+
+- 运维在运维平台的「火山方舟」页填写平台 Key 和开放给租户的模型。平台 Key 对所有没有自己 Key 的租户可用，只能使用列出的模型，按控制面的模型定价扣费。
+- 租户 owner/admin 可以在 Console 设置里填写本租户自己的 Key。有自己的 Key 时优先使用，可以填写任意模型，用量照常记录但不扣费。
+
+Key 都在界面里填写，不写进 `.env`。视频结果会转存到对象存储，因此还需要开启部署存储或租户自有存储。
+
 ## 公开站点与计费检查
 
 - 7x 的公开 Console 入口为 `https://www.open7x.com`。从公网检查 `/`、`/signup`、`/console/docs/clients` 和 `/pricing`，再对照源站 Console 与 HTTPS 反向代理的响应。源站返回 200 无法证明公网 DNS 与 TLS 正常。

@@ -302,6 +302,11 @@ func (s *Service) chargeUsage(ctx context.Context, records []model.UsageRecord) 
 		// 商户自己的硬件不计费；记录仍保留本应产生的费用明细。
 		if owner, owned := nodeaccess.OwnerOf(r.NodeID); owned && owner == r.TenantID {
 			r.CostMicro, doc.OwnNode = 0, true
+		} else if r.ReportedAttributes[pricing.AttrCredential] == pricing.CredentialTenant {
+			// The tenant's own third-party key paid for this, as its own
+			// hardware does for a node.
+			// 这次请求由租户自己的第三方 Key 付费，与自有节点由租户自己的硬件承担同理。
+			r.CostMicro, doc.OwnKey = 0, true
 		} else if free[r.NodeID] {
 			// An operator made this platform node free; the record keeps
 			// what it would have cost, as for an own node.

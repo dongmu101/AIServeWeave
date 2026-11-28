@@ -19,6 +19,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { ArkCredentialPanel } from "@/components/console/ark-credential-panel";
 import { TenantStoragePanel } from "@/components/console/tenant-storage-panel";
 import { canManageGatewayKey, canManageStorage } from "@/lib/console/permissions";
 
@@ -204,6 +205,18 @@ export function SettingsView({
           <p className="text-sm text-muted-foreground"><Message id="tenant.storageIntro" /></p>
           {canManageStorage(role) ? <TenantStoragePanel /> : (
             <p className="text-sm text-muted-foreground"><Message id="tenant.storageOwnerOnly" /></p>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle><Message id="tenant.arkTitle" /></CardTitle>
+        </CardHeader>
+        <CardContent className="grid gap-4">
+          <p className="text-sm text-muted-foreground"><Message id="tenant.arkIntro" /></p>
+          {canManageStorage(role) ? <ArkCredentialPanel surface="admin" /> : (
+            <p className="text-sm text-muted-foreground"><Message id="tenant.arkOwnerOnly" /></p>
           )}
         </CardContent>
       </Card>

@@ -77,6 +77,10 @@ func (dispatcherFunc) RunTemplate(context.Context, TemplateCall) (MediaReply, er
 	return MediaReply{}, &Error{Code: "unsupported"}
 }
 
+func (dispatcherFunc) GenerateVideo(context.Context, VideoCall) (MediaReply, error) {
+	return MediaReply{}, &Error{Code: "unsupported"}
+}
+
 // replies answers each call with a fixed text chosen by model.
 func replies(texts map[string]string) Dispatcher {
 	return dispatcherFunc(func(_ context.Context, call ChatCall, _ func(string)) (ChatReply, error) {

@@ -585,6 +585,14 @@ func run() error {
 			return err
 		}
 		httpCfg.FileRegistry = files
+		// The Volcengine Ark key a tenant's Studio video node uses comes
+		// from the same control plane.
+		// 租户 Studio 视频节点所用的火山方舟 Key 也从同一个控制面读取。
+		ark, err := controlplaneclient.NewArkClient(controlplaneclient.JobsClientConfig{Endpoint: *controlPlaneAddr, Token: token})
+		if err != nil {
+			return err
+		}
+		httpCfg.Ark = ark
 	}
 	// Same guard, same reason: requestLogClient is a concrete
 	// *controlplaneclient.RequestLogsClient, and httpCfg.RequestLogClient is

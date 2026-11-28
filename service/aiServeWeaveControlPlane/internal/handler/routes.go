@@ -382,6 +382,16 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 		{Method: http.MethodGet, Path: "/admin/v1/storage", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/storage", requireSession(ctx, getTenantStorage(ctx)))},
 		{Method: http.MethodPut, Path: "/admin/v1/storage", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/storage", requireSession(ctx, putTenantStorage(ctx)))},
 		{Method: http.MethodDelete, Path: "/admin/v1/storage", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/storage", requireSession(ctx, deleteTenantStorage(ctx)))},
+		{Method: http.MethodGet, Path: "/admin/v1/ark", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/ark", requireSession(ctx, getArk(ctx)))},
+		{Method: http.MethodPut, Path: "/admin/v1/ark", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/ark", requireSession(ctx, putArk(ctx)))},
+		{Method: http.MethodDelete, Path: "/admin/v1/ark", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/ark", requireSession(ctx, deleteArk(ctx)))},
+		{Method: http.MethodGet, Path: "/admin/v1/ark/tasks", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/ark/tasks", requireSession(ctx, listArkTasks(ctx)))},
+		{Method: http.MethodDelete, Path: "/admin/v1/ark/tasks/:task_id", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/ark/tasks/:task_id", requireSession(ctx, deleteArkTask(ctx)))},
+		{Method: http.MethodGet, Path: "/operator/v1/ark", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/ark", requirePlatformSession(ctx, getArk(ctx)))},
+		{Method: http.MethodPut, Path: "/operator/v1/ark", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/ark", requirePlatformSession(ctx, putArk(ctx)))},
+		{Method: http.MethodDelete, Path: "/operator/v1/ark", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/ark", requirePlatformSession(ctx, deleteArk(ctx)))},
+		{Method: http.MethodGet, Path: "/operator/v1/ark/tasks", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/ark/tasks", requirePlatformSession(ctx, listArkTasks(ctx)))},
+		{Method: http.MethodDelete, Path: "/operator/v1/ark/tasks/:task_id", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/ark/tasks/:task_id", requirePlatformSession(ctx, deleteArkTask(ctx)))},
 		{Method: http.MethodGet, Path: "/admin/v1/audit", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/audit", requireSession(ctx, listAudit(ctx)))},
 		{Method: http.MethodGet, Path: "/operator/v1/audit", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/audit", requirePlatformSession(ctx, listAudit(ctx)))},
 		{Method: http.MethodGet, Path: "/operator/v1/metrics/history", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/metrics/history", requirePlatformSession(ctx, metricsHistory(ctx)))},
@@ -612,6 +622,14 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 			Method:  http.MethodGet,
 			Path:    "/internal/v1/tenants/:tenant_id/storage",
 			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/tenants/:tenant_id/storage", requireSharedSecret(ctx.Config.InternalToken, internalTenantStorage(ctx))),
+		},
+		// The Volcengine Ark key a tenant's Studio video node uses, read by
+		// the Gateway with the key.
+		// 租户 Studio 视频节点使用的火山方舟 Key，由 Gateway 连同 Key 读取。
+		{
+			Method:  http.MethodGet,
+			Path:    "/internal/v1/tenants/:tenant_id/ark",
+			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/tenants/:tenant_id/ark", requireSharedSecret(ctx.Config.InternalToken, internalArk(ctx))),
 		},
 		{
 			Method:  http.MethodGet,

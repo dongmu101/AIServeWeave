@@ -85,13 +85,13 @@ export class ApiError extends Error {
    */
   readonly status: number;
   /**
-   * code and reason are the machine-readable parts of a 400 answer, set only
-   * where the Console server forwards them after checking them against a
-   * fixed vocabulary (the tenant storage endpoint). They are empty otherwise,
-   * and upstream error text is never carried.
+   * code and reason are the machine-readable parts of a 400 (or 503) answer,
+   * set only where the Console server forwards them after checking them
+   * against a fixed vocabulary (the tenant storage and Ark endpoints). They
+   * are empty otherwise, and upstream error text is never carried.
    *
-   * code 与 reason 是 400 响应里机器可读的部分，只在 Console 服务端对照固定词汇校验后才会
-   * 转交（租户对象存储端点）。其余情况为空，上游的错误文本从不携带。
+   * code 与 reason 是 400（或 503）响应里机器可读的部分，只在 Console 服务端对照固定词汇
+   * 校验后才会转交（租户对象存储与火山方舟端点）。其余情况为空，上游的错误文本从不携带。
    */
   readonly code: string;
   readonly reason: string;

@@ -19,6 +19,7 @@ import {
   BookOpenIcon,
   BoxesIcon,
   ChartColumnIcon,
+  ClapperboardIcon,
   CreditCardIcon,
   GaugeIcon,
   HistoryIcon,
@@ -50,6 +51,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { signOut } from "@/lib/console/api-client";
+import { canManageStorage } from "@/lib/console/permissions";
 import { type Role } from "@/lib/console/contract";
 import type { SessionUser } from "@/lib/console/session-payload";
 
@@ -63,7 +65,7 @@ import type { SessionUser } from "@/lib/console/session-payload";
  * 没有数据来源的页面挂菜单项，等于许下后端兑现不了的承诺，这正是指标不在其中的
  * 原因——它没有 Admin API，那个 API 背后也没有存储。
  */
-function navigationItems(t: Translator): readonly NavEntry[] { return [
+function navigationItems(t: Translator, role: string): readonly NavEntry[] { return [
   { href: "/console", label: t("tenant.overview"), icon: LayoutDashboardIcon },
   { href: "/console/billing", label: t("tenant.billing"), icon: CreditCardIcon },
   { href: "/console/models", label: t("tenant.aiServicesModels"), icon: BoxesIcon },
@@ -79,6 +81,9 @@ function navigationItems(t: Translator): readonly NavEntry[] { return [
       { href: "/console/workflows", label: t("tenant.workflowTemplates"), icon: LayoutTemplateIcon },
       { href: "/console/jobs", label: t("tenant.runs"), icon: ListChecksIcon },
       { href: "/console/jobs/history", label: t("tenant.runHistory"), icon: HistoryIcon },
+      // Ark video tasks are read with the tenant's own key, which only owner and admin manage.
+      // 方舟视频任务用租户自己的 Key 读取，只有 owner 与 admin 管理它。
+      ...(canManageStorage(role) ? [{ href: "/console/video-tasks", label: t("tenant.videoTasks"), icon: ClapperboardIcon }] : []),
     ],
   },
   { href: "/console/docs", label: t("tenant.apiDocumentation"), icon: BookOpenIcon },
@@ -113,7 +118,7 @@ export function ConsoleShell({
   children: React.ReactNode;
 }) {
   const { t } = useI18n();
-  const NAV_ITEMS = navigationItems(t);
+  const NAV_ITEMS = navigationItems(t, user.role);
   const router = useRouter();
   const pathname = usePathname();
   const [leaving, setLeaving] = React.useState(false);

@@ -89,7 +89,7 @@ test("parseDefinition reads image_generation and comfyui_template nodes", () => 
   });
   assert.deepEqual(def.nodes.slice(-2).map((n) => n.type), ["image_generation", "comfyui_template"]);
   assert.deepEqual(def.nodes.at(-1)?.config, { template: "t", inputs: { prompt: "x" } });
-  assert.throws(() => parseDefinition({ ...definition, nodes: [{ id: "x", type: "video_generation", position: {} }] }), ContractError);
+  assert.throws(() => parseDefinition({ ...definition, nodes: [{ id: "x", type: "audio_generation", position: {} }] }), ContractError);
 });
 
 test("issues of the second-phase nodes read in Chinese and name their field", () => {

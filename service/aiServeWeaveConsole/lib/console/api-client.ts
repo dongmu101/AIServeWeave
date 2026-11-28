@@ -294,7 +294,7 @@ async function attemptRequest<T>(
     throw new ApiError(
       kindForStatus(response.status),
       response.status,
-      response.status === 400 ? await readErrorDetail(response) : {}
+      response.status === 400 || response.status === 503 ? await readErrorDetail(response) : {}
     );
   }
   return spec.parse(await readJson(response));

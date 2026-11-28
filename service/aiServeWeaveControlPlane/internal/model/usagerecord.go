@@ -169,6 +169,11 @@ type UsageDetails struct {
 	// request: it is priced as usual but not charged.
 	// FreeNode 在请求由运维设为免费的平台节点服务时设置：照常计价，但不扣费。
 	FreeNode bool `json:"free,omitempty"`
+	// OwnKey is set when the tenant's own provider key served the request
+	// (attribute credential=tenant): it is priced as usual but not charged.
+	// OwnKey 在请求用租户自己的供应商 Key 完成时设置（属性 credential=tenant）：照常计价，
+	// 但不扣费。
+	OwnKey bool `json:"own_key,omitempty"`
 	// Unpriced is set when some billed quantity found no price.
 	// Unpriced 在有计费数量找不到单价时设置。
 	Unpriced bool `json:"unpriced,omitempty"`

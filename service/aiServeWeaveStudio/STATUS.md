@@ -1,3 +1,12 @@
+## 编排的视频生成节点（2026-11-28）
+
+新增「视频生成」节点（火山方舟）。代码、lint、typecheck、147 项单元测试与生产构建已通过，**未在浏览器里走通，也未接真实火山方舟**。
+
+- 节点面板（`flow-node.tsx`）与配置表单（`node-inspector.tsx` 的 `VideoForm`）：模型从 `GET /studio/v1/video-models` 选择；租户用自己的 Key 时可以自由填写模型或接入点 ID。首帧、尾帧与参考图只能从图片来源下拉中选（`referencesFor(..., "image")`：image 输入、上游的 `image` 与 `last_frame`）。另有分辨率、宽高比、时长、生成音频与水印，均可留给模型默认。
+- 即时检查：`image_reference_required`、`video_generation_unavailable`，以及模型不在平台白名单时的 `model_unavailable`。
+- 运行视图：视频节点显示「正在生成视频」提示，步骤输入中的图片按图片展示；产物视图对视频内联 `<video controls>` 播放并保留下载。产物下载不支持 Range，Safari 可能无法内联播放。
+- 新的上游白名单：`GET video-models`。
+
 ## 编排的图片与文件输入（2026-11-27）
 
 编排运行可以带图片与文件（flowdef 输入类型 `image`、`file`）。本节只记 Studio；`common/flowdef` 与 Gateway 一侧见根 STATUS 与 Gateway 代码。本节取代下面「编排第二期节点」里关于文件型模板输入「只显示说明、必填则不能运行」的说法。

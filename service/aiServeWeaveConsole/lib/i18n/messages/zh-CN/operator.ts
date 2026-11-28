@@ -753,6 +753,16 @@ const operator = {
   "operator.billingSettingsUpdated": "最后保存于 {time}",
   "operator.billingSettingsSaved": "计费设置已保存",
   "operator.billingProblemSignupGrant": "请输入不小于 0 的点数，最多六位小数",
-  "operator.billingAdjustTypeHint": "扣减赠送点数时，不能超过该商户现有的赠送点数。"
+  "operator.billingAdjustTypeHint": "扣减赠送点数时，不能超过该商户现有的赠送点数。",
+  "operator.arkNav": "火山方舟",
+  "operator.arkIntro": "平台 Key 提供给所有没有自己 Key 的租户的 Studio 视频节点使用。租户只能使用下面列出的模型，并按模型定价扣点数；尚未定价的模型按 0 计费，会出现在计费页的未定价提示中。",
+  "operator.arkBaseUrl": "Base URL（可选）",
+  "operator.arkBaseUrlHint": "留空使用火山方舟北京地址 {url}。更换地址后必须重新填写 Key。",
+  "operator.arkModels": "开放的模型",
+  "operator.arkModelsHint": "每行一个模型 ID 或接入点 ID。租户的视频节点只能选择这里列出的模型；列表为空时平台 Key 对任何模型都不可用。",
+  "operator.arkDeleteBody": "删除后，没有自己 Key 的租户将无法运行视频节点；已有自己 Key 的租户不受影响。",
+  "operator.arkTasksTitle": "平台 Key 下的任务",
+  "operator.arkTasksIntro": "列出平台 Key 下所有租户的视频任务，火山方舟不区分租户。排队中的任务可以取消，已结束的任务可以删除记录；执行中的任务无法取消。",
+  "operator.arkNoKeyForTasks": "保存平台 Key 后才能查看任务列表。"
 } as const;
 export default operator;

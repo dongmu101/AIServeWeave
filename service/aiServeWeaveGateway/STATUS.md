@@ -161,6 +161,23 @@ go run ./service/aiServeWeaveGateway -comfyui-managed-addr 127.0.0.1:8093 ...
 
 `InternalToken` 用 `AISW_CONTROL_PLANE_TOKEN` 环境变量传，不要用 `-control-plane-token` flag —— flag 在 `ps` 输出里可见。
 
+## Studio 视频生成节点（2026-11-28）
+
+`video_generation` 节点经火山方舟执行。设计见 `.scratch/ark-video-node/spec.md`。代码与默认测试已通过，**未与真实火山方舟联调**。
+
+- **引擎**（`flow/`）：`Dispatcher.GenerateVideo`；`Config.VideoNodeTimeout`（默认 60 分钟）代替单节点超时，含视频节点的计划改用 `VideoRunTimeout`（默认 2 小时，只在比 `RunTimeout` 长时生效）。输出 `video` 与 `last_frame`，没有视频时以 `no_video_produced` 失败。步骤输入记录 prompt、各图片槽位（`first_frame`、`last_frame`、`reference_images.<i>`）与参数。
+- **Key**（`httpapi/ark.go`、`controlplaneclient/ark.go`）：设置了 `-control-plane-addr` 即从控制面内部接口读取，没有新 flag。每租户缓存 30 秒，读不到时沿用 10 分钟内的旧值；旧控制面的 404 视为未配置。平台 Key 只允许其模型白名单中的模型。
+- **派发**（`httpapi/studio_video.go`）：
+  1. 取 Key；没有时 `video_generation_unavailable`，模型不在平台白名单时 `model_unavailable`。
+  2. 先确认有可写的对象存储（否则 `artifact_storage_unavailable`），再把图片槽位读成 data URL（图片缺失 `image_missing`）。
+  3. 在租户限流内创建任务（SDK 不重试），`return_last_frame=true`，`execution_expires_after=3600`。
+  4. 每 5 秒查询一次；连续失败 5 次、404 或 401 时放弃（`upstream_error`）。失败按方舟错误码映射为 `content_rejected` 或 `video_generation_failed`，过期为 `video_task_expired`，被取消为 `job_cancelled`。
+  5. 节点被停止或超时，用独立的 10 秒上下文调用方舟取消。
+  6. 成功后先记账（端点 `video_generation`，`Attributes.credential` 为 `tenant` 或 `platform`，不计入 TPM 限流），再把视频与尾帧从方舟地址流式写入对象存储（文件类别 `video`/`image`）；尾帧失败不影响节点。下载地址失效时 `video_task_expired`。
+- **端点**：`GET /studio/v1/video-models` 返回 `{data, available, source, free_form}`；启动运行前对视频节点做同样的 Key 与模型检查，读不到 Key 时不拦截，留给节点报错。产物下载接受 `video` 与 `last_frame`，视频按嗅探类型命名为 `video.mp4` 等。
+- **新配置字段**（`httpapi.Config`）：`Ark`、`ArkHTTPClient`、`ArkFetchClient`（默认拒绝内网地址）。
+- 已知限制见根 [STATUS](../../STATUS.md)。
+
 ## 文件登记表 files（2026-11-27）
 
 Gateway 写进对象存储的每个文件（job 产物、Studio 运行输入的上传与复用副本、推理生图，部署存储与租户存储都算）都在控制面的 `files` 表登记一行，保留期清理改为按这张表进行，不再按前缀列举对象存储。设计见 `.scratch/file-registry/spec.md`，控制面一侧见 [ControlPlane STATUS](../aiServeWeaveControlPlane/STATUS.md#文件登记表-files2026-11-27)。没有新 flag：设置了 `-control-plane-addr` 即生效。

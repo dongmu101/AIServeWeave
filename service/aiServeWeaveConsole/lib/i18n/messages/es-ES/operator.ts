@@ -753,6 +753,16 @@ const operator = {
   "operator.billingSettingsUpdated": "Guardado por última vez {time}",
   "operator.billingSettingsSaved": "Ajustes de facturación guardados",
   "operator.billingProblemSignupGrant": "Introduce 0 o más créditos, con un máximo de seis decimales",
-  "operator.billingAdjustTypeHint": "Una deducción de créditos de regalo no puede superar los créditos de regalo actuales del inquilino."
+  "operator.billingAdjustTypeHint": "Una deducción de créditos de regalo no puede superar los créditos de regalo actuales del inquilino.",
+  "operator.arkNav": "Volcengine Ark",
+  "operator.arkIntro": "La clave de la plataforma sirve a los nodos de vídeo de Studio de todos los inquilinos sin clave propia. Los inquilinos solo pueden usar los modelos de abajo, con cargo según el precio de cada modelo; un modelo sin precio se cobra a 0 y aparece en el aviso de precios pendientes de la página de facturación.",
+  "operator.arkBaseUrl": "URL base (opcional)",
+  "operator.arkBaseUrlHint": "Déjela vacía para usar el endpoint de Ark en Pekín {url}. Si cambia la dirección, debe volver a introducir la clave.",
+  "operator.arkModels": "Modelos habilitados",
+  "operator.arkModelsHint": "Un ID de modelo o de endpoint por línea. Los nodos de vídeo de los inquilinos solo pueden elegir los modelos indicados aquí; con la lista vacía, la clave de la plataforma no sirve para ningún modelo.",
+  "operator.arkDeleteBody": "Tras eliminarla, los inquilinos sin clave propia no podrán ejecutar nodos de vídeo; los que tienen clave propia no se ven afectados.",
+  "operator.arkTasksTitle": "Tareas de la clave de la plataforma",
+  "operator.arkTasksIntro": "Tareas de vídeo de todos los inquilinos con la clave de la plataforma; Ark no distingue inquilinos. Las tareas en cola se pueden cancelar y las terminadas eliminar; las tareas en ejecución no se pueden cancelar.",
+  "operator.arkNoKeyForTasks": "Guarde la clave de la plataforma para ver sus tareas."
 } as const;
 export default operator;

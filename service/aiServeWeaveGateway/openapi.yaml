@@ -937,8 +937,9 @@ paths:
         并附带定位到具体节点或输入的问题列表（见 StudioIssuesError）：
 
         1. `invalid_flow`：所选版本的定义本身不合法；
-        2. `model_unavailable`：定义引用的模型、图像模型或工作流模板当前对该用户不可用
-           （问题的 `code` 为 `model_unavailable`、`image_generation_unavailable` 或
+        2. `model_unavailable`：定义引用的模型、图像模型、视频模型或工作流模板当前对该用户不可用
+           （问题的 `code` 为 `model_unavailable`、`image_generation_unavailable`、
+           `video_generation_unavailable`（租户既没有自己的火山方舟 Key，平台也没有配置）或
            `template_unavailable`，`node` 为对应节点，`field` 为 `config.model` 或 `config.template`）；
         3. `invalid_inputs`：输入值有误（问题不带 `node`，`field` 为 `inputs.<名称>`，
            `code` 为 `required`、`invalid_value`，未声明的名称为 `unknown_input`）。文件输入另有：
@@ -1098,9 +1099,9 @@ paths:
       description: |
         只能下载本人这次运行的输入文件（`inputs` 中 StudioRunFileValue 的 `artifact_id`），或
         这次运行的步骤输出里出现过的产物 id（`image_generation` 与 `comfyui_template` 节点的
-        `image` / `artifacts` 输出）；其他 id 视为不存在（404 `not_found`），即使该租户拥有它。
+        `image` / `artifacts` 输出，`video_generation` 节点的 `video` / `last_frame` 输出）；其他 id 视为不存在（404 `not_found`），即使该租户拥有它。
 
-        Studio 自己写入对象存储的对象（`sart_` 开头：推理图片与输入文件）有保留期
+        Studio 自己写入对象存储的对象（`sart_` 开头：推理图片、生成的视频与尾帧、输入文件）有保留期
         （`-studio-artifact-retention`，默认 30 天），过期后同样 404 `not_found`。
 
         响应体是租户的文件，经 Studio 来源提供，因此总带 `Content-Disposition: attachment`、
@@ -1177,6 +1178,28 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/StudioImageModelList"
+        "401":
+          $ref: "#/components/responses/StudioUnauthorized"
+        "503":
+          $ref: "#/components/responses/StudioUnavailable"
+
+  /studio/v1/video-models:
+    get:
+      tags: [studio]
+      summary: 可用于 video_generation 节点的视频模型
+      description: |
+        返回租户当前可用的火山方舟 Key 的来源与模型：租户自己的 Key（可自由填写模型 id），或平台 Key
+        （只能用运维允许的模型）。
+      operationId: studioListVideoModels
+      security:
+        - studioSession: []
+      responses:
+        "200":
+          description: 视频模型列表
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StudioVideoModelList"
         "401":
           $ref: "#/components/responses/StudioUnauthorized"
         "503":
@@ -1886,10 +1909,10 @@ components:
             `duplicate_name`、`invalid_label`、`invalid_type`、`invalid_default`、`invalid_config`、
             `required`、`out_of_range`、`invalid_template`、`unknown_reference`、
             `reference_not_upstream`、`missing_node`、`multiple_nodes`、`invalid_edge`、`cycle`、
-            `unreachable`、`artifact_reference`；运行输入：`required`、`invalid_value`、
+            `unreachable`、`artifact_reference`、`image_reference_required`；运行输入：`required`、`invalid_value`、
             `unknown_input`、`unsupported_file_type`、`not_found`、`artifact_storage_unavailable`；
             运行前的可用性检查：`model_unavailable`、
-            `image_generation_unavailable`、`template_unavailable`
+            `image_generation_unavailable`、`video_generation_unavailable`、`template_unavailable`
         message:
           type: string
           description: 只写标识符，从不引用模板、标签或取值
@@ -1951,6 +1974,26 @@ components:
         default_available:
           type: boolean
           description: 部署自己的生图工作流是否已配置并注册；为 false 时不指定 model 的 image_generation 节点无法运行
+
+    StudioVideoModelList:
+      type: object
+      required: [data, available, free_form]
+      properties:
+        data:
+          type: array
+          description: 可选的视频模型。用平台 Key 时是运维允许的全部模型；用租户自己的 Key 时是租户填写的建议
+          items:
+            $ref: "#/components/schemas/StudioModel"
+        available:
+          type: boolean
+          description: 租户是否有可用的火山方舟 Key（自己的或平台的）；为 false 时 video_generation 节点无法运行
+        source:
+          type: string
+          enum: [tenant, platform]
+          description: 所用 Key 的来源；available 为 false 时缺省
+        free_form:
+          type: boolean
+          description: 为 true（使用租户自己的 Key）时可以填写 data 之外的任意模型 id
 
     StudioUsage:
       type: object
@@ -2097,13 +2140,16 @@ components:
       description: |
         一份编排的内容，由控制面保存前与 Gateway 运行前各校验一次（结构校验，不判断模型当前是否可用）。
         未知字段被拒绝。规则概要：恰好一个 `input` 节点（无入边）与一个 `output` 节点（无出边）；
-        中间可有 `llm`、`template`、`condition`、`image_generation`、`comfyui_template` 节点，
+        中间可有 `llm`、`template`、`condition`、`image_generation`、`comfyui_template`、`video_generation` 节点，
         且都能从 input 节点到达；不能有环；至多 50 个节点、200 条边、20 个输入、20 个输出，整份定义不超过 1 MiB。
 
         模板字符串中以 `{{inputs.<名称>}}` 引用运行输入，以 `{{<节点id>.<字段>}}` 引用**上游**节点的输出字段：
         llm/template 节点有 `text`（llm 声明了 `json_fields` 时还有各结构化字段），condition 节点有 `result`
-        （`"true"`/`"false"`），image_generation 节点有 `image`，comfyui_template 节点有 `image` 与 `artifacts`。
-        产物字段（`image`、`artifacts`）只能作为某个输出 `ref` 的全部内容，不能嵌入其他模板或参与比较。
+        （`"true"`/`"false"`），image_generation 节点有 `image`，comfyui_template 节点有 `image` 与 `artifacts`，
+        video_generation 节点有 `video` 与 `last_frame`。
+        产物字段（`image`、`artifacts`、`video`、`last_frame`）只能作为某个输出 `ref` 的全部内容，不能嵌入其他模板或参与比较；
+        指向单个文件时也可以作为 comfyui_template 某个输入的全部内容，指向单张图片（`image`、`last_frame`）时也可以作为
+        video_generation 图片槽位的全部内容。
         节点 id 与输入/字段名只含字母、数字与下划线，不超过 64 字节，节点 id 不能是 `inputs`。
       required: [inputs, nodes, edges, outputs]
       properties:
@@ -2138,7 +2184,8 @@ components:
           description: |
             `image` 与 `file` 的取值是上传的文件（见 `POST /studio/v1/flows/{id}/runs`），以产物 id
             替换进模板。它们只能作为输出 ref 的全部内容被引用，或作为 comfyui_template 某个输入的
-            全部内容（交给模板的文件型输入），其他位置报 `artifact_reference`。
+            全部内容（交给模板的文件型输入），`image` 输入还可以作为 video_generation 图片槽位的全部内容；
+            其他位置报 `artifact_reference`。
         required: { type: boolean, description: 为 true 时最终必须得到非空白的取值 }
         default:
           description: 默认值，类型须与 `type` 一致（text 为字符串，number 为数字，boolean 为布尔）；null 视为未设置。image 与 file 输入不能有默认值（`invalid_default`）
@@ -2151,19 +2198,21 @@ components:
         id: { type: string }
         type:
           type: string
-          enum: [input, llm, template, condition, image_generation, comfyui_template, output]
+          enum: [input, llm, template, condition, image_generation, comfyui_template, video_generation, output]
         label: { type: string, description: 展示标签，至多 100 个字符 }
         config:
           description: |
             形状取决于 `type`，未知字段被拒绝：`llm` 为 FlowLLMConfig，`template` 为
             FlowTemplateConfig，`condition` 为 FlowConditionConfig，`image_generation` 为
-            FlowImageConfig，`comfyui_template` 为 FlowComfyUIConfig；`input` 与 `output` 节点不带 config
+            FlowImageConfig，`comfyui_template` 为 FlowComfyUIConfig，`video_generation` 为
+            FlowVideoConfig；`input` 与 `output` 节点不带 config
           oneOf:
             - $ref: "#/components/schemas/FlowLLMConfig"
             - $ref: "#/components/schemas/FlowTemplateConfig"
             - $ref: "#/components/schemas/FlowConditionConfig"
             - $ref: "#/components/schemas/FlowImageConfig"
             - $ref: "#/components/schemas/FlowComfyUIConfig"
+            - $ref: "#/components/schemas/FlowVideoConfig"
         position:
           type: object
           description: 节点在画布上的位置，不影响执行
@@ -2249,6 +2298,43 @@ components:
           description: "`<宽>x<高>`，每边 1 到 16384 的十进制整数；推理图像模型不支持指定尺寸"
           example: 1024x1024
 
+    FlowVideoConfig:
+      type: object
+      description: |
+        video_generation 节点：用火山方舟生成视频。输出字段 `video`（视频的产物 id）与 `last_frame`
+        （尾帧图片的产物 id，方舟没有返回时为空字符串）。所用 Key 为租户自己的火山方舟 Key，没有时用平台 Key；
+        用平台 Key 时按方舟返回的 completion tokens 与该模型的 output 单价扣费，用自己的 Key 时只记录不扣费。
+        单节点超时 60 分钟，含该节点的运行整体期限 2 小时。
+      required: [model, prompt]
+      properties:
+        model:
+          type: string
+          description: 方舟视频模型 id 或推理接入点 id（见 `GET /studio/v1/video-models`），不是模板字符串，至多 256 字节
+        prompt: { type: string, description: 提示词模板 }
+        first_frame:
+          type: string
+          description: 首帧。必须恰好是对单张图片的引用：image 运行输入，或上游节点的 `image` / `last_frame`，否则报 `image_reference_required`
+        last_frame:
+          type: string
+          description: 尾帧，规则同 first_frame
+        reference_images:
+          type: array
+          maxItems: 10
+          description: 参考图，每项规则同 first_frame
+          items: { type: string }
+        resolution:
+          type: string
+          enum: ["480p", "720p", "1080p", "4k"]
+          description: 省略时取模型默认；模型实际支持哪些由方舟检查
+        ratio:
+          type: string
+          enum: ["16:9", "4:3", "1:1", "3:4", "9:16", "21:9", adaptive]
+        duration:
+          type: integer
+          description: 时长（秒），1 到 3600，或 -1 由模型决定；省略时取模型默认
+        generate_audio: { type: boolean, description: 是否生成音频；省略时取模型默认 }
+        watermark: { type: boolean, description: 是否加水印；省略时取模型默认 }
+
     FlowComfyUIConfig:
       type: object
       description: comfyui_template 节点：运行已发布的工作流模板，输出字段 `image`（第一张图片的产物 id）与 `artifacts`（全部产物，JSON 数组字符串）。
@@ -2263,7 +2349,7 @@ components:
             以模板输入名为键、以模板字符串为值；未列出的输入取工作流模板自己的默认值，至多 50 个。
             模板的 `file` 型输入取值必须恰好是一个文件引用：image/file 运行输入
             （`{{inputs.<名称>}}`），或上游节点的 `image`（`{{<节点>.image}}`）；节点运行时把该文件
-            作为 multipart 文件分片提交给模板。文本型输入给了文件、文件型输入给了文本、或必填
+            作为 multipart 文件分片提交给模板。上游 video_generation 节点的 `video` 与 `last_frame` 同样可以。文本型输入给了文件、文件型输入给了文本、或必填
             文件输入没有取值，节点以 `invalid_input` 失败；文件已不存在（如过了保留期）以
             `not_found` 失败。
           additionalProperties:
@@ -2378,14 +2464,14 @@ components:
         node_id: { type: string }
         node_type:
           type: string
-          enum: [input, llm, template, condition, image_generation, comfyui_template, output]
+          enum: [input, llm, template, condition, image_generation, comfyui_template, video_generation, output]
         status: { type: string, enum: [succeeded, failed, canceled, skipped] }
         error_code:
           type: string
           description: status 为 failed 时的稳定错误码，见 StudioRun 的 `error_code`
         model:
           type: string
-          description: llm 与 image_generation 节点的模型，comfyui_template 节点的工作流模板
+          description: llm、image_generation 与 video_generation 节点的模型，comfyui_template 节点的工作流模板
         inputs:
           type: object
           description: 节点实际求值的内容（渲染后的提示词、操作数、提示词与尺寸、模板输入等）；过长的值被截断并以「…」结尾
@@ -2422,7 +2508,10 @@ components:
             `model_unavailable`、`image_generation_unavailable`、`template_unavailable`、`invalid_input`、
             `not_found`（模板节点要提交的文件已不存在）、`invalid_request`、`no_capable_node`、`queue_timeout`、
             `generation_failed`、`out_of_memory`、`job_cancelled`、`artifact_storage_unavailable`、
-            `rate_limited`、`timeout`、`insufficient_balance`、`account_subscription_expired`
+            `rate_limited`、`timeout`、`insufficient_balance`、`account_subscription_expired`；
+            video_generation 节点另有 `video_generation_unavailable`、`video_generation_failed`、
+            `content_rejected`（未通过方舟内容审核）、`video_task_expired`（方舟任务过期或结果地址已失效）、
+            `image_missing`（引用的图片已不存在）、`no_video_produced`
         failed_node:
           type: string
           description: 失败的节点 id；因整体期限而失败时缺省

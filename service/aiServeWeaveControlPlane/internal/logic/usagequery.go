@@ -296,25 +296,36 @@ func (s *Service) effectivePrice(ctx context.Context, snap *pricingSnapshot, ali
 	return out, nil
 }
 
-// routedAliases returns the aliases of the current model routes, sorted
-// and without duplicates.
+// routedAliases returns the aliases of the current model routes, and the
+// video models the platform's Ark key allows (they are billed by the same
+// name), sorted and without duplicates.
 //
-// routedAliases 返回当前模型路由的别名，已排序且去重。
+// routedAliases 返回当前模型路由的别名，以及平台方舟 Key 允许的视频模型（它们按同一名称
+// 计费），已排序且去重。
 func (s *Service) routedAliases(ctx context.Context) ([]string, error) {
-	routes, err := s.CurrentRoutes(ctx)
-	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return []string{}, nil
-		}
-		return nil, err
-	}
 	seen := map[string]bool{}
 	out := []string{}
-	for _, route := range routes.Routes {
-		if route.Model != "" && !seen[route.Model] {
-			seen[route.Model] = true
-			out = append(out, route.Model)
+	add := func(alias string) {
+		if alias != "" && !seen[alias] {
+			seen[alias] = true
+			out = append(out, alias)
 		}
+	}
+	routes, err := s.CurrentRoutes(ctx)
+	switch {
+	case err == nil:
+		for _, route := range routes.Routes {
+			add(route.Model)
+		}
+	case !errors.Is(err, ErrNotFound):
+		return nil, err
+	}
+	videoModels, err := s.PlatformArkModels(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, m := range videoModels {
+		add(m)
 	}
 	slices.Sort(out)
 	return out, nil

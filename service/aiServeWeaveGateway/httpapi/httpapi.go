@@ -222,6 +222,21 @@ type Config struct {
 	// FileRegistry 把写进 ArtifactStorage 或租户存储的每个文件记录到控制面的 files 表，并由
 	// 按这些记录运行的清理删除过期文件。为 nil 时写入不做记录，也不运行这种清理。
 	FileRegistry FileRegistry
+	// Ark reads the Volcengine Ark key a tenant's Studio video node uses:
+	// its own, or the platform's. Nil means no tenant has one, and video
+	// nodes fail with video_generation_unavailable.
+	//
+	// Ark 读取租户 Studio 视频节点所用的火山方舟 Key：租户自己的或平台的。为 nil 时所有
+	// 租户都没有，视频节点以 video_generation_unavailable 失败。
+	Ark ArkSource
+	// ArkHTTPClient carries the calls to Ark's API; nil uses the SDK's own.
+	// ArkFetchClient downloads the results Ark links to; nil uses a client
+	// that refuses internal addresses (objectstore.GuardedHTTPClient).
+	//
+	// ArkHTTPClient 承载对方舟 API 的调用；为 nil 时使用 SDK 自己的客户端。ArkFetchClient
+	// 下载方舟链接的结果；为 nil 时使用拒绝内网地址的客户端（objectstore.GuardedHTTPClient）。
+	ArkHTTPClient  *http.Client
+	ArkFetchClient *http.Client
 	// ArtifactCopyTimeout bounds one artifact's node-to-storage byte copy.
 	// Zero uses DefaultArtifactCopyTimeout. It is deliberately separate from
 	// PersistCallTimeout, which bounds the lightweight metadata call to the
@@ -492,6 +507,7 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 		limiter:                 cfg.Limiter,
 		storage:                 cfg.ArtifactStorage,
 		files:                   newFileStore(cfg.ArtifactStorage, cfg.TenantStorage, clock, logger, 0),
+		ark:                     newArkStore(cfg.Ark, cfg.ArkHTTPClient, cfg.ArkFetchClient, clock, logger),
 		allowedUploadExtensions: normalizeAllowedExtensions(cfg.AllowedUploadExtensions),
 		artifactRecovery:        cfg.ArtifactRecoveryClient,
 		imagesWorkflowID:        cfg.ImagesWorkflowID,
@@ -917,6 +933,9 @@ type handlers struct {
 	// files 决定租户文件写到哪里、从哪里读：其自有存储（Config.TenantStorage）或上面的
 	// storage（tenantstorage.go）。
 	files *fileStore
+	// ark caches the Ark key each tenant's video node uses (ark.go).
+	// ark 缓存各租户视频节点所用的方舟 Key（ark.go）。
+	ark *arkStore
 	// artifactRecovery is nil when no Config.ArtifactRecoveryClient is
 	// configured, in which case listArtifacts and downloadArtifact answer a
 	// local miss exactly as they always have — see artifactrecovery.go.

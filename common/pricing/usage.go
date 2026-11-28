@@ -21,6 +21,20 @@ const (
 	MaxAttributeValLen = 64
 )
 
+// AttrCredential names whose provider credential served a request that
+// went to a third-party API rather than a node. CredentialTenant means the
+// tenant's own key: the request is priced as usual but not charged, as for
+// the tenant's own node. Any other value, or none, is charged.
+//
+// AttrCredential 说明一次发往第三方 API（而不是节点）的请求用的是谁的供应商凭据。
+// CredentialTenant 表示租户自己的 Key：照常计价但不扣费，与租户自有节点相同。其他取值或
+// 没有该属性时照常扣费。
+const (
+	AttrCredential     = "credential"
+	CredentialTenant   = "tenant"
+	CredentialPlatform = "platform"
+)
+
 // ValidAttributeKey reports whether key is a well-formed attribute key: one
 // meter-name segment starting with a letter, at most MaxAttributeKeyLen bytes.
 //

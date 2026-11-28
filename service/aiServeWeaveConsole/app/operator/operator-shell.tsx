@@ -10,6 +10,7 @@ import {
   BoxesIcon,
   ChartColumnIcon,
   ChartLineIcon,
+  ClapperboardIcon,
   ContainerIcon,
   CreditCardIcon,
   DownloadIcon,
@@ -82,6 +83,7 @@ function navigationItems(t: Translator): readonly NavEntry[] { return [
     children: [
       { href: "/operator/workflow-templates", label: t("operator.workflowTemplates"), icon: LayoutTemplateIcon },
       { href: "/operator/workflows", label: t("operator.releaseStatus"), icon: RocketIcon },
+      { href: "/operator/ark", label: t("operator.arkNav"), icon: ClapperboardIcon },
     ],
   },
   {

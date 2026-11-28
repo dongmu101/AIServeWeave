@@ -422,6 +422,22 @@ const (
 	//
 	// ActionTenantStorageDelete 记录租户移除自己的对象存储。
 	ActionTenantStorageDelete = "tenant.storage.delete"
+	// ActionArkCredentialUpdate records saving a Volcengine Ark key, a
+	// tenant's own or the platform's. The detail names the host, the key's
+	// last four characters and the number of models, never the key.
+	//
+	// ActionArkCredentialUpdate 记录保存火山方舟 Key（租户自己的或平台的）。详情只记主机名、
+	// Key 末四位与模型数，从不记 Key。
+	ActionArkCredentialUpdate = "ark.credential.update"
+	// ActionArkCredentialDelete records removing a Volcengine Ark key.
+	//
+	// ActionArkCredentialDelete 记录删除火山方舟 Key。
+	ActionArkCredentialDelete = "ark.credential.delete"
+	// ActionArkTaskDelete records cancelling or deleting an Ark video task
+	// from the task list. The target is the task id.
+	//
+	// ActionArkTaskDelete 记录在任务列表中取消或删除一个方舟视频任务。目标为任务 id。
+	ActionArkTaskDelete = "ark.task.delete"
 	// ActionInstallCodeCreate records issuing an Agent install credential
 	// (a one-time code or a directly minted token) for a node. Neither the
 	// code nor the token is ever recorded.
@@ -711,6 +727,43 @@ type TenantStorage struct {
 //
 // TableName 钉死表名，与 Tenant.TableName 同理。
 func (TenantStorage) TableName() string { return "tenant_storage" }
+
+// ArkCredential is a Volcengine Ark API key the Studio video node calls Ark
+// with. Scope is a tenant id for the tenant's own key, or PlatformScope for
+// the key the platform operator configured, which every tenant without its
+// own uses. The key is stored only as KeyCiphertext, sealed with AES-256-GCM
+// under the control plane's Ark master key with the scope as associated
+// data; KeyLast4 is its last four characters. BaseURL is the API root, set
+// only on the platform row (empty means Ark's Beijing endpoint). Models is a
+// JSON array of model ids: on the platform row, the only models tenants may
+// use with the platform key; on a tenant row, suggestions for its members.
+// Version increments on every save.
+//
+// ArkCredential 是 Studio 视频节点调用火山方舟所用的 API Key。Scope 为租户 id 时是该租户
+// 自己的 Key，为 PlatformScope 时是平台运维配置的 Key，没有自己 Key 的租户都用它。Key
+// 只以 KeyCiphertext 保存：在控制面的方舟主密钥下做 AES-256-GCM 加密，scope 作为附加数据；
+// KeyLast4 是它的末四位。BaseURL 是 API 根地址，只在平台那一行设置（为空表示方舟北京地址）。
+// Models 是模型 id 的 JSON 数组：在平台那一行，是租户用平台 Key 时唯一可用的模型；在租户
+// 那一行，是给成员的建议。Version 每次保存加一。
+//
+// CreatedAt and UpdatedAt come from the service's clock, so GORM must not
+// set them itself. / CreatedAt 与 UpdatedAt 取自服务的时钟，GORM 不得自行设置。
+type ArkCredential struct {
+	Scope         string    `gorm:"primaryKey;size:40"`
+	KeyCiphertext string    `gorm:"type:text;not null"`
+	KeyLast4      string    `gorm:"size:8;not null"`
+	BaseURL       string    `gorm:"size:2048;not null"`
+	Models        string    `gorm:"type:text;not null"`
+	Version       uint64    `gorm:"not null"`
+	UpdatedBy     string    `gorm:"size:40;not null"`
+	CreatedAt     time.Time `gorm:"not null;autoCreateTime:false"`
+	UpdatedAt     time.Time `gorm:"not null;autoUpdateTime:false"`
+}
+
+// TableName pins the table name, as Tenant.TableName does.
+//
+// TableName 钉死表名，与 Tenant.TableName 同理。
+func (ArkCredential) TableName() string { return "ark_credentials" }
 
 // Tenant storage kinds. / 租户存储种类。
 const (

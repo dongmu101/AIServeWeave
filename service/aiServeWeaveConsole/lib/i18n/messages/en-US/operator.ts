@@ -762,6 +762,16 @@ const operator = {
   "operator.billingSettingsUpdated": "Last saved {time}",
   "operator.billingSettingsSaved": "Billing settings saved",
   "operator.billingProblemSignupGrant": "Enter credits of 0 or more, with at most six decimal places",
-  "operator.billingAdjustTypeHint": "A gift deduction cannot exceed the tenant's current gift credits."
+  "operator.billingAdjustTypeHint": "A gift deduction cannot exceed the tenant's current gift credits.",
+  "operator.arkNav": "Volcengine Ark",
+  "operator.arkIntro": "The platform key serves the Studio video nodes of every tenant without its own key. Tenants can use only the models listed below, charged at each model's price; an unpriced model is charged 0 and appears in the billing page's unpriced notice.",
+  "operator.arkBaseUrl": "Base URL (optional)",
+  "operator.arkBaseUrlHint": "Leave blank for Ark's Beijing endpoint {url}. Changing the address requires entering the key again.",
+  "operator.arkModels": "Open models",
+  "operator.arkModelsHint": "One model ID or endpoint ID per line. Tenant video nodes can choose only the models listed here; with an empty list the platform key serves no model.",
+  "operator.arkDeleteBody": "After deletion, tenants without their own key cannot run video nodes; tenants with their own key are not affected.",
+  "operator.arkTasksTitle": "Tasks under the platform key",
+  "operator.arkTasksIntro": "Video tasks of all tenants under the platform key; Ark does not tell tenants apart. Queued tasks can be cancelled and finished ones deleted; running tasks cannot be cancelled.",
+  "operator.arkNoKeyForTasks": "Save the platform key to see its tasks."
 } as const;
 export default operator;

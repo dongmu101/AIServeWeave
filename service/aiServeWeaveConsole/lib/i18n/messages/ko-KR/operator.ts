@@ -753,6 +753,16 @@ const operator = {
   "operator.billingSettingsUpdated": "마지막 저장 {time}",
   "operator.billingSettingsSaved": "과금 설정이 저장되었습니다",
   "operator.billingProblemSignupGrant": "0 이상의 크레딧을 소수점 이하 6자리까지 입력하세요",
-  "operator.billingAdjustTypeHint": "증정 크레딧 차감은 테넌트의 현재 증정 크레딧을 초과할 수 없습니다."
+  "operator.billingAdjustTypeHint": "증정 크레딧 차감은 테넌트의 현재 증정 크레딧을 초과할 수 없습니다.",
+  "operator.arkNav": "Volcengine Ark",
+  "operator.arkIntro": "플랫폼 키는 자체 키가 없는 모든 테넌트의 Studio 동영상 노드에 사용됩니다. 테넌트는 아래 목록의 모델만 쓸 수 있으며 모델 가격으로 크레딧이 차감됩니다. 가격이 없는 모델은 0으로 과금되며 결제 페이지의 미설정 가격 알림에 표시됩니다.",
+  "operator.arkBaseUrl": "Base URL(선택)",
+  "operator.arkBaseUrlHint": "비워 두면 Ark 베이징 엔드포인트 {url}을(를) 사용합니다. 주소를 바꾸면 키를 다시 입력해야 합니다.",
+  "operator.arkModels": "공개 모델",
+  "operator.arkModelsHint": "한 줄에 모델 ID 또는 엔드포인트 ID를 하나씩 입력합니다. 테넌트의 동영상 노드는 여기 나열된 모델만 선택할 수 있으며, 목록이 비어 있으면 플랫폼 키를 어떤 모델에도 쓸 수 없습니다.",
+  "operator.arkDeleteBody": "삭제하면 자체 키가 없는 테넌트는 동영상 노드를 실행할 수 없습니다. 자체 키가 있는 테넌트는 영향을 받지 않습니다.",
+  "operator.arkTasksTitle": "플랫폼 키의 작업",
+  "operator.arkTasksIntro": "플랫폼 키로 만든 모든 테넌트의 동영상 작업입니다. Ark는 테넌트를 구분하지 않습니다. 대기 중인 작업은 취소, 끝난 작업은 기록을 삭제할 수 있으며 실행 중인 작업은 취소할 수 없습니다.",
+  "operator.arkNoKeyForTasks": "플랫폼 키를 저장하면 작업 목록을 볼 수 있습니다."
 } as const;
 export default operator;

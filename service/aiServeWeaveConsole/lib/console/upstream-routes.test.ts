@@ -592,3 +592,24 @@ test("tenant usage records and prices are allowlisted on the admin surface only"
   assert.equal(operatorResolve("GET", "/admin/v1/usage/records"), null);
   assert.equal(operatorResolve("GET", "/admin/v1/billing/prices"), null);
 });
+
+test("Ark keys and video tasks are allowlisted per surface", () => {
+  const operatorResolve = (method: string, path: string, query = "") => resolveOperatorUpstream(method, path.split("/").filter(Boolean), new URLSearchParams(query));
+  for (const surface of ["admin", "operator"] as const) {
+    const at = surface === "admin" ? resolve : operatorResolve;
+    const other = surface === "admin" ? operatorResolve : resolve;
+    const base = `/${surface}/v1/ark`;
+    for (const method of ["GET", "PUT", "DELETE"]) {
+      assert.deepEqual(at(method, base), { path: base, search: "" });
+      assert.equal(other(method, base), null, `${surface} ${method}: not on the other surface`);
+    }
+    assert.equal(at("POST", base), null);
+    const tasks = at("GET", `${base}/tasks`, "page_num=2&page_size=20&status=queued&model=m&tenant_id=other");
+    assert.equal(tasks?.search, "?page_num=2&page_size=20&status=queued&model=m", "no other selector is forwarded");
+    assert.equal(at("DELETE", `${base}/tasks/cgt-2025_abc.1`)?.path, `${base}/tasks/cgt-2025_abc.1`);
+    assert.equal(at("GET", `${base}/tasks/cgt-1`), null, "a single task is not readable");
+    assert.equal(at("DELETE", `${base}/tasks`), null, "tasks are not deleted in bulk");
+    assert.equal(at("DELETE", `${base}/tasks/..`), null);
+    assert.equal(at("DELETE", `${base}/tasks/a%2Fb`), null);
+  }
+});

@@ -16,7 +16,7 @@ import { RunForm } from "@/components/studio/flows/run-form";
 import { useHydrated } from "@/components/studio/flows/use-hydrated";
 import { sendToSignIn } from "@/components/studio/session-expired";
 import { Button } from "@/components/ui/button";
-import { artifactFieldShape, artifactOutputs, kindOfFilename, runInputFiles, stepFileInputs } from "@/lib/studio/artifacts";
+import { artifactFieldShape, artifactOutputs, kindOfFilename, runInputFiles, stepFileInputs, type FileShape } from "@/lib/studio/artifacts";
 import { toCanvasEdges } from "@/lib/studio/flow-graph";
 import { applyFrame, duration, initialRunState, type RunState } from "@/lib/studio/flow-run";
 import { runErrorText, statusText, type FlowDefinition, type Run, type RunStep } from "@/lib/studio/flows";
@@ -321,7 +321,7 @@ function NodeDetail({ runId, nodeType, fileInputs, fileNames, label, kind, step,
   nodeType: string;
   /** the node's inputs that are one file, and how each is shown
    * 节点中恰好是一个文件的输入，及各自的展示形式 */
-  fileInputs: Record<string, "image" | "file">;
+  fileInputs: Record<string, FileShape>;
   fileNames: Record<string, string>;
   label: string;
   kind: string;
@@ -362,7 +362,9 @@ function NodeDetail({ runId, nodeType, fileInputs, fileNames, label, kind, step,
         <p className="text-xs text-muted-foreground">已运行 {duration(started, new Date(now).toISOString()) || "片刻"}</p>
       ) : null}
       {step?.errorCode ? <p className="rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive">{runErrorText(step.errorCode)}</p> : null}
-      {running && (nodeType === "image_generation" || nodeType === "comfyui_template") ? (
+      {running && nodeType === "video_generation" ? (
+        <p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">正在生成视频，通常需要几分钟，完成后会在这里显示结果。</p>
+      ) : running && (nodeType === "image_generation" || nodeType === "comfyui_template") ? (
         <p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">正在生成，完成后会在这里显示结果。</p>
       ) : running ? (
         <ValueBlock label="正在生成" value={live ?? ""} placeholder="等待模型开始输出…" />
@@ -371,7 +373,7 @@ function NodeDetail({ runId, nodeType, fileInputs, fileNames, label, kind, step,
         <div className="grid gap-2">
           <p className="text-xs font-medium text-muted-foreground">输入</p>
           {Object.entries(step.inputs).map(([key, value]) =>
-            nodeType === "comfyui_template" && fileInputs[key] ? (
+            fileInputs[key] ? (
               <ArtifactValue key={key} runId={runId} label={key} value={value} shape={fileInputs[key]} names={fileNames} />
             ) : (
               <ValueBlock key={key} label={INPUT_LABEL[key] ?? key} value={value} />
@@ -392,7 +394,18 @@ function NodeDetail({ runId, nodeType, fileInputs, fileNames, label, kind, step,
   );
 }
 
-const INPUT_LABEL: Record<string, string> = { system: "系统提示词", prompt: "提示词", left: "比较的值", right: "与之比较", size: "尺寸" };
+const INPUT_LABEL: Record<string, string> = {
+  system: "系统提示词",
+  prompt: "提示词",
+  left: "比较的值",
+  right: "与之比较",
+  size: "尺寸",
+  first_frame: "首帧",
+  last_frame: "尾帧",
+  resolution: "分辨率",
+  ratio: "宽高比",
+  duration: "时长（秒）",
+};
 
 function ValueBlock({ label, value, copyable, placeholder }: { label: string; value: string; copyable?: boolean; placeholder?: string }) {
   return (

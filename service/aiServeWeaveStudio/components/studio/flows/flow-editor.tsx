@@ -43,7 +43,7 @@ import {
   toCanvasEdges,
   unavailableModels,
 } from "@/lib/studio/flow-graph";
-import { parseImageModels, parseWorkflowTemplates, type FlowCatalog, type ImageModelCatalog, type WorkflowTemplate } from "@/lib/studio/flow-catalog";
+import { parseImageModels, parseVideoModels, parseWorkflowTemplates, type FlowCatalog, type ImageModelCatalog, type VideoModelCatalog, type WorkflowTemplate } from "@/lib/studio/flow-catalog";
 import { issueText, parseFlow, type Flow, type FlowDefinition, type FlowIssue, type NodeType } from "@/lib/studio/flows";
 import { flowFile, serverInputErrors, type BuiltRun } from "@/lib/studio/run-inputs";
 
@@ -76,6 +76,7 @@ interface EditorProps {
   /** null when the list failed to load / 加载失败时为 null */
   imageModels: ImageModelCatalog | null;
   templates: WorkflowTemplate[] | null;
+  videoModels: VideoModelCatalog | null;
   catalogError: string;
 }
 
@@ -96,7 +97,7 @@ function download(name: string, text: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-function Editor({ flow, models, modelsError, imageModels: initialImageModels, templates: initialTemplates, catalogError }: EditorProps) {
+function Editor({ flow, models, modelsError, imageModels: initialImageModels, templates: initialTemplates, videoModels: initialVideoModels, catalogError }: EditorProps) {
   const router = useRouter();
   const reactFlow = useReactFlow();
   const hydrated = useHydrated();
@@ -112,7 +113,7 @@ function Editor({ flow, models, modelsError, imageModels: initialImageModels, te
   const [busy, setBusy] = React.useState<"save" | "run" | null>(null);
   const [runOpen, setRunOpen] = React.useState(false);
   const [runErrors, setRunErrors] = React.useState<Record<string, string>>({});
-  const [catalog, setCatalog] = React.useState<FlowCatalog>({ imageModels: initialImageModels, templates: initialTemplates });
+  const [catalog, setCatalog] = React.useState<FlowCatalog>({ imageModels: initialImageModels, templates: initialTemplates, videoModels: initialVideoModels });
   const dirty = fingerprint(name, def) !== saved;
 
   const warningsFor = React.useCallback(
@@ -219,7 +220,8 @@ function Editor({ flow, models, modelsError, imageModels: initialImageModels, te
     }
     const model = [...def.nodes].reverse().map((n) => (n.type === "llm" ? llmConfig(n).model : "")).find((m) => m !== "") ?? models[0]?.id ?? "";
     const imageModel = catalog.imageModels && !catalog.imageModels.defaultAvailable ? (catalog.imageModels.models[0]?.id ?? "") : "";
-    const added = addNode(def, type, { x: point.x - 112, y: point.y - 40 }, model, imageModel);
+    const videoModel = catalog.videoModels?.models[0]?.id ?? "";
+    const added = addNode(def, type, { x: point.x - 112, y: point.y - 40 }, model, imageModel, videoModel);
     setDef(added.def);
     setSelected(added.id);
   }
@@ -272,11 +274,16 @@ function Editor({ flow, models, modelsError, imageModels: initialImageModels, te
    * refreshCatalog 重新读取目录，这样页面加载后被取消发布的模板能在运行前被发现；读不到的
    * 列表保留编辑器已有的内容。 */
   async function refreshCatalog(): Promise<FlowCatalog> {
-    const [imageModels, templates] = await Promise.all([
+    const [imageModels, templates, videoModels] = await Promise.all([
       studioCall("GET", "image-models", undefined, parseImageModels),
       studioCall("GET", "workflow-templates", undefined, parseWorkflowTemplates),
+      studioCall("GET", "video-models", undefined, parseVideoModels),
     ]);
-    const next: FlowCatalog = { imageModels: imageModels.ok ? imageModels.data : catalog.imageModels, templates: templates.ok ? templates.data : catalog.templates };
+    const next: FlowCatalog = {
+      imageModels: imageModels.ok ? imageModels.data : catalog.imageModels,
+      templates: templates.ok ? templates.data : catalog.templates,
+      videoModels: videoModels.ok ? videoModels.data : catalog.videoModels,
+    };
     setCatalog(next);
     return next;
   }
@@ -305,7 +312,10 @@ function Editor({ flow, models, modelsError, imageModels: initialImageModels, te
       setRunErrors(serverInputErrors(result.issues));
       return;
     }
-    if ((result.code === "model_unavailable" || result.code === "template_unavailable" || result.code === "image_generation_unavailable") && result.issues.length > 0) {
+    if (
+      (result.code === "model_unavailable" || result.code === "template_unavailable" || result.code === "image_generation_unavailable" || result.code === "video_generation_unavailable") &&
+      result.issues.length > 0
+    ) {
       setRunOpen(false);
       setIssues(result.issues);
       toast.error("有节点的模型或模板当前不可用，已在画布上标出。");
