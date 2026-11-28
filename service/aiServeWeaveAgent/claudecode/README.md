@@ -149,9 +149,10 @@ Agent 现在检查最终设置文件的实际字节数。超过 2 MiB 时，设�
 
 2026-11-27 起，运行时的连接池同时缓存 CLI 发模型请求前必须等待的两个启动请求的答复，省掉每个回合的两次串行上游往返（本机回环加 300 ms 延迟实测：到模型请求发出从约 890 ms 降到约 200 ms）。离线探测（CLI 2.1.330，API key 登录）显示，只有这两个请求阻塞模型请求；`settings`、`bootstrap` 与 `penguin_mode` 不阻塞，不缓存。
 
-- **缓存哪些请求**：`GET /api/claude_code/policy_limits`（无请求体）与 `POST /api/eval/<client key>`（未压缩的 JSON 请求体，不超过 1 MiB）。答复状态为 200、304 或 404（policy_limits 用 404 表示没有策略），且响应体不超过 1 MiB 时才缓存。其他请求、其他状态码、读不懂的请求体一律照常转发。
+- **缓存哪些请求**：`GET /api/claude_code/policy_limits`（无请求体）与 `POST /api/eval/<client key>`（未压缩的 JSON 请求体，不超过 1 MiB）。OAuth 登录且服务端打开功能开关 `tengu_gb_eval_authed_enable` 时，CLI 改发 `POST /api/eval-authed/<client key>`，按同样规则缓存，与 `/api/eval/` 不共用条目。答复状态为 200、304 或 404（policy_limits 用 404 表示没有策略），且响应体不超过 1 MiB 时才缓存。其他请求、其他状态码、读不懂的请求体一律照常转发。
 - **缓存键**：方法、路径、查询串、全部端到端请求头（去掉逐跳头、`Content-Length` 与 `Accept-Encoding`，包括 `Authorization`，因此不同账户与 token 不共用条目）和请求体。功能开关请求体里每个进程都不同的 `attributes.sessionId` 去掉后再按键排序编码；其他属性不同则不共用。缓存属于单个运行时（一个 `account_dir`），运行时关闭或热重载替换时清空。
 - **刷新**：命中时立即写回缓存的状态码、响应头（去掉 `Set-Cookie` 与 `Content-Length`）和响应体，同时用本回合的真实请求在后台经连接池发一次上游，每个键同时最多一个，超时 30 秒。刷新得到可缓存的答复时替换条目；得到其他状态码（如 401、5xx）时删除条目，下一回合同步请求；传输出错时保留条目。条目的有效期从最近一次成功获取算起，超过 10 分钟不再使用。CLI 请求里的 `Cache-Control: no-cache` 不影响缓存。
+- **未命中原因**：回合结束日志的 `startup_cache_misses` 列出本回合每个未命中的请求（最多 8 条，以 `; ` 分隔），格式为 `<类别>:<原因>[ 附加]`。类别为 `policy_limits`、`eval` 或 `eval-authed`。原因为 `first`（运行时启动后该类别的第一个请求）、`stale`（条目超过 10 分钟）、`differs=<部分>`（与同类别上一个请求不同的部分，如 `header:If-None-Match`、`attributes.<名称>`、`body:<字段>`、`query`、`path`，最多 8 个，只有名称，从不含值）或 `not_cached`（没有不同之处，但上次的答复没有缓存）。附加项为 `status=<状态码>`（答复状态码不缓存）、`too_large`（答复超过 1 MiB）或 `upstream_error`（上游请求出错）。
 - **失败路径**：未命中时请求照原路径发送，答复边转发边记录，完整读完后才存入缓存；缓存不新增任何失败路径。关闭方法见 [Agent README](../README.md#启动请求缓存)。
 
 ## 兼容桥接的支持范围

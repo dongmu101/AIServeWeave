@@ -335,6 +335,9 @@ func (r *Runtime) Messages(parent context.Context, req runtime.MessagesRequest) 
 			if hits := s.upstream.startupHits.Load(); hits > 0 {
 				finished = append(finished, "startup_cache_hits", hits)
 			}
+			if misses := s.upstream.startupMissLog(); misses != "" {
+				finished = append(finished, "startup_cache_misses", misses)
+			}
 		}
 		s.phases.Observe(r.metrics, r.cfg.ID, runtime.KindClaude)
 		r.logger.Info("Claude Messages round finished", finished...)

@@ -8,7 +8,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
@@ -26,6 +25,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -82,10 +82,41 @@ type upstreamCapture struct {
 	// startupCache.
 	// startupHits 统计由运行时 startupCache 答复的启动请求数。
 	startupHits atomic.Int64
+	// startupMisses holds, under mu, why start-up requests the cache
+	// handles were not answered from it, at most maxStartupMissNotes.
+	// startupMisses 在 mu 保护下保存缓存处理的启动请求为何没有由缓存答复，最多
+	// maxStartupMissNotes 条。
+	startupMisses []string
 	// phases receives when the model request reached the proxy, its wait for
 	// an upstream connection and its response headers; nil records nothing.
 	// phases 接收模型请求到达代理的时刻、它等待上游连接的时间以及响应头到达的时刻；为 nil 时不记录。
 	phases *cliphase.Timeline
+}
+
+// maxStartupMissNotes bounds the miss reasons one round's log carries.
+// maxStartupMissNotes 限定一个回合日志携带的未命中原因条数。
+const maxStartupMissNotes = 8
+
+// noteStartupMiss records why a start-up request was not answered from the
+// cache; an empty reason records nothing.
+// noteStartupMiss 记录启动请求为何没有由缓存答复；reason 为空时不记录。
+func (c *upstreamCapture) noteStartupMiss(reason string) {
+	if reason == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.startupMisses) < maxStartupMissNotes {
+		c.startupMisses = append(c.startupMisses, reason)
+	}
+}
+
+// startupMissLog returns the recorded miss reasons joined for a log field.
+// startupMissLog 返回拼接好的未命中原因，用作日志字段。
+func (c *upstreamCapture) startupMissLog() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return strings.Join(c.startupMisses, "; ")
 }
 
 // timeConnect marks the model request as sent and returns it traced, so
@@ -804,14 +835,18 @@ func (p *upstreamProxy) forward(w http.ResponseWriter, r *http.Request, target *
 		}
 		body = io.MultiReader(bytes.NewReader(head), r.Body)
 	}
-	// startup is set, with its key, for a start-up request the runtime's
-	// cache handles.
-	// 对运行时缓存处理的启动请求，设置 startup 及其键。
+	// startup is set, with the request's description, for a start-up
+	// request the runtime's cache handles; startupMiss says why it was not
+	// answered from the cache, for the round's log.
+	// 对运行时缓存处理的启动请求，设置 startup 及请求描述；startupMiss 说明它为何没有由
+	// 缓存答复，写入回合日志。
 	var startup *startupCache
-	var startupKeyHash [sha256.Size]byte
+	var startupReq startupRequest
+	var startupMiss string
 	if !messages && shared != nil && replayable && p.shared.startup != nil {
-		if key, ok := startupKey(r, kept); ok {
-			startup, startupKeyHash = p.shared.startup, key
+		if req, ok := newStartupRequest(r, kept); ok {
+			startup, startupReq = p.shared.startup, req
+			defer func() { p.capture.noteStartupMiss(startupMiss) }()
 		}
 	}
 	if messages {
@@ -900,12 +935,14 @@ func (p *upstreamProxy) forward(w http.ResponseWriter, r *http.Request, target *
 		out = p.capture.timeConnect(out)
 	}
 	if startup != nil {
-		if entry, ok := startup.lookup(startupKeyHash); ok {
-			startup.refresh(startupKeyHash, shared, out.Method, target, out.Host, out.Header.Clone(), kept)
+		entry, reason := startup.lookup(startupReq)
+		if entry != nil {
+			startup.refresh(startupReq.key, shared, out.Method, target, out.Host, out.Header.Clone(), kept)
 			p.capture.startupHits.Add(1)
 			entry.serve(w)
 			return
 		}
+		startupMiss = startupReq.family + ":" + reason
 	}
 	resend := func() io.ReadCloser {
 		if r.ContentLength == 0 {
@@ -934,6 +971,9 @@ func (p *upstreamProxy) forward(w http.ResponseWriter, r *http.Request, target *
 		}
 	}
 	if err != nil {
+		if startupMiss != "" {
+			startupMiss += " upstream_error"
+		}
 		w.WriteHeader(http.StatusBadGateway)
 		return
 	}
@@ -976,7 +1016,8 @@ func (p *upstreamProxy) forward(w http.ResponseWriter, r *http.Request, target *
 			recorder = &startupRecorder{}
 			reader = io.TeeReader(reader, recorder)
 		} else {
-			startup.store(startupKeyHash, response.StatusCode, nil, nil)
+			startup.store(startupReq.key, response.StatusCode, nil, nil)
+			startupMiss += " status=" + strconv.Itoa(response.StatusCode)
 		}
 	}
 	controller := http.NewResponseController(w)
@@ -993,7 +1034,10 @@ func (p *upstreamProxy) forward(w http.ResponseWriter, r *http.Request, target *
 			// Only a whole answer is kept.
 			// 只保存完整的答复。
 			if err == io.EOF && recorder != nil && !recorder.over {
-				startup.store(startupKeyHash, response.StatusCode, response.Header, recorder.buffer.Bytes())
+				startup.store(startupReq.key, response.StatusCode, response.Header, recorder.buffer.Bytes())
+			}
+			if recorder != nil && recorder.over {
+				startupMiss += " too_large"
 			}
 			break
 		}

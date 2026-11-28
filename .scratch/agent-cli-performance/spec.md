@@ -237,3 +237,4 @@ Claude 各阶段（ms，p50 / p95）：
 - 用户决定纳入（原列在「不在范围内」）：命中即答并后台刷新，超过 10 分钟未刷新成功的答复不用；功能开关请求缓存，键里去掉 `attributes.sessionId`；`policy_limits` 不理会其 `Cache-Control: no-cache`。
 - 离线探测更正「补充说明」：CLI 2.1.330（API key 登录）只有 `policy_limits` 与功能开关求值阻塞模型请求，二者先后发出；`settings`、`bootstrap`、`penguin_mode` 不阻塞。各给上游加 300 ms 延迟时，到模型请求发出分别增加约 360 ms 和 340 ms，两者都加约 600 ms。
 - 本机回环加 300 ms 延迟：到模型请求发出约 890 ms → 第 2 回合起约 200 ms（每回合命中 2 次）。生产用 OAuth 登录，请求集合可能不同，部署后看 `startup_cache_hits` 与 `request_sent_ms` 复测。
+- 2026-11-28 部署到 Mac mini（OAuth 登录，CLI 2.1.332）：上线后前 7 个回合 `startup_cache_hits` 都是 1，不是 2。带安全检查回合的 `request_sent_ms` 从 p50 1402（11-27 的 400 个回合）降到约 1100，样本太少。该机 `~/.claude.json` 的功能开关缓存里没有 `tengu_gb_eval_authed_enable`，CLI 发的仍是 `/api/eval/`。本机用假 OAuth token 回环跑 4 轮，每轮命中 2 次，复现不了。已新增 `startup_cache_misses` 记录未命中原因，再次部署后据此定位。

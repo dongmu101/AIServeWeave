@@ -174,7 +174,7 @@ runtimes:
   - {id: claude-code-local, kind: claude, cache_startup_requests: false}
 ```
 
-缓存依附于共用连接池，`share_upstream_connections: false` 也会关闭它。本地专用、热重载、设置页面保留等规则与 `share_upstream_connections` 相同。回合结束日志 `Claude Messages round finished` 带 `startup_cache_hits`（有命中时才出现）。
+缓存依附于共用连接池，`share_upstream_connections: false` 也会关闭它。本地专用、热重载、设置页面保留等规则与 `share_upstream_connections` 相同。回合结束日志 `Claude Messages round finished` 带 `startup_cache_hits` 与 `startup_cache_misses`（未命中的请求及原因，只含名称不含值；各自有内容时才出现）。
 
 ## 本地 CLI 账户额度
 

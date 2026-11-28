@@ -17,8 +17,9 @@ import (
 // startupCache reuses, across the rounds of one runtime, the answers to the
 // start-up requests every CLI process waits on before it sends its model
 // request: GET /api/claude_code/policy_limits and the feature-flag
-// evaluation POST /api/eval/…. Each round's CLI is a new process, so without
-// it every round pays those upstream round trips in series.
+// evaluation POST /api/eval/… (or /api/eval-authed/…). Each round's CLI is a
+// new process, so without it every round pays those upstream round trips in
+// series.
 //
 // A cached answer is served at once and the same request is then sent
 // upstream in the background, at most one at a time per key, to refresh the
@@ -32,7 +33,7 @@ import (
 // handle takes the original path, so the cache adds no failure of its own.
 //
 // startupCache 在同一运行时的各回合之间复用 CLI 进程发模型请求前必须等待的启动请求答复：
-// GET /api/claude_code/policy_limits 与功能开关求值 POST /api/eval/…。每个回合的 CLI
+// GET /api/claude_code/policy_limits 与功能开关求值 POST /api/eval/…（或 /api/eval-authed/…）。每个回合的 CLI
 // 都是新进程，没有缓存时每个回合都要串行付这几次上游往返。
 //
 // 命中时立即返回缓存的答复，随后在后台把同一请求发往上游刷新条目，每个键同时最多一个；
@@ -47,6 +48,9 @@ type startupCache struct {
 	now    func() time.Time
 	mu     sync.Mutex
 	items  map[[sha256.Size]byte]*startupEntry
+	// seen holds each family's most recent request parts, for miss reasons.
+	// seen 保存每个类别最近一个请求的各部分摘要，用于说明未命中原因。
+	seen map[string]map[string][sha256.Size]byte
 	// refreshing holds the keys with a background refresh in flight.
 	// refreshing 保存后台刷新正在进行中的键。
 	refreshing map[[sha256.Size]byte]bool
@@ -77,7 +81,8 @@ const (
 func newStartupCache() *startupCache {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &startupCache{ctx: ctx, cancel: cancel, now: time.Now,
-		items: make(map[[sha256.Size]byte]*startupEntry), refreshing: make(map[[sha256.Size]byte]bool)}
+		items: make(map[[sha256.Size]byte]*startupEntry), refreshing: make(map[[sha256.Size]byte]bool),
+		seen: make(map[string]map[string][sha256.Size]byte)}
 }
 
 // close cancels background refreshes, waits for them and drops every entry.
@@ -93,30 +98,46 @@ func (c *startupCache) close() {
 	c.mu.Unlock()
 }
 
-// startupKey returns the cache key of a decrypted upstreamAPIHost request
-// whose whole body is body, and false for a request the cache does not
+// startupRequest is a start-up request the cache handles: its key, the
+// family it belongs to, and a digest of each of its parts, kept so a miss can
+// name the parts that differ from the family's previous request.
+// startupRequest 是缓存处理的启动请求：缓存键、所属类别，以及各组成部分的摘要；保存摘要
+// 是为了在未命中时说出与同类别上一个请求不同的部分。
+type startupRequest struct {
+	key    [sha256.Size]byte
+	family string
+	parts  map[string][sha256.Size]byte
+}
+
+// newStartupRequest describes a decrypted upstreamAPIHost request whose
+// whole body is body, and returns false for a request the cache does not
 // handle.
-// startupKey 返回完整请求体为 body 的解密后 upstreamAPIHost 请求的缓存键；缓存不处理的
+// newStartupRequest 描述完整请求体为 body 的解密后 upstreamAPIHost 请求；缓存不处理的
 // 请求返回 false。
-func startupKey(r *http.Request, body []byte) ([sha256.Size]byte, bool) {
-	var key [sha256.Size]byte
+func newStartupRequest(r *http.Request, body []byte) (startupRequest, bool) {
+	req := startupRequest{parts: make(map[string][sha256.Size]byte)}
 	path := r.URL.Path
+	evalFamily := func(prefix string) bool {
+		return r.Method == http.MethodPost && strings.HasPrefix(path, prefix) && len(path) > len(prefix)
+	}
+	var doc map[string]any
 	switch {
 	case r.Method == http.MethodGet && path == "/api/claude_code/policy_limits":
 		if len(body) != 0 {
-			return key, false
+			return req, false
 		}
-	case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/eval/") && len(path) > len("/api/eval/"):
+		req.family = "policy_limits"
+	case evalFamily("/api/eval/"), evalFamily("/api/eval-authed/"):
 		if r.Header.Get("Content-Encoding") != "" {
-			return key, false
+			return req, false
 		}
-		normalized, ok := normalizeEvalBody(body)
-		if !ok {
-			return key, false
+		var ok bool
+		if body, doc, ok = normalizeEvalBody(body); !ok {
+			return req, false
 		}
-		body = normalized
+		req.family = strings.Split(strings.TrimPrefix(path, "/api/"), "/")[0]
 	default:
-		return key, false
+		return req, false
 	}
 	header := r.Header.Clone()
 	stripHop(header)
@@ -135,36 +156,51 @@ func startupKey(r *http.Request, body []byte) ([sha256.Size]byte, bool) {
 	write(r.Method)
 	write(path)
 	write(r.URL.RawQuery)
+	req.parts["path"] = sha256.Sum256([]byte(path))
+	req.parts["query"] = sha256.Sum256([]byte(r.URL.RawQuery))
 	for _, name := range names {
 		write(name)
-		for _, value := range header.Values(name) {
+		values := header.Values(name)
+		for _, value := range values {
 			write(value)
 		}
+		req.parts["header:"+name] = sha256.Sum256([]byte(strings.Join(values, "\x00")))
 	}
 	write("")
 	_, _ = h.Write(body)
-	copy(key[:], h.Sum(nil))
-	return key, true
+	copy(req.key[:], h.Sum(nil))
+	for name, value := range doc {
+		if attributes, ok := value.(map[string]any); ok && name == "attributes" {
+			for attr, v := range attributes {
+				encoded, _ := json.Marshal(v)
+				req.parts["attributes."+attr] = sha256.Sum256(encoded)
+			}
+			continue
+		}
+		encoded, _ := json.Marshal(value)
+		req.parts["body:"+name] = sha256.Sum256(encoded)
+	}
+	return req, true
 }
 
 // normalizeEvalBody removes attributes.sessionId, which differs in every
 // CLI process, and re-encodes the document with sorted keys.
 // normalizeEvalBody 去掉每个 CLI 进程都不同的 attributes.sessionId，并按键排序重新编码文档。
-func normalizeEvalBody(body []byte) ([]byte, bool) {
+func normalizeEvalBody(body []byte) ([]byte, map[string]any, bool) {
 	var doc map[string]any
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.UseNumber()
 	if decoder.Decode(&doc) != nil || doc == nil {
-		return nil, false
+		return nil, nil, false
 	}
 	if _, err := decoder.Token(); err != io.EOF {
-		return nil, false
+		return nil, nil, false
 	}
 	if attributes, ok := doc["attributes"].(map[string]any); ok {
 		delete(attributes, "sessionId")
 	}
 	out, err := json.Marshal(doc)
-	return out, err == nil
+	return out, doc, err == nil
 }
 
 // cacheableStartupStatus reports whether an answer with status is kept:
@@ -175,20 +211,53 @@ func cacheableStartupStatus(status int) bool {
 	return status == http.StatusOK || status == http.StatusNotModified || status == http.StatusNotFound
 }
 
-// lookup returns the entry for key when it is fresh enough to serve.
-// lookup 在条目足够新、可以使用时返回它。
-func (c *startupCache) lookup(key [sha256.Size]byte) (*startupEntry, bool) {
+// maxMissParts bounds how many differing part names a miss reports.
+// maxMissParts 限定一次未命中报告的不同部分名称个数。
+const maxMissParts = 8
+
+// lookup returns the entry for req when it is fresh enough to serve, or
+// else why there is none: "first" for the family's first request, "stale"
+// for an entry past startupCacheMaxAge, "differs=<names>" for the parts —
+// names only, never values — that differ from the family's previous
+// request, and "not_cached" when nothing differs but no answer was kept.
+// lookup 在条目足够新、可以使用时返回它，否则返回原因："first" 表示该类别的第一个请求，
+// "stale" 表示条目已超过 startupCacheMaxAge，"differs=<名称>" 列出与同类别上一个请求不同的
+// 部分（只有名称，从不含值），"not_cached" 表示没有不同之处但没有保存答复。
+func (c *startupCache) lookup(req startupRequest) (*startupEntry, string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	entry, ok := c.items[key]
-	if !ok {
-		return nil, false
+	previous, seen := c.seen[req.family]
+	c.seen[req.family] = req.parts
+	entry, ok := c.items[req.key]
+	if ok && c.now().Sub(entry.fetched) <= startupCacheMaxAge {
+		return entry, ""
 	}
-	if c.now().Sub(entry.fetched) > startupCacheMaxAge {
-		delete(c.items, key)
-		return nil, false
+	if ok {
+		delete(c.items, req.key)
+		return nil, "stale"
 	}
-	return entry, true
+	if !seen {
+		return nil, "first"
+	}
+	var differs []string
+	for name, digest := range req.parts {
+		if previous[name] != digest {
+			differs = append(differs, name)
+		}
+	}
+	for name := range previous {
+		if _, ok := req.parts[name]; !ok {
+			differs = append(differs, name)
+		}
+	}
+	if len(differs) == 0 {
+		return nil, "not_cached"
+	}
+	sort.Strings(differs)
+	if len(differs) > maxMissParts {
+		differs = append(differs[:maxMissParts], "…")
+	}
+	return nil, "differs=" + strings.Join(differs, ",")
 }
 
 // store keeps an upstream answer, or removes the entry when status is not
