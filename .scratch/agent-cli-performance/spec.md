@@ -247,3 +247,4 @@ Claude 各阶段（ms，p50 / p95）：
 - 对照（手动 CLI，各 3 次）：只有 `DISABLE_TELEMETRY=1` 与 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` 把模型请求发出从 0.9–1.2 s 提前到约 0.14 s；关 claude.ai 连接器、跳过快速模式组织检查无效。
 - 经 Agent 真实回合代码与真实上游的对照见 Agent STATUS「关闭 CLI 遥测开关」：上游请求逐字段一致，带安全检查正常。采用 `DISABLE_TELEMETRY=1` 加 `CLAUDE_CODE_GB_DISK_CACHE_WHEN_TELEMETRY_OFF=1`（保留账户的功能开关值），做成默认关闭的本地开关 `cli_telemetry: false`。
 - 未解释：生产 `cli_ready_ms` 约 950 ms（与并发无关，无并发时 p50 952 ms），同一 CLI、配置目录与 Agent 环境变量下的对照只有约 180 ms；两者的 `request_sent_ms` 都在约 1 s，部署后以 `request_sent_ms` 为准判断。
+- 2026-11-28 用户决定默认关闭（为了让 install.sh 新装的节点也生效）：`cli_telemetry` 未设置即关闭，`true` 恢复开启。此前担心的磁盘缓存变旧不成立：额度查询进程（每运行时每 5 分钟）开着遥测，`--debug` 显示它实时拉取功能开关，CLI 源码在取值变化时写回磁盘缓存（未变化时跳过写入，因此 `cachedGrowthBookFeaturesAt` 是最后一次变化的时间，不代表新旧）。

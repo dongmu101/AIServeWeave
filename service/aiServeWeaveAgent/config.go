@@ -228,7 +228,7 @@ func runtimesFromConfig(declared []agentconfig.RuntimeConfig) []runtime.Config {
 		out[i] = runtime.Config{ID: rc.ID, Kind: runtime.Kind(rc.Kind), BaseURL: rc.BaseURL, ReasoningParser: rc.ReasoningParser, AccountDir: expandHome(rc.AccountDir),
 			DisableSharedUpstream: rc.ShareUpstreamConnections != nil && !*rc.ShareUpstreamConnections,
 			DisableStartupCache:   rc.CacheStartupRequests != nil && !*rc.CacheStartupRequests,
-			DisableCLITelemetry:   rc.CLITelemetry != nil && !*rc.CLITelemetry}
+			EnableCLITelemetry:    rc.CLITelemetry != nil && *rc.CLITelemetry}
 		// agentconfig.Load has already rejected an invalid value.
 		// agentconfig.Load 已拒绝非法值。
 		out[i].ProbeTimeout, _ = rc.ProbeTimeoutDuration()

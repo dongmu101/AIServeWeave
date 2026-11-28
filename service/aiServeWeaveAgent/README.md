@@ -176,21 +176,20 @@ runtimes:
 
 缓存依附于共用连接池，`share_upstream_connections: false` 也会关闭它。本地专用、热重载、设置页面保留等规则与 `share_upstream_connections` 相同。回合结束日志 `Claude Messages round finished` 带 `startup_cache_hits` 与 `startup_cache_misses`（未命中的请求及原因，只含名称不含值；各自有内容时才出现）。
 
-### 关闭 CLI 遥测
+### CLI 遥测（默认关闭）
 
-开启遥测时，CLI 在发出模型请求之前要等功能开关拉取等一系列工作完成；启动请求缓存命中时这段等待依然存在。可以按运行时让 CLI 关闭自身的遥测与功能开关拉取，改从 CLI 配置目录里的磁盘缓存（`.claude.json` 的 `cachedGrowthBookFeatures`）读取功能开关：
+开着遥测时，CLI 在发出模型请求之前要先等功能开关拉取完成；启动请求缓存命中时，这段等待依然存在。因此 claude 运行时的回合进程默认关闭 CLI 自身的遥测与功能开关拉取：Agent 给它们设置 `DISABLE_TELEMETRY=1` 与 `CLAUDE_CODE_GB_DISK_CACHE_WHEN_TELEMETRY_OFF=1`，功能开关改从 CLI 配置目录里的磁盘缓存读取（`.claude.json` 的 `cachedGrowthBookFeatures`）。用 install.sh 新装的节点与升级后的节点都是如此，不需要配置。要恢复开启，按运行时写 `cli_telemetry: true`：
 
 ```yaml
 runtimes:
-  - {id: claude-code-local, kind: claude, cli_telemetry: false}
+  - {id: claude-code-local, kind: claude, cli_telemetry: true}
 ```
 
-Agent 随后给该运行时的每个 CLI 进程设置 `DISABLE_TELEMETRY=1` 与 `CLAUDE_CODE_GB_DISK_CACHE_WHEN_TELEMETRY_OFF=1`。默认不关闭。
-
 - **效果**（2026-11-28，Mac mini，CLI 2.1.332，OAuth 账户，经 Agent 真实回合代码发往真实上游，每种各 2 次）：模型请求在 CLI 启动后发出的时刻，原生直通从 1088 / 599 ms 降到 185 / 179 ms，带安全检查从 844 / 850 ms 降到 171 / 168 ms；带安全检查回合的上游响应头从约 1300 ms 提前到约 600 ms。
-- **上游收到的请求不变**：同一测试截获的模型请求，开关前后的请求头只差每个进程本来就不同的 `X-Claude-Code-Session-Id`、`X-Claude-Code-Prompt-Id`、`X-Client-Request-Id`；请求体只差会话 ID、`metadata.user_id` 与 `system` 中的计费头，model、thinking、output_config、tools、safeguards 等其余字段完全一致；带安全检查的回合照常返回 `safeguard_results`。少发的只有功能开关求值 `/api/eval/…` 与遥测上报 `/api/event_logging/…`。
-- **代价**：该账户不再向 Anthropic 发送这些 CLI 进程的使用遥测；功能开关停在磁盘缓存里的值上。磁盘缓存只有同一配置目录里开着遥测的 CLI（例如交互使用的 Claude Code）才会刷新：Agent 与交互使用共用 `~/.claude` 时缓存保持更新；单独的 `account_dir` 里缓存会一直停在关闭前最后一次拉到的值，没有缓存时 CLI 使用内置默认值。
-- 本地专用、热重载、设置页面保留等规则与 `share_upstream_connections` 相同。
+- **上游收到的请求不变**：同一测试截获的模型请求，开关前后的请求头只差每个进程本来就不同的 `X-Claude-Code-Session-Id`、`X-Claude-Code-Prompt-Id`、`X-Client-Request-Id`；请求体只差会话 ID、`metadata.user_id` 与 `system` 中的计费头，model、thinking、output_config、tools、safeguards 等其余字段完全一致；带安全检查的回合照常返回 `safeguard_results`。少发的只有功能开关求值 `/api/eval/…` 与遥测上报 `/api/event_logging/…`。兼容桥接回合（约占 0.2%）不经每进程代理，未做这项对照。
+- **功能开关保持更新**：每个 claude 运行时的账户额度查询（每 5 分钟一次）照常开着遥测，会实时拉取功能开关；CLI 在取值变化时写回同一配置目录的磁盘缓存，所以回合读到的值最多落后约 5 分钟。单独的 `account_dir` 也一样，因为额度查询按运行时的账户目录运行。额度查询长期失败时（例如登录失效），磁盘缓存会停在最后一次的值。
+- **代价**：该账户不再向 Anthropic 发送回合进程的使用遥测；额度查询进程的遥测不变。
+- 本地专用、热重载、设置页面保留等规则与 `share_upstream_connections` 相同；`cli_telemetry: false` 与不写相同。
 
 ## 本地 CLI 账户额度
 

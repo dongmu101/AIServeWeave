@@ -276,11 +276,14 @@ func probeArgs(model, configPath string) []string {
 //   - CLAUDE_CODE_STARTUP_FAILURE_RESULTS 让拒绝启动的 CLI 在结果中说明原因
 //     （startup_failure_reason），而不是只写到 stderr。
 //
-// Telemetry switches (DISABLE_TELEMETRY, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC)
-// are left alone: both also stop feature-flag fetching, and the safeguards
-// path was accepted with flags fetched.
-// 遥测开关（DISABLE_TELEMETRY、CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC）保持不动：两者都会
-// 同时停止拉取功能开关，而 safeguards 路径是在拉取功能开关的状态下验收的。
+// Telemetry switches are not set here, so probes such as the account-usage
+// read keep fetching feature flags and refresh the CLI's disk cache. A claude
+// runtime's round processes get DISABLE_TELEMETRY separately (see
+// withoutCLITelemetry), reading flags from that cache.
+// CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC is never set.
+// 这里不设置遥测开关，额度查询等探测进程因此照常拉取功能开关并刷新 CLI 的磁盘缓存。claude
+// 运行时的回合进程另行设置 DISABLE_TELEMETRY（见 withoutCLITelemetry），从该缓存读取功能开关。
+// 从不设置 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC。
 var cliDefaults = []string{"DISABLE_AUTOUPDATER=1", "CLAUDE_CODE_OAUTH_401_WAIT_MS=30000",
 	"CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK=1", "CLAUDE_CODE_STARTUP_FAILURE_RESULTS=1"}
 

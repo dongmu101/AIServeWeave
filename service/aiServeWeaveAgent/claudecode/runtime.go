@@ -82,7 +82,10 @@ func NewFactoryWithAttachments(executable string, processor *attachments.Process
 			bridge.quotaRefused = func(model string, resetsAt time.Time) { deps.QuotaRefused(id, model, resetsAt) }
 		}
 		bridge.env = withAccountDir(probeEnv(os.Environ()), cfg.AccountDir)
-		if cfg.DisableCLITelemetry {
+		// Round processes then read feature flags from the disk cache, which
+		// the account-usage probe (AccountUsageReader) refreshes with telemetry on.
+		// 回合进程此时从磁盘缓存读取功能开关，该缓存由开着遥测的账户额度查询（AccountUsageReader）刷新。
+		if !cfg.EnableCLITelemetry {
 			bridge.env = withoutCLITelemetry(bridge.env)
 		}
 		if !cfg.DisableSharedUpstream {

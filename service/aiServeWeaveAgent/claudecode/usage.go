@@ -29,6 +29,13 @@ func ReadAccountUsage(ctx context.Context) (cliusage.Account, error) {
 //
 // AccountUsageReader 是针对 accountDir（runtime.Config.AccountDir）下那份登录的
 // ReadAccountUsage；accountDir 为空时读取 Agent 自己的登录。
+//
+// It keeps the CLI's telemetry on even when the runtime's rounds run without
+// it: its feature-flag fetch is what refreshes the disk cache those rounds
+// read flags from (see withoutCLITelemetry).
+//
+// 即使运行时的回合关闭了 CLI 遥测，它也保持开启：它拉取功能开关，正是这一步刷新了那些回合
+// 读取功能开关所用的磁盘缓存（见 withoutCLITelemetry）。
 func AccountUsageReader(accountDir string) func(context.Context) (cliusage.Account, error) {
 	env := withAccountDir(probeEnv(os.Environ()), accountDir)
 	return func(ctx context.Context) (cliusage.Account, error) {

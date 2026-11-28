@@ -348,15 +348,18 @@ type RuntimeConfig struct {
 	// 也会关闭它。其他种类忽略它。设置页面没有这个字段；从页面保存时保留文件里已有的值。
 	CacheStartupRequests *bool `yaml:"cache_startup_requests,omitempty"`
 	// CLITelemetry, for a claude runtime, controls the CLI's own telemetry
-	// and feature-flag fetch; nil and true leave them on, false starts every
-	// CLI process with them off, reading feature flags from the CLI's disk
-	// cache instead, which saves the wait on that fetch before each model
-	// request. Other kinds ignore it. The setup page has no field for it; a
-	// save from the page keeps whatever the file already says.
+	// and feature-flag fetch in its round processes; nil and false start
+	// them with both off, reading feature flags from the CLI's disk cache,
+	// which saves the wait on that fetch before each model request; true
+	// leaves them on. The account-usage probe keeps telemetry on either way
+	// and so keeps the disk cache current. Other kinds ignore it. The setup
+	// page has no field for it; a save from the page keeps whatever the file
+	// already says.
 	//
-	// CLITelemetry 控制 claude 运行时 CLI 自身的遥测与功能开关拉取；nil 与 true 保持开启，
-	// false 使每个 CLI 进程关闭它们，改从 CLI 的磁盘缓存读取功能开关，省掉每次模型请求前对
-	// 这次拉取的等待。其他种类忽略它。设置页面没有这个字段；从页面保存时保留文件里已有的值。
+	// CLITelemetry 控制 claude 运行时回合进程中 CLI 自身的遥测与功能开关拉取；nil 与 false
+	// 使这些进程关闭两者，改从 CLI 的磁盘缓存读取功能开关，省掉每次模型请求前对这次拉取的等待；
+	// true 保持开启。账户额度查询无论如何都开着遥测，磁盘缓存因此保持更新。其他种类忽略它。
+	// 设置页面没有这个字段；从页面保存时保留文件里已有的值。
 	CLITelemetry *bool `yaml:"cli_telemetry,omitempty"`
 }
 

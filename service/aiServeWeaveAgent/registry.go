@@ -167,7 +167,7 @@ func newReloadableRegistry(local *localDeclarations) (runtime.Registry, error) {
 			cfg.AccountDir = own.AccountDir
 			cfg.DisableSharedUpstream = own.DisableSharedUpstream
 			cfg.DisableStartupCache = own.DisableStartupCache
-			cfg.DisableCLITelemetry = own.DisableCLITelemetry
+			cfg.EnableCLITelemetry = own.EnableCLITelemetry
 			return build(cfg, deps)
 		}
 	}
