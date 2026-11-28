@@ -65,6 +65,10 @@ export function FlowEditor(props: EditorProps) {
   );
 }
 
+/** NODE_DRAG_TYPE carries a node type dragged from the palette to the canvas.
+ * NODE_DRAG_TYPE 承载从节点栏拖到画布上的节点类型。 */
+const NODE_DRAG_TYPE = "application/x-aiserveweave-flow-node";
+
 interface EditorProps {
   flow: Flow;
   models: StudioModel[];
@@ -200,15 +204,42 @@ function Editor({ flow, models, modelsError, imageModels: initialImageModels, te
     setDef(result.def);
   }
 
-  function add(type: NodeType) {
-    const box = canvas.current?.getBoundingClientRect();
-    const center = box ? reactFlow.screenToFlowPosition({ x: box.left + box.width / 2, y: box.top + box.height / 2 }) : { x: 0, y: 0 };
-    const offset = (def.nodes.length % 5) * 24;
+  // add places a node of type centred on the screen point at, or near the
+  // canvas centre when clicked from the palette.
+  // add 把 type 类型的节点居中放在屏幕坐标 at 处；从节点栏点击时放在画布中心附近。
+  function add(type: NodeType, at?: { x: number; y: number }) {
+    let point: { x: number; y: number };
+    if (at) {
+      point = reactFlow.screenToFlowPosition(at);
+    } else {
+      const box = canvas.current?.getBoundingClientRect();
+      const center = box ? reactFlow.screenToFlowPosition({ x: box.left + box.width / 2, y: box.top + box.height / 2 }) : { x: 0, y: 0 };
+      const offset = (def.nodes.length % 5) * 24;
+      point = { x: center.x + offset, y: center.y + offset };
+    }
     const model = [...def.nodes].reverse().map((n) => (n.type === "llm" ? llmConfig(n).model : "")).find((m) => m !== "") ?? models[0]?.id ?? "";
     const imageModel = catalog.imageModels && !catalog.imageModels.defaultAvailable ? (catalog.imageModels.models[0]?.id ?? "") : "";
-    const added = addNode(def, type, { x: center.x - 112 + offset, y: center.y - 40 + offset }, model, imageModel);
+    const added = addNode(def, type, { x: point.x - 112, y: point.y - 40 }, model, imageModel);
     setDef(added.def);
     setSelected(added.id);
+  }
+
+  function draggedType(event: React.DragEvent): NodeType | null {
+    const type = event.dataTransfer.getData(NODE_DRAG_TYPE);
+    return (EDITABLE_TYPES as readonly string[]).includes(type) ? (type as NodeType) : null;
+  }
+
+  function onDragOver(event: React.DragEvent) {
+    if (!event.dataTransfer.types.includes(NODE_DRAG_TYPE)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+  }
+
+  function onDrop(event: React.DragEvent) {
+    const type = draggedType(event);
+    if (!type) return;
+    event.preventDefault();
+    add(type, { x: event.clientX, y: event.clientY });
   }
 
   async function save(): Promise<boolean> {
@@ -379,15 +410,20 @@ function Editor({ flow, models, modelsError, imageModels: initialImageModels, te
       <div className="flex min-h-0 flex-1 max-md:flex-col">
         <nav aria-label="添加节点" className="flex shrink-0 gap-1 overflow-auto border-b p-2 md:w-28 md:flex-col md:border-r md:border-b-0">
           {EDITABLE_TYPES.map((type) => (
-            <button key={type} type="button" onClick={() => add(type)} title={`添加${NODE_KIND[type].label}节点`} aria-label={`添加${NODE_KIND[type].label}节点`}
-              className="flex items-center gap-2 whitespace-nowrap rounded-lg px-2 py-1.5 text-xs hover:bg-muted md:flex-col md:gap-1 md:py-2">
+            <button key={type} type="button" onClick={() => add(type)} title={`添加${NODE_KIND[type].label}节点（点击或拖到画布）`} aria-label={`添加${NODE_KIND[type].label}节点`}
+              draggable
+              onDragStart={(event) => {
+                event.dataTransfer.setData(NODE_DRAG_TYPE, type);
+                event.dataTransfer.effectAllowed = "copy";
+              }}
+              className="flex cursor-grab items-center gap-2 whitespace-nowrap rounded-lg px-2 py-1.5 text-xs hover:bg-muted active:cursor-grabbing md:flex-col md:gap-1 md:py-2">
               <span className={cn("inline-flex size-7 items-center justify-center rounded-md [&_svg]:size-4", NODE_KIND[type].tint)}>{NODE_KIND[type].icon}</span>
               {NODE_KIND[type].label}
             </button>
           ))}
         </nav>
 
-        <div ref={canvas} className="relative min-h-[320px] min-w-0 flex-1">
+        <div ref={canvas} onDragOver={onDragOver} onDrop={onDrop} className="relative min-h-[320px] min-w-0 flex-1">
           {hydrated ? (
             <ReactFlow<FlowCanvasNode>
               nodes={nodes}
