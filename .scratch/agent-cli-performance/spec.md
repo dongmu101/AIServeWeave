@@ -164,7 +164,7 @@ Status: ready-for-agent
 - 按会话保留 Codex 线程以恢复提示缓存亲和性的改造（视测量结论另立规格）。
 - 让一个常驻 CLI 或 app-server 进程同时服务多个请求或多个租户。
 - 在每进程代理里缓存 Claude 的启动请求答复（组织策略、远程设置、功能开关）。这会改变策略生效的及时性，需要单独决策，见「补充说明」。（2026-11-27 已决定纳入并实施，见 Comments「启动请求缓存」。）
-- 关闭遥测与功能开关拉取（`DISABLE_TELEMETRY`、`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`）。safeguards 路径须先在真实主机上复验。
+- 关闭遥测与功能开关拉取（`DISABLE_TELEMETRY`、`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`）。safeguards 路径须先在真实主机上复验。（2026-11-28 已复验，做成默认关闭的本地开关 `cli_telemetry: false`，见 Comments「CLI 启动等待与关闭遥测」。）
 - 可配置的 CLI 可执行文件路径（固定 CLI 版本的后续项）。
 - 用真实账户复验 Codex 新关闭的宿主工具（`TestLiveCallerToolRoundTrip`）。
 - Codex `optOutNotificationMethods` 降噪；只有 profiling 显示 Agent CPU 是瓶颈时才考虑。
