@@ -20,6 +20,10 @@ Studio 是面向租户成员的 AI 工作台：与平台上的模型对话，以
 - 启动运行走 `POST /api/studio/flows/{id}/runs/start`：鉴权后把请求体（JSON，或带图片/文件输入时的 multipart/form-data）以流转发给 Gateway `POST /studio/v1/flows/{id}/runs`，保留 `Content-Type` 与长度，不缓冲、不设自己的大小上限（上限以 Gateway 为准，整个请求 200 MiB）。
 - 编排与运行的其他请求走同一个白名单转发。保存编排的请求体上限放宽到 1 MiB + 64 KiB。被拒绝时，问题列表只转发节点、字段与错误码，供编辑器在画布上定位。
 
+## 编排画布
+
+从编排列表打开已有编排或点击「新建编排」，画布会在新标签页打开。宽屏下进入画布时，左侧 Studio 导航默认收起为图标栏，可手动展开，其他 Studio 页面仍使用原来的侧栏偏好。窄屏下侧栏从菜单按钮打开。
+
 ## 本地运行
 
 前置：控制面已启动；Gateway 以 `-studio -control-plane-addr <控制面地址>` 启动。

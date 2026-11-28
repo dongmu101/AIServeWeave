@@ -45,14 +45,10 @@ export interface ShellConversations {
 }
 
 export function StudioShell({ user, conversations, children }: { user: ShellUser; conversations: ShellConversations; children: React.ReactNode }) {
-  const [stored, store] = useStoredValue(COLLAPSED_KEY);
-  const collapsed = stored === "1";
+  const pathname = usePathname();
+  const isFlowEditor = /^\/flows\/[^/]+\/?$/.test(pathname);
   const [drawerOpen, setDrawerOpen] = React.useState(false);
   const [searchOpen, setSearchOpen] = React.useState(false);
-
-  function toggleCollapsed() {
-    store(collapsed ? "0" : "1");
-  }
 
   function openSearch() {
     setDrawerOpen(false);
@@ -72,14 +68,7 @@ export function StudioShell({ user, conversations, children }: { user: ShellUser
 
   return (
     <div className="flex h-svh shrink-0 overflow-hidden">
-      <aside
-        className={cn(
-          "sticky top-0 hidden h-svh shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground transition-[width] duration-200 md:flex",
-          collapsed ? "w-14" : "w-64"
-        )}
-      >
-        <SidebarContent user={user} conversations={conversations} collapsed={collapsed} onToggle={toggleCollapsed} onSearch={openSearch} />
-      </aside>
+      <DesktopSidebar key={isFlowEditor ? pathname : "studio"} user={user} conversations={conversations} isFlowEditor={isFlowEditor} onSearch={openSearch} />
 
       {drawerOpen ? (
         <div className="fixed inset-0 z-40 md:hidden">
@@ -102,6 +91,28 @@ export function StudioShell({ user, conversations, children }: { user: ShellUser
 
       <ConversationSearch open={searchOpen} onOpenChange={setSearchOpen} />
     </div>
+  );
+}
+
+function DesktopSidebar({ user, conversations, isFlowEditor, onSearch }: { user: ShellUser; conversations: ShellConversations; isFlowEditor: boolean; onSearch: () => void }) {
+  const [stored, store] = useStoredValue(COLLAPSED_KEY);
+  const [editorCollapsed, setEditorCollapsed] = React.useState(true);
+  const collapsed = isFlowEditor ? editorCollapsed : stored === "1";
+
+  function toggleCollapsed() {
+    if (isFlowEditor) setEditorCollapsed((current) => !current);
+    else store(collapsed ? "0" : "1");
+  }
+
+  return (
+    <aside
+      className={cn(
+        "sticky top-0 hidden h-svh shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground transition-[width] duration-200 md:flex",
+        collapsed ? "w-14" : "w-64"
+      )}
+    >
+      <SidebarContent user={user} conversations={conversations} collapsed={collapsed} onToggle={toggleCollapsed} onSearch={onSearch} />
+    </aside>
   );
 }
 

@@ -26,16 +26,31 @@ export function FlowList({ flows, error }: { flows: FlowSummary[]; error: string
   const file = React.useRef<HTMLInputElement>(null);
   const [now] = React.useState(() => new Date());
 
-  async function create(name: string, definition: FlowDefinition): Promise<boolean> {
+  async function create(name: string, definition: FlowDefinition, editor?: Window | null): Promise<boolean> {
     setBusy(true);
     const result = await studioCall("POST", "flows", { name, definition }, parseFlow);
     setBusy(false);
     if (!result.ok) {
+      editor?.close();
       toast.error(result.code === "invalid_flow" ? invalidText(result.issues) : failureText(result.code));
       return false;
     }
-    router.push(`/flows/${result.data.id}`);
+    const href = `/flows/${result.data.id}`;
+    if (editor) {
+      if (!editor.closed) editor.location.replace(new URL(href, window.location.origin));
+      router.refresh();
+    } else {
+      router.push(href);
+    }
     return true;
+  }
+
+  function createNew() {
+    // Reserve the tab during the click, before waiting for the new flow ID.
+    // 在点击时先打开标签页，再等待服务端返回编排 ID。
+    const editor = window.open("about:blank", "_blank");
+    if (editor) editor.opener = null;
+    void create("未命名编排", newDefinition(), editor);
   }
 
   async function importFile(chosen: File | undefined) {
@@ -67,7 +82,7 @@ export function FlowList({ flows, error }: { flows: FlowSummary[]; error: string
           <UploadIcon />
           导入
         </Button>
-        <Button disabled={busy} onClick={() => void create("未命名编排", newDefinition())}>
+        <Button disabled={busy} onClick={createNew}>
           <PlusIcon />
           新建编排
         </Button>
@@ -79,7 +94,7 @@ export function FlowList({ flows, error }: { flows: FlowSummary[]; error: string
           <WorkflowIcon className="size-8 text-muted-foreground" />
           <p className="font-medium">还没有编排</p>
           <p className="max-w-sm text-sm text-muted-foreground">新建一个编排，在画布上用 LLM、文本模板和条件节点组装流程，保存后就能带着输入反复运行。</p>
-          <Button disabled={busy} onClick={() => void create("未命名编排", newDefinition())}>
+          <Button disabled={busy} onClick={createNew}>
             <PlusIcon />
             新建编排
           </Button>
@@ -165,7 +180,7 @@ function FlowRow({ flow, now, onDuplicate }: { flow: FlowSummary; now: Date; onD
   return (
     <li className="group/item relative flex items-center gap-3 px-4 py-3 hover:bg-muted/50">
       <WorkflowIcon className="size-5 shrink-0 text-muted-foreground" />
-      <Link href={`/flows/${flow.id}`} className="min-w-0 flex-1 after:absolute after:inset-0">
+      <Link href={`/flows/${flow.id}`} target="_blank" rel="noopener noreferrer" className="min-w-0 flex-1 after:absolute after:inset-0">
         <span className="block truncate font-medium">{flow.name || "未命名编排"}</span>
         <span className="block text-xs text-muted-foreground">
           第 {flow.version} 版 · {flow.updatedAt ? formatUpdatedAt(flow.updatedAt, now) : ""}
