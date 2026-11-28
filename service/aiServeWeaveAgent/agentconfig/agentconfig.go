@@ -347,6 +347,17 @@ type RuntimeConfig struct {
 	// false 使每个请求重新发往上游。它依赖共用连接，share_upstream_connections: false
 	// 也会关闭它。其他种类忽略它。设置页面没有这个字段；从页面保存时保留文件里已有的值。
 	CacheStartupRequests *bool `yaml:"cache_startup_requests,omitempty"`
+	// CLITelemetry, for a claude runtime, controls the CLI's own telemetry
+	// and feature-flag fetch; nil and true leave them on, false starts every
+	// CLI process with them off, reading feature flags from the CLI's disk
+	// cache instead, which saves the wait on that fetch before each model
+	// request. Other kinds ignore it. The setup page has no field for it; a
+	// save from the page keeps whatever the file already says.
+	//
+	// CLITelemetry 控制 claude 运行时 CLI 自身的遥测与功能开关拉取；nil 与 true 保持开启，
+	// false 使每个 CLI 进程关闭它们，改从 CLI 的磁盘缓存读取功能开关，省掉每次模型请求前对
+	// 这次拉取的等待。其他种类忽略它。设置页面没有这个字段；从页面保存时保留文件里已有的值。
+	CLITelemetry *bool `yaml:"cli_telemetry,omitempty"`
 }
 
 // MaxProbeTimeout caps RuntimeConfig.ProbeTimeout. A probe holds the
@@ -511,6 +522,9 @@ func Save(path string, cfg *Config) error {
 		}
 		if rc.CacheStartupRequests != nil {
 			entry["cache_startup_requests"] = *rc.CacheStartupRequests
+		}
+		if rc.CLITelemetry != nil {
+			entry["cli_telemetry"] = *rc.CLITelemetry
 		}
 		runtimes[i] = entry
 	}

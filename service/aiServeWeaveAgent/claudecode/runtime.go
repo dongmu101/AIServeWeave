@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -81,6 +82,9 @@ func NewFactoryWithAttachments(executable string, processor *attachments.Process
 			bridge.quotaRefused = func(model string, resetsAt time.Time) { deps.QuotaRefused(id, model, resetsAt) }
 		}
 		bridge.env = withAccountDir(probeEnv(os.Environ()), cfg.AccountDir)
+		if cfg.DisableCLITelemetry {
+			bridge.env = withoutCLITelemetry(bridge.env)
+		}
 		if !cfg.DisableSharedUpstream {
 			bridge.pool = newUpstreamPool(!cfg.DisableStartupCache)
 		}
@@ -90,6 +94,29 @@ func NewFactoryWithAttachments(executable string, processor *attachments.Process
 		}
 		return &Runtime{cfg: cfg, bridge: bridge, root: root, cancel: cancel, logger: logger, metrics: deps.Metrics, quota: deps}, nil
 	}
+}
+
+// cliTelemetryOff is what withoutCLITelemetry sets: the CLI's telemetry
+// switch, which also turns off its feature-flag fetch, and the switch that
+// makes it read feature flags from its disk cache meanwhile, so the account's
+// last-known flags still apply instead of the CLI's built-in defaults.
+// cliTelemetryOff 是 withoutCLITelemetry 设置的变量：CLI 的遥测开关（它同时关闭功能开关
+// 拉取），以及让 CLI 此时改从磁盘缓存读取功能开关的开关，使账户最近一次已知的功能开关仍然
+// 生效，而不是 CLI 内置的默认值。
+var cliTelemetryOff = []string{"DISABLE_TELEMETRY=1", "CLAUDE_CODE_GB_DISK_CACHE_WHEN_TELEMETRY_OFF=1"}
+
+// withoutCLITelemetry returns env with cliTelemetryOff replacing any value
+// env already gives those variables.
+// withoutCLITelemetry 返回以 cliTelemetryOff 取代 env 中这些变量原有取值后的 env。
+func withoutCLITelemetry(env []string) []string {
+	out := make([]string, 0, len(env)+len(cliTelemetryOff))
+	for _, kv := range env {
+		name, _, _ := strings.Cut(kv, "=")
+		if name != "DISABLE_TELEMETRY" && name != "CLAUDE_CODE_GB_DISK_CACHE_WHEN_TELEMETRY_OFF" {
+			out = append(out, kv)
+		}
+	}
+	return append(out, cliTelemetryOff...)
 }
 
 // Session capacity. Every session is a resident CLI process that may wait for

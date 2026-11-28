@@ -155,6 +155,10 @@ Agent 现在检查最终设置文件的实际字节数。超过 2 MiB 时，设�
 - **未命中原因**：回合结束日志的 `startup_cache_misses` 列出本回合每个未命中的请求（最多 8 条，以 `; ` 分隔），格式为 `<类别>:<原因>[ 附加]`。类别为 `policy_limits`、`eval` 或 `eval-authed`。原因为 `first`（运行时启动后该类别的第一个请求）、`stale`（条目超过 10 分钟）、`differs=<部分>`（与同类别上一个请求不同的部分，如 `header:If-None-Match`、`attributes.<名称>`、`body:<字段>`、`query`、`path`，最多 8 个，只有名称，从不含值）或 `not_cached`（没有不同之处，但上次的答复没有缓存）。附加项为 `status=<状态码>`（答复状态码不缓存）、`too_large`（答复超过 1 MiB）或 `upstream_error`（上游请求出错）。
 - **失败路径**：未命中时请求照原路径发送，答复边转发边记录，完整读完后才存入缓存；缓存不新增任何失败路径。关闭方法见 [Agent README](../README.md#启动请求缓存)。
 
+### 关闭 CLI 遥测
+
+运行时配置了 `cli_telemetry: false`（`runtime.Config.DisableCLITelemetry`）时，工厂给该运行时的全部 CLI 进程环境加上 `DISABLE_TELEMETRY=1` 与 `CLAUDE_CODE_GB_DISK_CACHE_WHEN_TELEMETRY_OFF=1`（覆盖继承环境里的同名变量）。前者让 CLI 关闭遥测与功能开关求值（CLI 2.1.330 源码："feature-flag evaluation is off (DISABLE_TELEMETRY or DO_NOT_TRACK is set)"），后者让 CLI 此时改读配置目录磁盘缓存里的功能开关，而不是内置默认值。启动请求缓存因此不再看到功能开关求值请求。实测效果、上游请求的逐字段对比与代价见 [Agent README](../README.md#关闭-cli-遥测)。
+
 ## 兼容桥接的支持范围
 
 支持以 user 文本、图片、文档或本平台视频附件结尾的单轮或多轮对话、system 文本、调用方定义的工具及其 JSON Schema、文本和附件工具结果（包括 `is_error`）、JSON/SSE、多轮工具往返。工具续接的后续请求必须携带未改动的完整历史和本回合全部 `tool_result`；原始附件、标题及字节也参与历史校验。客户端补入工具 schema 明确声明的默认值视为等价，其他参数修改被拒绝。

@@ -239,3 +239,11 @@ Claude 各阶段（ms，p50 / p95）：
 - 本机回环加 300 ms 延迟：到模型请求发出约 890 ms → 第 2 回合起约 200 ms（每回合命中 2 次）。生产用 OAuth 登录，请求集合可能不同，部署后看 `startup_cache_hits` 与 `request_sent_ms` 复测。
 - 2026-11-28 部署到 Mac mini（OAuth 登录，CLI 2.1.332）：上线后前 7 个回合 `startup_cache_hits` 都是 1，不是 2。带安全检查回合的 `request_sent_ms` 从 p50 1402（11-27 的 400 个回合）降到约 1100，样本太少。该机 `~/.claude.json` 的功能开关缓存里没有 `tengu_gb_eval_authed_enable`，CLI 发的仍是 `/api/eval/`。本机用假 OAuth token 回环跑 4 轮，每轮命中 2 次，复现不了。已新增 `startup_cache_misses` 记录未命中原因，再次部署后据此定位。
 - 2026-11-28 再次部署（带 `startup_cache_misses`）后 72 个回合：`startup_cache_hits` 全为 1，未命中只有重启后的一次 `eval:first`，`policy_limits` 从未出现。结论：该 OAuth 账户的 CLI 不发 `policy_limits`，每回合唯一需要等待且可缓存的是功能开关求值，已全部命中。对比 11-27 的 400 个回合：带安全检查 `request_sent_ms` p50 1402 → 1080 ms、p90 1960 → 1224 ms（58 个回合），`request_sent − cli_ready` 从约 480 ms 降到约 140 ms；原生直通 16 个回合 p50 1409 → 1455 ms，其中 `cli_ready` 升高 255 ms 抵消了收益，样本太少，待更多回合后复看。
+
+### 2026-11-28 CLI 启动等待与关闭遥测
+
+- Mac mini 干净配置目录基准（20 次）：`cli_ready_ms` p50 196 ms，CPU 304 ms；机器本身不慢。
+- 真实配置下 CLI 自带启动计时（`CLAUDE_CODE_PROFILE_STARTUP=1`，写入 `$CLAUDE_CONFIG_DIR/startup-perf/`）：CLI 155 ms 就完成初始化，此后约 1.2 s 没有打点，直到发出模型请求。
+- 对照（手动 CLI，各 3 次）：只有 `DISABLE_TELEMETRY=1` 与 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` 把模型请求发出从 0.9–1.2 s 提前到约 0.14 s；关 claude.ai 连接器、跳过快速模式组织检查无效。
+- 经 Agent 真实回合代码与真实上游的对照见 Agent STATUS「关闭 CLI 遥测开关」：上游请求逐字段一致，带安全检查正常。采用 `DISABLE_TELEMETRY=1` 加 `CLAUDE_CODE_GB_DISK_CACHE_WHEN_TELEMETRY_OFF=1`（保留账户的功能开关值），做成默认关闭的本地开关 `cli_telemetry: false`。
+- 未解释：生产 `cli_ready_ms` 约 950 ms（与并发无关，无并发时 p50 952 ms），同一 CLI、配置目录与 Agent 环境变量下的对照只有约 180 ms；两者的 `request_sent_ms` 都在约 1 s，部署后以 `request_sent_ms` 为准判断。

@@ -218,6 +218,14 @@ type Config struct {
 	// 启动请求（policy_limits 与功能开关求值）答复。缓存依附于共用连接池，因此
 	// DisableSharedUpstream 也会关闭它。其他种类忽略它。仅限本地，从不通过隧道接收。
 	DisableStartupCache bool
+	// DisableCLITelemetry starts every CLI process of a claude runtime with
+	// the CLI's telemetry and feature-flag fetch off, feature flags then
+	// coming from the CLI's disk cache. Other kinds ignore it. Local only; it
+	// is never accepted over the tunnel.
+	//
+	// DisableCLITelemetry 使 claude 运行时的每个 CLI 进程关闭 CLI 自身的遥测与功能开关拉取，
+	// 功能开关改从 CLI 的磁盘缓存读取。其他种类忽略它。仅限本地，从不通过隧道接收。
+	DisableCLITelemetry bool
 }
 
 // The fallback reasoning parsers Config.ReasoningParser may name.

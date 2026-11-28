@@ -81,6 +81,8 @@ before upgrading; do not assume a `0.x` bump is safe by default.
 
 ### Changed
 
+- Claude 运行时新增本地字段 `cli_telemetry: false`：给该运行时的 CLI 进程设置 `DISABLE_TELEMETRY=1` 与 `CLAUDE_CODE_GB_DISK_CACHE_WHEN_TELEMETRY_OFF=1`，CLI 不再在模型请求前等待功能开关拉取，改读磁盘缓存的功能开关。Mac mini 实测模型请求发出从约 0.6–1.1 s 提前到约 0.18 s，上游收到的模型请求除每进程 ID 外逐字段一致。默认不变（遥测开启）；Gateway 下发不能改动。只需升级 Agent。见 [Agent README「关闭 CLI 遥测」](service/aiServeWeaveAgent/README.md#关闭-cli-遥测)。
+
 - Claude 运行时在各回合之间缓存 CLI 发模型请求前必须等待的启动请求答复（`policy_limits` 与功能开关求值）：命中时立即答复，同时后台刷新，超过 10 分钟未刷新成功的答复不用；组织策略或功能开关的变更通常在下一回合生效，最迟 10 分钟。每回合省掉两次串行上游往返。新增本地字段 `cache_startup_requests: false` 按运行时关闭（Gateway 下发不能改动），回合结束日志新增 `startup_cache_hits` 与 `startup_cache_misses`（未命中原因，只含名称不含值）；OAuth 账户改用 `/api/eval-authed/` 时同样缓存。只需升级 Agent。见 [Agent README「启动请求缓存」](service/aiServeWeaveAgent/README.md#启动请求缓存)。
 
 - Agent 隧道改用固定的大 HTTP/2 流控窗口（每流 `MaxTunnelMessageBytes`，连接为其两倍），超过 64 KiB 的请求 payload 不再每 64 KiB 等一个 `WINDOW_UPDATE` 往返。跨地域节点（往返约 350 ms）上，64 KiB–2 MB 的 Messages 请求从派发到 Agent 开始处理的时间预计从约 0.9 s 降到约 0.4 s，更大的请求降得更多。只需升级 Agent。见 [tunnel README「HTTP/2 流控窗口」](service/aiServeWeaveAgent/tunnel/README.md#http2-流控窗口)。

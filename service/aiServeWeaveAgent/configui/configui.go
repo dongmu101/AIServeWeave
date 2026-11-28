@@ -432,14 +432,14 @@ func (v formValues) toConfig() *agentconfig.Config {
 
 // keepFileOnlyRuntimeFields copies the runtime fields the form cannot show
 // (ReasoningParser, ProbeTimeout, ShareUpstreamConnections,
-// CacheStartupRequests and APIKeyFile) from the saved file onto the matching
+// CacheStartupRequests, CLITelemetry and APIKeyFile) from the saved file onto the matching
 // runtimes, matched by id and kind, so saving from the page never silently
 // drops them. APIKeyFile is kept only while base_url is unchanged too: a
 // saved key never follows its runtime to a different endpoint, so a new
 // endpoint needs the key entered again.
 //
 // keepFileOnlyRuntimeFields 把表单无法展示的运行时字段（ReasoningParser、
-// ProbeTimeout、ShareUpstreamConnections、CacheStartupRequests 与 APIKeyFile）从已保存的文件复制到按 id 与 kind 匹配的运行时上，使从页面保存永远不会
+// ProbeTimeout、ShareUpstreamConnections、CacheStartupRequests、CLITelemetry 与 APIKeyFile）从已保存的文件复制到按 id 与 kind 匹配的运行时上，使从页面保存永远不会
 // 悄悄丢掉它们。APIKeyFile 还要求 base_url 未变才保留：已保存的 Key 从不跟随运行时
 // 换到另一个端点，换端点需要重新填写 Key。
 func keepFileOnlyRuntimeFields(next, saved []agentconfig.RuntimeConfig) {
@@ -450,6 +450,7 @@ func keepFileOnlyRuntimeFields(next, saved []agentconfig.RuntimeConfig) {
 				next[i].ProbeTimeout = old.ProbeTimeout
 				next[i].ShareUpstreamConnections = old.ShareUpstreamConnections
 				next[i].CacheStartupRequests = old.CacheStartupRequests
+				next[i].CLITelemetry = old.CLITelemetry
 				if old.BaseURL == next[i].BaseURL {
 					next[i].APIKeyFile = old.APIKeyFile
 				}
